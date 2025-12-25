@@ -11,6 +11,7 @@ import (
 	"eva-mind/internal/config"
 	"eva-mind/internal/database"
 	"eva-mind/internal/scheduler"
+	"eva-mind/internal/telemetry"
 	"eva-mind/internal/twilio"
 	"eva-mind/internal/voice"
 
@@ -21,8 +22,12 @@ import (
 
 func main() {
 	// 1. Setup Logger
-	logger := zerolog.New(os.Stdout).With().Timestamp().Logger()
+	// Inicializa Logger
+	logger := telemetry.NewLogger("development")
 	logger.Info().Msg("Starting EVA-Mind Server")
+
+	// Inicializa Gerenciador de Sessões
+	voice.InitSessionManager(logger)
 
 	// 2. Load Config
 	godotenv.Load()             // Tenta carregar da raiz (se rodar de EVA-Mind)

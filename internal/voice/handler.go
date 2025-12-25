@@ -108,16 +108,12 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 
 	// ✅ Goroutine: Gemini -> Twilio (com timeout)
 	go func() {
-		timeout := time.NewTimer(10 * time.Minute)
-		defer timeout.Stop()
-
+		defer RemoveSession(agIDStr)
 		for {
 			select {
-			case <-timeout.C:
-				l.Warn().Msg("Timeout na conversa (Gemini->Twilio)")
-				errors <- fmt.Errorf("timeout gemini->twilio")
+			case <-ctx.Done():
+				l.Warn().Msg("Session context done (Gemini->Twilio)")
 				return
-
 			default:
 				resp, err := geminiClient.ReadResponse()
 				if err != nil {
@@ -131,12 +127,7 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 
-				l.Debug().
-					Int("audio_bytes", len(audioData)).
-					Str("direction", "gemini->twilio").
-					Msg("Áudio recebido do Gemini")
-
-				// ✅ Converte PCM 24kHz para mu-law 8kHz
+				// ✅ Converte PCM (Gemini) para mu-law (Twilio)
 				mulawData, err := convertPCMToMulaw(audioData)
 				if err != nil {
 					l.Error().Err(err).Msg("Erro na conversão PCM->mulaw")
@@ -161,16 +152,11 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 
 	// ✅ Goroutine: Twilio -> Gemini (com timeout)
 	go func() {
-		timeout := time.NewTimer(10 * time.Minute)
-		defer timeout.Stop()
-
 		for {
 			select {
-			case <-timeout.C:
-				l.Warn().Msg("Timeout na conversa (Twilio->Gemini)")
-				errors <- fmt.Errorf("timeout twilio->gemini")
+			case <-ctx.Done():
+				l.Warn().Msg("Session context done (Twilio->Gemini)")
 				return
-
 			default:
 				var twilioMsg map[string]interface{}
 				if err := conn.ReadJSON(&twilioMsg); err != nil {
@@ -181,54 +167,28 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 
 				event, _ := twilioMsg["event"].(string)
 
-				// ✅ Captura call_sid do evento "start"
 				if event == "start" {
 					if start, ok := twilioMsg["start"].(map[string]interface{}); ok {
 						if sid, ok := start["callSid"].(string); ok {
 							callSID = sid
 							l.Info().Str("call_sid", callSID).Msg("Call SID capturado")
-
-							// Atualiza no DB (não mudamos o status, apenas garantimos que está em_andamento)
 							h.db.UpdateCallStatus(ctx, agID, "em_andamento", 0)
-
-							// Atualiza histórico com call_sid
-							h.db.UpdateHistorico(ctx, histID, map[string]interface{}{
-								"call_sid": callSID,
-							})
+							h.db.UpdateHistorico(ctx, histID, map[string]interface{}{"call_sid": callSID})
 						}
 					}
 					continue
 				}
 
-				// ✅ Processa áudio
 				if event == "media" {
-					media, ok := twilioMsg["media"].(map[string]interface{})
-					if !ok {
-						continue
-					}
+					media, _ := twilioMsg["media"].(map[string]interface{})
+					payloadBase64, _ := media["payload"].(string)
+					mulawData, _ := base64.StdEncoding.DecodeString(payloadBase64)
 
-					payloadBase64, ok := media["payload"].(string)
-					if !ok {
-						continue
-					}
-
-					mulawData, err := base64.StdEncoding.DecodeString(payloadBase64)
-					if err != nil {
-						l.Error().Err(err).Msg("Erro ao decodificar base64")
-						continue
-					}
-
-					// ✅ Converte mu-law 8kHz para PCM 16kHz
 					pcmData, err := convertMulawToPCM(mulawData)
 					if err != nil {
 						l.Error().Err(err).Msg("Erro na conversão mulaw->PCM")
 						continue
 					}
-
-					l.Debug().
-						Int("audio_bytes", len(pcmData)).
-						Str("direction", "twilio->gemini").
-						Msg("Áudio enviado para Gemini")
 
 					if err := geminiClient.SendAudio(pcmData); err != nil {
 						l.Error().Err(err).Msg("Erro ao enviar áudio para Gemini")
@@ -237,7 +197,6 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 
-				// ✅ Evento stop
 				if event == "stop" {
 					l.Info().Msg("Twilio stream stopped")
 					errors <- nil
@@ -404,6 +363,10 @@ func int16ToBytes(samples []int16) []byte {
 
 // ✅ Converte bytes para int16 (little-endian)
 func bytesToInt16(bytes []byte) []int16 {
+	if len(bytes)%2 != 0 {
+		// Log ou tratamento de erro se necessário, mas aqui apenas truncamos
+		bytes = bytes[:len(bytes)-1]
+	}
 	samples := make([]int16, len(bytes)/2)
 	for i := 0; i < len(samples); i++ {
 		samples[i] = int16(bytes[i*2]) | int16(bytes[i*2+1])<<8

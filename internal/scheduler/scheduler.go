@@ -47,7 +47,14 @@ func processAgendamentos(ctx context.Context, db *database.DB, cfg *config.Confi
 	logger.Info().Int("count", len(ags)).Msg("Agendamentos encontrados")
 
 	for _, ag := range ags {
-		go handleAgendamento(ctx, ag, db, cfg, logger)
+		if ag.TentativasRealizadas < ag.MaxRetries {
+			go handleAgendamento(ctx, ag, db, cfg, logger)
+		} else {
+			l := logger.With().Int("ag_id", ag.ID).Str("idoso", ag.NomeIdoso).Logger()
+			l.Warn().Msg("Limite de tentativas atingido. Iniciando escalonamento.")
+			// TODO: Implementar lógica real de escalonamento (e-mail, SMS, etc)
+			db.UpdateCallStatus(ctx, ag.ID, "falhou", 0)
+		}
 	}
 }
 
