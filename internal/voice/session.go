@@ -9,12 +9,23 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// ConversationState representa o estado atual da conversação
+type ConversationState int
+
+const (
+	StateListening  ConversationState = iota // Aguardando fala do usuário
+	StateSpeaking                            // EVA está falando
+	StateProcessing                          // Processando resposta
+)
+
 // SafeSession envolve o cliente Gemini com um Mutex para evitar race conditions
 type SafeSession struct {
-	Client    *gemini.Client
-	mu        sync.RWMutex
-	closed    bool
-	CreatedAt time.Time
+	Client       *gemini.Client
+	mu           sync.RWMutex
+	closed       bool
+	CreatedAt    time.Time
+	State        ConversationState
+	lastActivity time.Time
 }
 
 func (s *SafeSession) SendAudio(data []byte) error {
@@ -46,6 +57,15 @@ func (s *SafeSession) SendToolResponse(resp map[string]interface{}) error {
 	return s.Client.WriteJSON(resp)
 }
 
+func (s *SafeSession) SendText(text string) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
+		return fmt.Errorf("session closed")
+	}
+	return s.Client.SendText(text)
+}
+
 func (s *SafeSession) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -53,6 +73,21 @@ func (s *SafeSession) Close() {
 		s.closed = true
 		s.Client.Close()
 	}
+}
+
+// SetState atualiza o estado da conversação de forma thread-safe
+func (s *SafeSession) SetState(state ConversationState) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.State = state
+	s.lastActivity = time.Now()
+}
+
+// GetState retorna o estado atual da conversação
+func (s *SafeSession) GetState() ConversationState {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.State
 }
 
 // sessions armazena os SafeSession por agendamento_id (thread-safe)
@@ -68,8 +103,10 @@ func InitSessionManager(l zerolog.Logger) {
 // StoreSession armazena um cliente Gemini associado ao agendamento_id.
 func StoreSession(agID string, client *gemini.Client) {
 	sessions.Store(agID, &SafeSession{
-		Client:    client,
-		CreatedAt: time.Now(),
+		Client:       client,
+		CreatedAt:    time.Now(),
+		State:        StateListening,
+		lastActivity: time.Now(),
 	})
 }
 

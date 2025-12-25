@@ -46,7 +46,6 @@ type Historico struct {
 	AgendamentoID          int        `json:"agendamento_id"`
 	IdosoID                int        `json:"idoso_id"`
 	CallSID                string     `json:"call_sid"`
-	Status                 string     `json:"status"`
 	Inicio                 time.Time  `json:"inicio"`
 	Fim                    *time.Time `json:"fim,omitempty"`
 	QualidadeAudio         *float64   `json:"qualidade_audio,omitempty"`

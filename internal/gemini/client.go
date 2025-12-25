@@ -2,6 +2,7 @@ package gemini
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/url"
 
@@ -43,12 +44,15 @@ func (c *Client) Close() error {
 
 // SendAudio envia áudio PCM 16kHz para o Gemini
 func (c *Client) SendAudio(data []byte) error {
+	// ✅ CRÍTICO: Gemini espera base64, não bytes!
+	encodedData := base64.StdEncoding.EncodeToString(data)
+
 	msg := map[string]interface{}{
 		"realtime_input": map[string]interface{}{
 			"media_chunks": []map[string]interface{}{
 				{
-					"data":      data,
-					"mime_type": "audio/pcm;rate=16000", // ✅ CORRIGIDO!
+					"data":      encodedData, // ✅ Base64 string
+					"mime_type": "audio/pcm",
 				},
 			},
 		},
@@ -66,10 +70,17 @@ func (c *Client) SendSetup(context string, tools []map[string]interface{}) error
 	setup := map[string]interface{}{
 		"setup": map[string]interface{}{
 			"model": "models/" + c.cfg.ModelID,
-			"generation_config": map[string]interface{}{
-				"response_modalities": []string{"AUDIO"},
+			"generationConfig": map[string]interface{}{
+				"responseModalities": []string{"AUDIO"}, // ✅ Apenas AUDIO
+				"speechConfig": map[string]interface{}{
+					"voiceConfig": map[string]interface{}{
+						"prebuiltVoiceConfig": map[string]interface{}{
+							"voiceName": "Aoede",
+						},
+					},
+				},
 			},
-			"system_instruction": map[string]interface{}{
+			"systemInstruction": map[string]interface{}{
 				"parts": []map[string]interface{}{
 					{"text": context},
 				},
@@ -77,7 +88,26 @@ func (c *Client) SendSetup(context string, tools []map[string]interface{}) error
 			"tools": tools,
 		},
 	}
+
 	return c.conn.WriteJSON(setup)
+}
+
+// SendText envia uma mensagem de texto (user turn) para o Gemini
+func (c *Client) SendText(text string) error {
+	msg := map[string]interface{}{
+		"client_content": map[string]interface{}{
+			"turns": []map[string]interface{}{
+				{
+					"role": "user",
+					"parts": []map[string]interface{}{
+						{"text": text},
+					},
+				},
+			},
+			"turn_complete": true,
+		},
+	}
+	return c.conn.WriteJSON(msg)
 }
 
 // WriteJSON envia uma mensagem arbitrária via WebSocket

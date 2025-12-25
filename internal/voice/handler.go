@@ -14,6 +14,7 @@ import (
 	"eva-mind/internal/gemini"
 	"eva-mind/internal/telemetry"
 	"eva-mind/pkg/models"
+	"eva-mind/pkg/utils"
 
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog"
@@ -31,6 +32,13 @@ type Handler struct {
 	alertService *AlertService
 }
 
+// AudioBuffer acumula áudio antes de enviar ao Gemini
+type AudioBuffer struct {
+	data         []byte
+	threshold    int // bytes mínimos antes de enviar (padrão: 3200 = ~200ms)
+	chunkCounter int // contador para logs periódicos
+}
+
 func NewHandler(db *database.DB, cfg *config.Config, logger zerolog.Logger, alertService *AlertService) *Handler {
 	return &Handler{
 		db:           db,
@@ -41,10 +49,18 @@ func NewHandler(db *database.DB, cfg *config.Config, logger zerolog.Logger, aler
 }
 
 func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
-	// ✅ Validação melhorada do agendamento_id
+	// ✅ Validação melhorada do agendamento_id (Suporta Query ? ou Path /)
 	agIDStr := r.URL.Query().Get("agendamento_id")
 	if agIDStr == "" {
-		h.logger.Error().Msg("agendamento_id obrigatório")
+		// Tenta extrair da Path (ex: /calls/stream/123 -> 123)
+		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+		if len(parts) > 0 {
+			agIDStr = parts[len(parts)-1]
+		}
+	}
+
+	if agIDStr == "" || agIDStr == "stream" { // Evita pegar o prefixo da rota como ID
+		h.logger.Error().Str("path", r.URL.Path).Msg("agendamento_id obrigatório")
 		http.Error(w, "agendamento_id obrigatório", http.StatusBadRequest)
 		return
 	}
@@ -132,7 +148,6 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 	hist := &models.Historico{
 		AgendamentoID: agID,
 		IdosoID:       callCtx.IdosoID,
-		Status:        "iniciada",
 		Inicio:        time.Now(),
 	}
 	histID, err := h.db.CreateHistorico(ctx, hist)
@@ -151,34 +166,53 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 		telemetry.CallDuration.Observe(duration.Seconds())
 		l.Info().Dur("duration", duration).Msg("Sessão finalizada")
 
-		// Salva a transcrição final e realiza análise de sentimento
-		finalTranscript := transcript.String()
-		if finalTranscript != "" {
-			l.Info().Msg("Realizando análise de sentimento e resumo...")
-			// Usamos um novo contexto para a análise não ser cancelada pelo fim da chamada
-			analysisCtx, cancelAnalysis := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancelAnalysis()
+		// ❌ ANÁLISE DESATIVADA TEMPORARIAMENTE PARA DEBUG
+		/*
+			// Salva a transcrição final e realiza análise de sentimento
+			finalTranscript := transcript.String()
+			if finalTranscript != "" {
+				l.Info().Msg("Realizando análise de sentimento e resumo...")
+				// Usamos um novo contexto para a análise não ser cancelada pelo fim da chamada
+				analysisCtx, cancelAnalysis := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancelAnalysis()
 
-			summary, sentiment, score := h.analyzeConversation(analysisCtx, finalTranscript)
+				summary, sentiment, score := h.analyzeConversation(analysisCtx, finalTranscript)
 
-			updates := map[string]interface{}{
-				"fim":                    time.Now(),
-				"status":                 "concluido",
-				"transcricao_completa":   finalTranscript,
-				"transcricao_resumo":     summary,
-				"sentimento_geral":       sentiment,
-				"sentimento_intensidade": score,
-				"duracao_segundos":       int(duration.Seconds()),
+				updates := map[string]interface{}{
+					"fim":                    time.Now(),
+					"status":                 "concluido",
+					"transcricao_completa":   finalTranscript,
+					"transcricao_resumo":     summary,
+					"sentimento_geral":       sentiment,
+					"sentimento_intensidade": score,
+					"duracao_segundos":       int(duration.Seconds()),
+				}
+				if err := h.db.UpdateHistorico(context.Background(), histID, updates); err != nil {
+					l.Error().Err(err).Msg("Erro ao salvar transcrição e análise no histórico")
+				}
 			}
-			if err := h.db.UpdateHistorico(context.Background(), histID, updates); err != nil {
-				l.Error().Err(err).Msg("Erro ao salvar transcrição e análise no histórico")
-			}
-		}
+		*/
 	}()
+
+	// Canal para sinalizar que o streamSid foi capturado
+	streamSidChan := make(chan string, 1)
 
 	// ✅ Goroutine: Gemini -> Twilio (com timeout)
 	go func() {
 		defer RemoveSession(agIDStr)
+
+		// Aguarda streamSid antes de começar a enviar áudio
+		var streamSid string
+		select {
+		case sid := <-streamSidChan:
+			streamSid = sid
+		case <-ctx.Done():
+			return
+		case <-time.After(10 * time.Second):
+			l.Warn().Msg("Timeout aguardando streamSid")
+			return
+		}
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -188,17 +222,18 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 				resp, err := geminiClient.ReadResponse()
 				if err != nil {
 					l.Warn().Err(err).Msg("Sessão Gemini encerrada ou erro de leitura")
-					// errors <- err // Não envia aqui para deixar a outra goroutine limpar se necessário ou aguardar stop
 					return
 				}
+
+				// Log das chaves da resposta apenas em nível trace (reduzido)
+				// ... (logs de debug removidos para limpeza) ...
 
 				audioData, ok := extractAudio(resp)
 				if !ok {
 					// ✅ Se não for áudio, verifica se é um Tool Call ou Transcrição de Texto
 					h.handleToolCalls(ctx, callCtx.IdosoID, resp, geminiClient, l)
-
-					// Captura texto (transcrição do modelo ou do usuário)
 					if txt, autor, exists := extractText(resp); exists {
+						l.Info().Str("autor", autor).Str("texto", txt).Msg("Transcrição capturada")
 						transcript.WriteString(fmt.Sprintf("%s: %s\n", autor, txt))
 					}
 					continue
@@ -212,7 +247,8 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 				}
 
 				msg := map[string]interface{}{
-					"event": "media",
+					"event":     "media",
+					"streamSid": streamSid, // ✅ OBRIGATÓRIO!
 					"media": map[string]string{
 						"payload": base64.StdEncoding.EncodeToString(mulawData),
 					},
@@ -223,12 +259,22 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 					errors <- err
 					return
 				}
+
+				// Atualiza estado para Speaking
+				geminiClient.SetState(StateSpeaking)
 			}
 		}
 	}()
 
-	// ✅ Goroutine: Twilio -> Gemini (com timeout)
+	// ✅ Goroutine: Twilio -> Gemini (com buffer e VAD)
 	go func() {
+		// Inicializa buffer com threshold menor
+		buffer := &AudioBuffer{
+			data:      make([]byte, 0, 3200), // ~200ms de buffer
+			threshold: 1280,                  // ~80ms mínimo (mais agressivo)
+		}
+		vad := utils.NewVAD(300.0) // Threshold mais sensível
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -244,7 +290,8 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 
 				event, _ := twilioMsg["event"].(string)
 
-				if event == "start" {
+				switch event {
+				case "start":
 					if start, ok := twilioMsg["start"].(map[string]interface{}); ok {
 						if sid, ok := start["callSid"].(string); ok {
 							callSID = sid
@@ -252,29 +299,65 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 							h.db.UpdateCallStatus(ctx, agID, "em_andamento", 0)
 							h.db.UpdateHistorico(ctx, histID, map[string]interface{}{"call_sid": callSID})
 						}
-					}
-					continue
-				}
+						// Captura streamSid
+						if sid, ok := start["streamSid"].(string); ok {
+							l.Info().Str("stream_sid", sid).Msg("Stream SID capturado")
+							streamSidChan <- sid // Desbloqueia goroutine de envio
+						}
 
-				if event == "media" {
+						// ✅ GATILHO INICIAL: Força EVA a falar primeiro!
+						l.Info().Msg("🔔 Enviando gatilho para EVA iniciar a conversa")
+						if err := geminiClient.SendText("O usuário atendeu. Diga 'Olá' e inicie a conversa."); err != nil {
+							l.Error().Err(err).Msg("Erro ao enviar gatilho inicial")
+						}
+					}
+				case "media":
 					media, _ := twilioMsg["media"].(map[string]interface{})
 					payloadBase64, _ := media["payload"].(string)
 					mulawData, _ := base64.StdEncoding.DecodeString(payloadBase64)
 
+					// ✅ Log reduzido: apenas a cada 50 chunks (~1 segundo)
+					buffer.chunkCounter++
+					if buffer.chunkCounter%50 == 0 {
+						l.Debug().Int("chunks_received", buffer.chunkCounter).Msg("Processando áudio do Twilio")
+					}
+
+					// ✅ Converte mu-law (Twilio) para PCM (Gemini)
 					pcmData, err := h.convertMulawToPCM(mulawData)
 					if err != nil {
 						l.Error().Err(err).Msg("Erro na conversão mulaw->PCM")
 						continue
 					}
 
-					if err := geminiClient.SendAudio(pcmData); err != nil {
-						l.Warn().Err(err).Msg("Sessão Gemini encerrada ou erro ao enviar áudio")
-						errors <- err
-						return
-					}
-				}
+					// ✅ Detecta atividade de voz
+					hasActivity := vad.DetectActivity(pcmData)
 
-				if event == "stop" {
+					// Sempre adiciona ao buffer (mesmo sem atividade forte)
+					buffer.data = append(buffer.data, pcmData...)
+
+					// Envia quando:
+					// 1. Atingir threshold (1280 bytes = ~80ms)
+					// 2. A cada 5 chunks com atividade detectada
+					// 3. A cada 3 chunks independente de atividade (fallback)
+					shouldSend := len(buffer.data) >= buffer.threshold ||
+						(hasActivity && buffer.chunkCounter%5 == 0) ||
+						buffer.chunkCounter%3 == 0
+
+					if shouldSend && len(buffer.data) > 0 {
+						l.Debug().Int("buffer_size", len(buffer.data)).Bool("has_activity", hasActivity).Msg("Enviando buffer para Gemini")
+
+						if err := geminiClient.SendAudio(buffer.data); err != nil {
+							l.Error().Err(err).Msg("Erro ao enviar áudio para Gemini")
+							errors <- err
+							return
+						}
+
+						// Limpa buffer após envio
+						buffer.data = buffer.data[:0]
+						geminiClient.SetState(StateProcessing)
+					}
+
+				case "stop":
 					l.Info().Msg("Twilio stream stopped")
 					errors <- nil
 					return
@@ -301,8 +384,7 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 
 	// ✅ Atualiza histórico final
 	h.db.UpdateHistorico(ctx, histID, map[string]interface{}{
-		"fim":    time.Now(),
-		"status": finalStatus,
+		"fim": time.Now(),
 	})
 
 	RemoveSession(agIDStr)
