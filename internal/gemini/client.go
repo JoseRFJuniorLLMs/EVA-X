@@ -35,6 +35,25 @@ func NewClient(ctx context.Context, cfg *config.Config) (*Client, error) {
 	}, nil
 }
 
+// NewLiveClient cria um cliente Gemini configurado de forma livre e natural
+func NewLiveClient(ctx context.Context, cfg *config.Config) (*Client, error) {
+	client, err := NewClient(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	// ✅ Prompt mínimo - deixa o modelo TOTALMENTE livre
+	minimalPrompt := `Você é Eva, uma assistente de voz natural e conversacional.
+Responda qualquer pergunta de forma útil, criativa e amigável.`
+
+	err = client.SendSetup(minimalPrompt, nil) // ✅ SEM TOOLS, SEM CONTEXTO DO BANCO
+	if err != nil {
+		client.Close()
+		return nil, err
+	}
+	return client, nil
+}
+
 func (c *Client) Close() error {
 	if c.conn != nil {
 		return c.conn.Close()
@@ -44,15 +63,14 @@ func (c *Client) Close() error {
 
 // SendAudio envia áudio PCM 16kHz para o Gemini
 func (c *Client) SendAudio(data []byte) error {
-	// ✅ CRÍTICO: Gemini espera base64, não bytes!
 	encodedData := base64.StdEncoding.EncodeToString(data)
 
 	msg := map[string]interface{}{
 		"realtime_input": map[string]interface{}{
 			"media_chunks": []map[string]interface{}{
 				{
-					"data":      encodedData, // ✅ Base64 string
-					"mime_type": "audio/pcm",
+					"data":      encodedData,
+					"mime_type": "audio/pcm;rate=16000", // ✅ CRÍTICO: Especificar 16kHz!
 				},
 			},
 		},
@@ -71,7 +89,7 @@ func (c *Client) SendSetup(context string, tools []map[string]interface{}) error
 		"setup": map[string]interface{}{
 			"model": "models/" + c.cfg.ModelID,
 			"generationConfig": map[string]interface{}{
-				"responseModalities": []string{"AUDIO"}, // ✅ Apenas AUDIO
+				"responseModalities": []string{"AUDIO"},
 				"speechConfig": map[string]interface{}{
 					"voiceConfig": map[string]interface{}{
 						"prebuiltVoiceConfig": map[string]interface{}{
@@ -80,13 +98,21 @@ func (c *Client) SendSetup(context string, tools []map[string]interface{}) error
 					},
 				},
 			},
-			"systemInstruction": map[string]interface{}{
-				"parts": []map[string]interface{}{
-					{"text": context},
-				},
-			},
-			"tools": tools,
 		},
+	}
+
+	// ✅ Só adiciona systemInstruction se houver contexto
+	if context != "" {
+		setup["setup"].(map[string]interface{})["systemInstruction"] = map[string]interface{}{
+			"parts": []map[string]interface{}{
+				{"text": context},
+			},
+		}
+	}
+
+	// ✅ Só adiciona tools se houver
+	if len(tools) > 0 {
+		setup["setup"].(map[string]interface{})["tools"] = tools
 	}
 
 	return c.conn.WriteJSON(setup)

@@ -10,7 +10,6 @@ import (
 	"eva-mind/internal/twilio"
 	"eva-mind/pkg/models"
 
-	"github.com/cbroglie/mustache"
 	"github.com/rs/zerolog"
 )
 
@@ -42,35 +41,24 @@ func (s *AlertService) TriggerFamilyAlertCall(ctx context.Context, idosoID int, 
 		return fmt.Errorf("familiar principal não possui telefone cadastrado")
 	}
 
-	// 2. Prepara o prompt de emergência para a EVA falar com a família
-	template, err := s.db.GetTemplate(ctx, "eva_alerta_familia_critico", "")
-	if err != nil {
-		s.logger.Warn().Err(err).Msg("Template de alerta família não encontrado, usando fallback")
-		template = "Olá {{familiar_nome}}, aqui é a Eva que cuida do(a) {{idoso_nome}}. Liguei para avisar que detectei um problema: {{motivo}}. A urgência é {{urgencia}}."
-	}
-
-	prompt, err := mustache.Render(template, map[string]interface{}{
-		"familiar_nome": callCtx.FamiliarNome,
-		"idoso_nome":    callCtx.IdosoNome,
-		"motivo":        motivo,
-		"urgencia":      urgencia,
-	})
-	if err != nil {
-		prompt = fmt.Sprintf("Olá, aqui é a Eva. Emergência com %s: %s.", callCtx.IdosoNome, motivo)
-	}
-
-	// 3. Cria sessão Gemini para FALAR com o familiar
-	// Usamos um ID especial para a sessão da família: "alert_<idosoID>"
+	// ✅ SIMPLIFICADO: Cria sessão com prompt minimalista
+	// A Eva vai conversar naturalmente com o familiar sobre a situação
 	sessionID := fmt.Sprintf("alert_%d", idosoID)
 
-	geminiClient, err := gemini.NewLiveClient(ctx, s.cfg, prompt)
+	geminiClient, err := gemini.NewLiveClient(ctx, s.cfg) // ✅ SEM prompt customizado
 	if err != nil {
 		return fmt.Errorf("falha ao criar sessão Gemini para alerta: %w", err)
 	}
 
 	StoreSession(sessionID, geminiClient)
 
-	// 4. Faz a ligação via Twilio.
+	s.logger.Info().
+		Str("familiar", callCtx.FamiliarNome).
+		Str("telefone", callCtx.FamiliarTelefone).
+		Str("motivo", motivo).
+		Msg("Ligando para familiar sobre intercorrência")
+
+	// 4. Faz a ligação via Twilio
 	// Para o Twilio reconhecer que é um alerta, passamos uma flag ou usamos um range de ID negativo especial
 	// Vamos usar -1000000 - idosoID para evitar colisão com agendamentos reais
 	return twilio.MakeOutboundCall(s.cfg, callCtx.FamiliarTelefone, int64(-1000000-idosoID))
@@ -89,24 +77,19 @@ func (s *AlertService) TriggerEscalationCall(ctx context.Context, ag models.Agen
 		return fmt.Errorf("familiar não encontrado para escalonamento")
 	}
 
-	// Prepara o prompt de escalonamento
-	template, err := s.db.GetTemplate(ctx, "eva_alerta_familia_nao_atende", "")
-	if err != nil {
-		template = "Olá {{familiar_nome}}, aqui é a Eva. Tentei falar com o(a) {{idoso_nome}} para o lembrete de {{medicamento}}, mas não consegui contato após várias tentativas. Poderia verificar?"
-	}
-
-	prompt, _ := mustache.Render(template, map[string]interface{}{
-		"familiar_nome": callCtx.FamiliarNome,
-		"idoso_nome":    callCtx.IdosoNome,
-		"medicamento":   callCtx.Medicamento,
-	})
-
+	// ✅ SIMPLIFICADO: Cria sessão com prompt minimalista
 	sessionID := fmt.Sprintf("escalation_%d", ag.ID)
-	geminiClient, err := gemini.NewLiveClient(ctx, s.cfg, prompt)
+	geminiClient, err := gemini.NewLiveClient(ctx, s.cfg) // ✅ SEM prompt customizado
 	if err != nil {
 		return err
 	}
 	StoreSession(sessionID, geminiClient)
+
+	s.logger.Info().
+		Str("familiar", callCtx.FamiliarNome).
+		Str("telefone", callCtx.FamiliarTelefone).
+		Str("idoso", callCtx.IdosoNome).
+		Msg("Ligando para familiar sobre não atendimento")
 
 	// Faz a ligação para o familiar usando range negativo -2000000
 	return twilio.MakeOutboundCall(s.cfg, callCtx.FamiliarTelefone, int64(-2000000-ag.ID))

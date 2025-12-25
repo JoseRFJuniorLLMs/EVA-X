@@ -2,7 +2,6 @@ package scheduler
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 	"time"
 
@@ -13,7 +12,6 @@ import (
 	"eva-mind/internal/voice"
 	"eva-mind/pkg/models"
 
-	"github.com/cbroglie/mustache"
 	"github.com/rs/zerolog"
 )
 
@@ -97,19 +95,8 @@ func handleAgendamento(ctx context.Context, ag models.Agendamento, db *database.
 		return
 	}
 
-	// 1. Busca contexto completo do agendamento e idoso
-	callCtx, err := db.GetCallContext(ctx, ag.ID)
-	if err != nil {
-		l.Error().Err(err).Msg("Falha ao buscar contexto detalhado")
-		// Continua com os dados básicos do ag se falhar
-	}
-
-	// 2. Busca e monta prompt personalizado via Mustache
-	template, err := db.GetTemplate(ctx, "eva_base_v2", "")
-	if err != nil {
-		l.Warn().Err(err).Msg("Falha ao buscar template, usando fallback")
-		template = "Você é Eva, uma assistente carinhosa. Conversando com {{nome_idoso}} sobre {{medicamento}}."
-	}
+	// ✅ REMOVIDO: Busca de contexto e template - agora usa prompt minimalista
+	// O modelo ficará livre para conversar naturalmente sem restrições
 
 	// ✅ BUSCA CONFIGURAÇÕES DINÂMICAS DO SISTEMA
 	modelID, err := db.GetSystemSetting(ctx, "gemini.model_id")
@@ -117,38 +104,11 @@ func handleAgendamento(ctx context.Context, ag models.Agendamento, db *database.
 		l.Info().Str("model", modelID).Msg("Usando modelo configurado no DB")
 		cfg.ModelID = modelID
 	}
-	// TODO: Suporte para injection de VoiceConfig no NewLiveClient (precisa refatorar NewLiveClient para aceitar options)
-
-	// Prepara mapa de dados para o template
-	templateData := map[string]interface{}{
-		"nome_idoso":           ag.NomeIdoso,
-		"medicamento":          ag.Remedios,
-		"idade":                0,
-		"nivel_cognitivo":      "normal",
-		"limitacoes_auditivas": false,
-		"tom_voz":              "amigável",
-	}
-
-	if callCtx != nil {
-		templateData["idade"] = callCtx.Idade
-		templateData["nivel_cognitivo"] = callCtx.NivelCognitivo
-		templateData["limitacoes_auditivas"] = callCtx.LimitacoesAuditivas
-		templateData["tom_voz"] = callCtx.TomVoz
-		if callCtx.Medicamento != "" {
-			templateData["medicamento"] = callCtx.Medicamento
-		}
-	}
-
-	systemPrompt, err := mustache.Render(template, templateData)
-	if err != nil {
-		l.Error().Err(err).Msg("Erro ao renderizar template Mustache")
-		systemPrompt = fmt.Sprintf("Você é Eva. Hoje você vai conversar com %s sobre %s.", ag.NomeIdoso, ag.Remedios)
-	}
 
 	l.Debug().Msg("Criando sessão Gemini Live")
 
-	// 3. Cria sessão Gemini Live com o prompt
-	geminiClient, err := gemini.NewLiveClient(ctx, cfg, systemPrompt)
+	// 3. Cria sessão Gemini Live com prompt minimalista (já definido internamente)
+	geminiClient, err := gemini.NewLiveClient(ctx, cfg) // ✅ SEM systemPrompt!
 	if err != nil {
 		l.Error().Err(err).Msg("Falha ao criar Gemini Live")
 		db.UpdateCallStatus(ctx, ag.ID, "aguardando_retry", ag.RetryIntervalMinutes)

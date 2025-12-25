@@ -14,7 +14,6 @@ import (
 	"eva-mind/internal/gemini"
 	"eva-mind/internal/telemetry"
 	"eva-mind/pkg/models"
-	"eva-mind/pkg/utils"
 
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog"
@@ -134,7 +133,7 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 		Str("telefone", callCtx.Telefone).
 		Logger()
 
-	l.Info().Msg("Twilio Media Stream connected")
+	l.Info().Msg("🎙️  Twilio Media Stream connected - Eva está pronta para escutar!")
 
 	// ✅ Atualiza status para em_andamento
 	if err := h.db.UpdateCallStatus(ctx, agID, "em_andamento", 0); err != nil {
@@ -206,12 +205,17 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 		select {
 		case sid := <-streamSidChan:
 			streamSid = sid
+			l.Info().Str("stream_sid", streamSid).Msg("✅ StreamSID recebido, iniciando leitura do Gemini")
 		case <-ctx.Done():
 			return
 		case <-time.After(10 * time.Second):
 			l.Warn().Msg("Timeout aguardando streamSid")
 			return
 		}
+
+		// ✅ Buffer para acumular áudio do Gemini antes de enviar ao Twilio
+		var audioBuffer []byte
+		const bufferThreshold = 800 // ~100ms de mulaw (8kHz * 0.1s) - menor latência!
 
 		for {
 			select {
@@ -221,20 +225,25 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 			default:
 				resp, err := geminiClient.ReadResponse()
 				if err != nil {
-					l.Warn().Err(err).Msg("Sessão Gemini encerrada ou erro de leitura")
+					l.Error().Err(err).Msg("❌ Erro ao ler resposta do Gemini")
 					return
 				}
-
-				// Log das chaves da resposta apenas em nível trace (reduzido)
-				// ... (logs de debug removidos para limpeza) ...
 
 				audioData, ok := extractAudio(resp)
 				if !ok {
 					// ✅ Se não for áudio, verifica se é um Tool Call ou Transcrição de Texto
 					h.handleToolCalls(ctx, agID, callCtx.IdosoID, resp, geminiClient, l)
 					if txt, autor, exists := extractText(resp); exists {
-						l.Info().Str("autor", autor).Str("texto", txt).Msg("Transcrição capturada")
+						l.Info().Str("autor", autor).Str("texto", txt).Msg("💬 Transcrição capturada")
 						transcript.WriteString(fmt.Sprintf("%s: %s\n", autor, txt))
+
+						// ✅ CRÍTICO: Log quando usuário fala
+						if autor == "IDOSO" {
+							l.Warn().Str("texto_usuario", txt).Msg("🎤 USUÁRIO FALOU! Aguardando resposta da Eva...")
+						}
+					} else {
+						// ✅ Nenhuma transcrição encontrada
+						l.Debug().Msg("⚠️  Resposta sem áudio e sem transcrição")
 					}
 					continue
 				}
@@ -242,38 +251,66 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 				// ✅ Converte PCM (Gemini) para mu-law (Twilio)
 				mulawData, err := h.convertPCMToMulaw(audioData)
 				if err != nil {
-					l.Error().Err(err).Msg("Erro na conversão PCM->mulaw")
+					l.Error().Err(err).Msg("❌ Erro na conversão de áudio")
 					continue
 				}
 
-				msg := map[string]interface{}{
-					"event":     "media",
-					"streamSid": streamSid, // ✅ OBRIGATÓRIO!
-					"media": map[string]string{
-						"payload": base64.StdEncoding.EncodeToString(mulawData),
-					},
+				// ✅ Adiciona ao buffer
+				audioBuffer = append(audioBuffer, mulawData...)
+
+				// ✅ Envia quando acumular o suficiente OU quando for o final
+				// Verifica se é o último chunk (generationComplete ou turnComplete)
+				isComplete := false
+				if sc, ok := resp["serverContent"].(map[string]interface{}); ok {
+					if complete, ok := sc["generationComplete"].(bool); ok && complete {
+						isComplete = true
+						l.Debug().Msg("🏁 generationComplete recebido")
+					}
+					if complete, ok := sc["turnComplete"].(bool); ok && complete {
+						isComplete = true
+						l.Info().Int("buffer_size", len(audioBuffer)).Msg("🏁 turnComplete - Finalizando turno")
+
+						// ⚠️  Se turnComplete mas buffer vazio = Eva não respondeu nada!
+						if len(audioBuffer) == 0 {
+							l.Error().Msg("🚨 PROBLEMA: turnComplete mas nenhum áudio foi gerado! Eva não respondeu!")
+						}
+					}
 				}
 
-				if err := conn.WriteJSON(msg); err != nil {
-					l.Error().Err(err).Msg("Erro ao enviar para Twilio")
-					errors <- err
-					return
-				}
+				shouldSend := len(audioBuffer) >= bufferThreshold || isComplete
 
-				// Atualiza estado para Speaking
-				geminiClient.SetState(StateSpeaking)
+				if shouldSend && len(audioBuffer) > 0 {
+					l.Info().Int("bytes", len(audioBuffer)).Msg("📞 Enviando para Twilio")
+
+					msg := map[string]interface{}{
+						"event":     "media",
+						"streamSid": streamSid,
+						"media": map[string]string{
+							"payload": base64.StdEncoding.EncodeToString(audioBuffer),
+						},
+					}
+
+					if err := conn.WriteJSON(msg); err != nil {
+						l.Error().Err(err).Msg("❌ Erro ao enviar para Twilio")
+						errors <- err
+						return
+					}
+
+					// Limpa o buffer
+					audioBuffer = audioBuffer[:0]
+					geminiClient.SetState(StateSpeaking)
+				}
 			}
 		}
 	}()
 
 	// ✅ Goroutine: Twilio -> Gemini (com buffer e VAD)
 	go func() {
-		// Inicializa buffer com threshold menor
+		// ✅ BUFFER MAIOR para melhor detecção de voz pelo Gemini
 		buffer := &AudioBuffer{
-			data:      make([]byte, 0, 3200), // ~200ms de buffer
-			threshold: 1280,                  // ~80ms mínimo (mais agressivo)
+			data:      make([]byte, 0, 6400), // ~400ms de buffer (PCM 16kHz)
+			threshold: 6400,                  // ~400ms = melhor VAD do Gemini
 		}
-		vad := utils.NewVAD(300.0) // Threshold mais sensível
 
 		for {
 			select {
@@ -316,10 +353,9 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 					payloadBase64, _ := media["payload"].(string)
 					mulawData, _ := base64.StdEncoding.DecodeString(payloadBase64)
 
-					// ✅ Log reduzido: apenas a cada 50 chunks (~1 segundo)
 					buffer.chunkCounter++
-					if buffer.chunkCounter%50 == 0 {
-						l.Debug().Int("chunks_received", buffer.chunkCounter).Msg("Processando áudio do Twilio")
+					if buffer.chunkCounter == 1 {
+						l.Info().Msg("🎤 Primeiro chunk recebido")
 					}
 
 					// ✅ Converte mu-law (Twilio) para PCM (Gemini)
@@ -329,25 +365,27 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 						continue
 					}
 
-					// ✅ Detecta atividade de voz
-					hasActivity := vad.DetectActivity(pcmData)
+					// ✅ Log crítico a cada 100 chunks para verificar conversão
+					if buffer.chunkCounter%100 == 0 {
+						l.Info().
+							Int("mulaw_in", len(mulawData)).
+							Int("pcm_out", len(pcmData)).
+							Int("ratio", len(pcmData)/len(mulawData)).
+							Msg("🔍 Conversão áudio")
+					}
 
-					// Sempre adiciona ao buffer (mesmo sem atividade forte)
+					// ✅ Sempre adiciona ao buffer
 					buffer.data = append(buffer.data, pcmData...)
 
-					// Envia quando:
-					// 1. Atingir threshold (1280 bytes = ~80ms)
-					// 2. A cada 5 chunks com atividade detectada
-					// 3. A cada 3 chunks independente de atividade (fallback)
-					shouldSend := len(buffer.data) >= buffer.threshold ||
-						(hasActivity && buffer.chunkCounter%5 == 0) ||
-						buffer.chunkCounter%3 == 0
-
-					if shouldSend && len(buffer.data) > 0 {
-						l.Debug().Int("buffer_size", len(buffer.data)).Bool("has_activity", hasActivity).Msg("Enviando buffer para Gemini")
+					// ✅ ENVIA quando atingir threshold (6400 bytes = ~400ms)
+					if len(buffer.data) >= buffer.threshold {
+						l.Info().
+							Int("chunk", buffer.chunkCounter).
+							Int("bytes", len(buffer.data)).
+							Msg("📤 Enviando para Gemini")
 
 						if err := geminiClient.SendAudio(buffer.data); err != nil {
-							l.Error().Err(err).Msg("Erro ao enviar áudio para Gemini")
+							l.Error().Err(err).Msg("❌ Erro ao enviar áudio para Gemini")
 							errors <- err
 							return
 						}
@@ -428,6 +466,8 @@ func extractAudio(resp map[string]interface{}) ([]byte, bool) {
 			continue
 		}
 
+		// ✅ Log apenas quando extrai com sucesso
+		logger.Info().Int("audio_bytes", len(audio)).Msg("🔊 Áudio extraído do Gemini")
 		return audio, true
 	}
 
@@ -486,18 +526,46 @@ func (h *Handler) convertMulawToPCM(mulaw []byte) ([]byte, error) {
 		return nil, fmt.Errorf("empty mulaw data")
 	}
 
-	// 1. Decodifica mu-law para PCM 16-bit bytes (ainda 8kHz)
+	// 1. Decodifica mu-law para PCM 16-bit (ainda 8kHz)
 	pcm8kBytes := g711.DecodeUlaw(mulaw)
 	pcm8k := h.bytesToInt16(pcm8kBytes)
 
-	// 2. Resample de 8kHz para 16kHz (dobra as amostras)
-	pcm16k := h.resample8to16kHz(pcm8k)
+	// 2. Filtro passa-baixa leve para suavizar antes do upsample
+	pcm8kFiltered := h.lowPassFilter(pcm8k, 0.85)
 
-	// 3. Converte int16 para bytes (little-endian)
+	// 3. Upsample 8kHz → 16kHz com interpolação cúbica
+	pcm16k := h.resample8to16kHz(pcm8kFiltered)
+
+	// 4. Converte para bytes
 	return h.int16ToBytes(pcm16k), nil
 }
 
-// ✅ CONVERSÃO COMPLETA: PCM 24kHz -> mu-law 8kHz
+// ✅ Filtro passa-baixa simples (média móvel) para reduzir aliasing
+func (h *Handler) lowPassFilter(samples []int16, cutoff float64) []int16 {
+	if len(samples) < 3 {
+		return samples
+	}
+
+	output := make([]int16, len(samples))
+
+	// Filtro de média móvel de 3 pontos com peso
+	for i := 0; i < len(samples); i++ {
+		if i == 0 {
+			// Primeira amostra
+			output[i] = int16((int32(samples[i])*2 + int32(samples[i+1])) / 3)
+		} else if i == len(samples)-1 {
+			// Última amostra
+			output[i] = int16((int32(samples[i-1]) + int32(samples[i])*2) / 3)
+		} else {
+			// Amostras do meio - média ponderada
+			output[i] = int16((int32(samples[i-1]) + int32(samples[i])*2 + int32(samples[i+1])) / 4)
+		}
+	}
+
+	return output
+}
+
+// ✅ CONVERSÃO COMPLETA: PCM 24kHz -> mu-law 8kHz com anti-aliasing
 func (h *Handler) convertPCMToMulaw(pcm []byte) ([]byte, error) {
 	if len(pcm) == 0 {
 		return nil, fmt.Errorf("empty pcm data")
@@ -506,28 +574,117 @@ func (h *Handler) convertPCMToMulaw(pcm []byte) ([]byte, error) {
 	// 1. Converte bytes para int16
 	samples := h.bytesToInt16(pcm)
 
-	// 2. Resample de 24kHz para 8kHz (reduz por fator de 3)
-	samples8k := h.resample24to8kHz(samples)
+	// 2. ✅ Filtro passa-baixa FORTE antes do downsample para evitar aliasing
+	// Corte em ~45% da nova Nyquist (3.6 kHz para 8 kHz final)
+	filtered := h.lowPassFilterStrong(samples)
 
-	// 3. Codifica para mu-law
-	samples8kBytes := h.int16ToBytes(samples8k)
-	mulaw := g711.EncodeUlaw(samples8kBytes)
+	// 3. Downsample de 24kHz para 8kHz (decimate por 3) com média ponderada
+	outLen := len(filtered) / 3
+	downsampled := make([]int16, outLen)
+
+	for i := 0; i < outLen; i++ {
+		idx := i * 3
+		if idx+2 < len(filtered) {
+			// Média das 3 amostras para suavizar
+			sum := int32(filtered[idx]) + int32(filtered[idx+1]) + int32(filtered[idx+2])
+			downsampled[i] = int16(sum / 3)
+		} else {
+			downsampled[i] = filtered[idx]
+		}
+	}
+
+	// 4. Codifica para mu-law
+	downsampledBytes := h.int16ToBytes(downsampled)
+	mulaw := g711.EncodeUlaw(downsampledBytes)
 
 	return mulaw, nil
 }
 
-// ✅ Resample 8kHz -> 16kHz (linear interpolation)
+// ✅ Filtro passa-baixa FORTE para evitar aliasing severo no downsample
+func (h *Handler) lowPassFilterStrong(samples []int16) []int16 {
+	if len(samples) < 5 {
+		return samples
+	}
+
+	output := make([]int16, len(samples))
+
+	// Filtro de média móvel de 5 pontos (mais agressivo)
+	for i := 0; i < len(samples); i++ {
+		if i < 2 {
+			// Início - usa menos pontos
+			sum := int32(0)
+			count := 0
+			for j := 0; j <= min(i+2, len(samples)-1); j++ {
+				sum += int32(samples[j])
+				count++
+			}
+			output[i] = int16(sum / int32(count))
+		} else if i >= len(samples)-2 {
+			// Fim - usa menos pontos
+			sum := int32(0)
+			count := 0
+			for j := max(0, i-2); j < len(samples); j++ {
+				sum += int32(samples[j])
+				count++
+			}
+			output[i] = int16(sum / int32(count))
+		} else {
+			// Meio - filtro completo de 5 pontos com pesos
+			sum := int32(samples[i-2])*1 +
+				int32(samples[i-1])*2 +
+				int32(samples[i])*3 +
+				int32(samples[i+1])*2 +
+				int32(samples[i+2])*1
+			output[i] = int16(sum / 9)
+		}
+	}
+
+	return output
+}
+
+// ✅ Resample 8kHz -> 16kHz com interpolação cúbica (alta qualidade)
 func (h *Handler) resample8to16kHz(samples []int16) []int16 {
+	if len(samples) == 0 {
+		return []int16{}
+	}
+
 	outLen := len(samples) * 2
 	output := make([]int16, outLen)
 
 	for i := 0; i < len(samples); i++ {
+		// Amostra original na posição par
 		output[i*2] = samples[i]
 
-		// Interpolação linear para preencher amostras intermediárias
+		// Interpolação cúbica para a amostra intermediária
 		if i < len(samples)-1 {
-			output[i*2+1] = int16((int32(samples[i]) + int32(samples[i+1])) / 2)
+			// Pega 4 pontos para interpolação cúbica (quando possível)
+			y0 := int32(samples[max(0, i-1)])
+			y1 := int32(samples[i])
+			y2 := int32(samples[i+1])
+			y3 := int32(samples[min(len(samples)-1, i+2)])
+
+			// Interpolação cúbica de Catmull-Rom em t=0.5
+			// Fórmula: p(t) = 0.5 * (2*y1 + (-y0+y2)*t + (2*y0-5*y1+4*y2-y3)*t^2 + (-y0+3*y1-3*y2+y3)*t^3)
+			// Para t=0.5 (ponto médio):
+			t := 0.5
+			t2 := t * t
+			t3 := t2 * t
+
+			result := 0.5 * (2.0*float64(y1) +
+				float64(-y0+y2)*t +
+				float64(2*y0-5*y1+4*y2-y3)*t2 +
+				float64(-y0+3*y1-3*y2+y3)*t3)
+
+			// Clamp para evitar overflow
+			if result > 32767 {
+				result = 32767
+			} else if result < -32768 {
+				result = -32768
+			}
+
+			output[i*2+1] = int16(result)
 		} else {
+			// Última amostra - simplesmente repete
 			output[i*2+1] = samples[i]
 		}
 	}
@@ -535,24 +692,22 @@ func (h *Handler) resample8to16kHz(samples []int16) []int16 {
 	return output
 }
 
-// ✅ Resample 24kHz -> 8kHz (decimate by 3)
-func (h *Handler) resample24to8kHz(samples []int16) []int16 {
-	outLen := len(samples) / 3
-	output := make([]int16, outLen)
-
-	for i := 0; i < outLen; i++ {
-		// Média simples de 3 amostras para evitar aliasing
-		idx := i * 3
-		if idx+2 < len(samples) {
-			sum := int32(samples[idx]) + int32(samples[idx+1]) + int32(samples[idx+2])
-			output[i] = int16(sum / 3)
-		} else {
-			output[i] = samples[idx]
-		}
+// Funções auxiliares min/max
+func min(a, b int) int {
+	if a < b {
+		return a
 	}
-
-	return output
+	return b
 }
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// ✅ Resample 24kHz -> 8kHz (decimate by 3)
 
 // ✅ Converte int16 para bytes (little-endian)
 func (h *Handler) int16ToBytes(samples []int16) []byte {
