@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"eva-mind/internal/config"
 	"eva-mind/internal/database"
+	"eva-mind/internal/gemini"
 	"eva-mind/internal/telemetry"
 	"eva-mind/pkg/models"
 
@@ -140,12 +142,38 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 
 	errors := make(chan error, 2)
 	startTime := time.Now()
+	var transcript strings.Builder
+	transcript.WriteString(fmt.Sprintf("--- Início da Sessão (%s) ---\n", startTime.Format("15:04:05")))
 
-	// ✅ Telemetria: Registra métrica ao final
+	// ✅ Telemetria e Persistência de Transcrição
 	defer func() {
 		duration := time.Since(startTime)
 		telemetry.CallDuration.Observe(duration.Seconds())
 		l.Info().Dur("duration", duration).Msg("Sessão finalizada")
+
+		// Salva a transcrição final e realiza análise de sentimento
+		finalTranscript := transcript.String()
+		if finalTranscript != "" {
+			l.Info().Msg("Realizando análise de sentimento e resumo...")
+			// Usamos um novo contexto para a análise não ser cancelada pelo fim da chamada
+			analysisCtx, cancelAnalysis := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancelAnalysis()
+
+			summary, sentiment, score := h.analyzeConversation(analysisCtx, finalTranscript)
+
+			updates := map[string]interface{}{
+				"fim":                    time.Now(),
+				"status":                 "concluido",
+				"transcricao_completa":   finalTranscript,
+				"transcricao_resumo":     summary,
+				"sentimento_geral":       sentiment,
+				"sentimento_intensidade": score,
+				"duracao_segundos":       int(duration.Seconds()),
+			}
+			if err := h.db.UpdateHistorico(context.Background(), histID, updates); err != nil {
+				l.Error().Err(err).Msg("Erro ao salvar transcrição e análise no histórico")
+			}
+		}
 	}()
 
 	// ✅ Goroutine: Gemini -> Twilio (com timeout)
@@ -166,8 +194,13 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 
 				audioData, ok := extractAudio(resp)
 				if !ok {
-					// ✅ Se não for áudio, verifica se é um Tool Call
+					// ✅ Se não for áudio, verifica se é um Tool Call ou Transcrição de Texto
 					h.handleToolCalls(ctx, callCtx.IdosoID, resp, geminiClient, l)
+
+					// Captura texto (transcrição do modelo ou do usuário)
+					if txt, autor, exists := extractText(resp); exists {
+						transcript.WriteString(fmt.Sprintf("%s: %s\n", autor, txt))
+					}
 					continue
 				}
 
@@ -319,6 +352,52 @@ func extractAudio(resp map[string]interface{}) ([]byte, bool) {
 	return nil, false
 }
 
+// ✅ Extração de transcrição de texto
+func extractText(resp map[string]interface{}) (string, string, bool) {
+	serverContent, ok := resp["serverContent"].(map[string]interface{})
+	if !ok {
+		return "", "", false
+	}
+
+	var turn map[string]interface{}
+	autor := ""
+
+	if t, ok := serverContent["modelTurn"].(map[string]interface{}); ok {
+		turn = t
+		autor = "EVA"
+	} else if t, ok := serverContent["userTurn"].(map[string]interface{}); ok {
+		turn = t
+		autor = "IDOSO"
+	}
+
+	if turn == nil {
+		return "", "", false
+	}
+
+	parts, ok := turn["parts"].([]interface{})
+	if !ok || len(parts) == 0 {
+		return "", "", false
+	}
+
+	var fullText strings.Builder
+	for _, p := range parts {
+		part, ok := p.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		if txt, ok := part["text"].(string); ok {
+			fullText.WriteString(txt)
+		}
+	}
+
+	if fullText.Len() > 0 {
+		return fullText.String(), autor, true
+	}
+
+	return "", "", false
+}
+
 // ✅ CONVERSÃO COMPLETA: mu-law 8kHz -> PCM 16kHz
 func (h *Handler) convertMulawToPCM(mulaw []byte) ([]byte, error) {
 	if len(mulaw) == 0 {
@@ -414,6 +493,16 @@ func (h *Handler) bytesToInt16(bytes []byte) []int16 {
 		samples[i] = int16(bytes[i*2]) | int16(bytes[i*2+1])<<8
 	}
 	return samples
+}
+
+// ✅ Realiza a análise da conversa usando Gemini REST API
+func (h *Handler) analyzeConversation(ctx context.Context, transcript string) (string, string, int) {
+	res, err := gemini.AnalyzeTranscript(ctx, h.cfg, transcript)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("Falha na análise de sentimento da conversa")
+		return "Resumo indisponível", "neutro", 5
+	}
+	return res.Summary, res.Sentiment, res.Score
 }
 
 // ✅ Processamento de Tool Calls (Function Calling)
