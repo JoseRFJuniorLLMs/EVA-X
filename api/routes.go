@@ -10,7 +10,7 @@ import (
 	"github.com/rs/zerolog"
 )
 
-func NewRouter(db *database.DB, cfg *config.Config, logger zerolog.Logger) http.Handler {
+func NewRouter(db *database.DB, cfg *config.Config, logger zerolog.Logger, alertService *voice.AlertService) http.Handler {
 	mux := http.NewServeMux()
 
 	// Health check (agora chamando funções organizadas no health.go)
@@ -19,7 +19,7 @@ func NewRouter(db *database.DB, cfg *config.Config, logger zerolog.Logger) http.
 	mux.HandleFunc("/health/ready", handleReadiness(db))
 
 	// Voice WebSocket - ESSENCIAL para o projeto
-	voiceHandler := voice.NewHandler(db, cfg, logger)
+	voiceHandler := voice.NewHandler(db, cfg, logger, alertService)
 	mux.HandleFunc("/media-stream/", voiceHandler.HandleMediaStream)
 
 	// TwiML - ESSENCIAL para o Twilio

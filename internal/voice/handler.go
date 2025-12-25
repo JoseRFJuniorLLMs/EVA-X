@@ -23,16 +23,18 @@ var upgrader = websocket.Upgrader{
 }
 
 type Handler struct {
-	db     *database.DB
-	cfg    *config.Config
-	logger zerolog.Logger
+	db           *database.DB
+	cfg          *config.Config
+	logger       zerolog.Logger
+	alertService *AlertService
 }
 
-func NewHandler(db *database.DB, cfg *config.Config, logger zerolog.Logger) *Handler {
+func NewHandler(db *database.DB, cfg *config.Config, logger zerolog.Logger, alertService *AlertService) *Handler {
 	return &Handler{
-		db:     db,
-		cfg:    cfg,
-		logger: logger,
+		db:           db,
+		cfg:          cfg,
+		logger:       logger,
+		alertService: alertService,
 	}
 }
 
@@ -46,29 +48,58 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	agID, err := strconv.Atoi(agIDStr)
-	if err != nil || agID <= 0 {
+	if err != nil {
 		h.logger.Error().Str("ag_id_str", agIDStr).Msg("agendamento_id inválido")
 		http.Error(w, "agendamento_id inválido", http.StatusBadRequest)
 		return
 	}
 
-	// ✅ Busca sessão Gemini pré-criada
+	// ✅ Tratamento de Chamadas Especiais (Alertas e Escalonamento)
+	isSpecialCall := false
+	if agID < -2000000 {
+		// Escalonamento: session_id = escalation_<ag_id>
+		realAgID := -agID - 2000000
+		agIDStr = fmt.Sprintf("escalation_%d", realAgID)
+		isSpecialCall = true
+		agID = realAgID // Para logs e DB lookup se necessário
+	} else if agID < -1000000 {
+		// Alerta Família: session_id = alert_<idoso_id>
+		idosoID := -agID - 1000000
+		agIDStr = fmt.Sprintf("alert_%d", idosoID)
+		isSpecialCall = true
+		// Como não temos um ag_id real para o alerta, vamos buscar o idoso diretamente depois
+	}
+
+	// ✅ Busca sessão Gemini
 	geminiClient := GetSession(agIDStr)
 	if geminiClient == nil {
-		h.logger.Error().Int("ag_id", agID).Msg("Sessão não encontrada")
+		h.logger.Error().Str("session_id", agIDStr).Msg("Sessão não encontrada")
 		http.Error(w, "Sessão não encontrada", http.StatusNotFound)
 		return
 	}
 
-	// ✅ Busca contexto do agendamento no DB com timeout de 10 minutos
+	h.logger.Info().Str("ag_id_str", agIDStr).Int("ag_id", agID).Bool("is_special", isSpecialCall).Msg("Processando Media Stream")
+
+	// ✅ Contexto com timeout
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
 	defer cancel()
 
-	callCtx, err := h.db.GetCallContext(ctx, agID)
-	if err != nil {
+	var callCtx *models.CallContext
+	if agID > 0 {
+		callCtx, err = h.db.GetCallContext(ctx, agID)
+	} else {
+		// Para alertas puros onde agID ainda pode ser negativo ou 0 se não mapeado
+		// Por enquanto, vamos carregar um contexto básico se for special
+		callCtx = &models.CallContext{AgendamentoID: agID, IdosoNome: "Familiar"}
+	}
+
+	if err != nil && !isSpecialCall {
 		h.logger.Error().Err(err).Int("ag_id", agID).Msg("Erro ao buscar contexto")
 		http.Error(w, "Erro ao buscar contexto", http.StatusInternalServerError)
 		return
+	}
+	if callCtx == nil {
+		callCtx = &models.CallContext{IdosoNome: "Desconhecido"}
 	}
 
 	// ✅ Upgrade WebSocket
@@ -136,7 +167,7 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 				audioData, ok := extractAudio(resp)
 				if !ok {
 					// ✅ Se não for áudio, verifica se é um Tool Call
-					h.handleToolCalls(resp, geminiClient, l)
+					h.handleToolCalls(ctx, callCtx.IdosoID, resp, geminiClient, l)
 					continue
 				}
 
@@ -386,7 +417,7 @@ func (h *Handler) bytesToInt16(bytes []byte) []int16 {
 }
 
 // ✅ Processamento de Tool Calls (Function Calling)
-func (h *Handler) handleToolCalls(resp map[string]interface{}, geminiClient *SafeSession, l zerolog.Logger) {
+func (h *Handler) handleToolCalls(ctx context.Context, idosoID int, resp map[string]interface{}, geminiClient *SafeSession, l zerolog.Logger) {
 	serverContent, ok := resp["serverContent"].(map[string]interface{})
 	if !ok {
 		return
@@ -429,7 +460,7 @@ func (h *Handler) handleToolCalls(resp map[string]interface{}, geminiClient *Saf
 			l.Info().Str("function", name).Interface("args", args).Msg("Gemini solicitou chamada de função")
 
 			// Executa a função localmente
-			result := h.dispatchFunction(name, args)
+			result := h.dispatchFunction(ctx, idosoID, name, args)
 
 			// Envia a resposta de volta para o Gemini
 			toolResponse := map[string]interface{}{
@@ -452,14 +483,20 @@ func (h *Handler) handleToolCalls(resp map[string]interface{}, geminiClient *Saf
 }
 
 // ✅ Despacha a execução para a função correta
-func (h *Handler) dispatchFunction(name string, args map[string]interface{}) map[string]interface{} {
+func (h *Handler) dispatchFunction(ctx context.Context, idosoID int, name string, args map[string]interface{}) map[string]interface{} {
 	switch name {
 	case "alert_family":
 		motivo, _ := args["motivo"].(string)
 		urgencia, _ := args["urgencia"].(string)
 		h.logger.Warn().Str("motivo", motivo).Str("urgencia", urgencia).Msg("🚨 ALERTA FAMÍLIA DISPARADO")
-		// TODO: Implementar envio real de alerta (Sprint 3 P1)
-		return map[string]interface{}{"status": "alerta_enviado", "message": "Família foi notificada"}
+
+		// Dispara a ligação real para a família
+		if err := h.alertService.TriggerFamilyAlertCall(ctx, idosoID, motivo, urgencia); err != nil {
+			h.logger.Error().Err(err).Msg("Falha ao disparar alerta real para família")
+			return map[string]interface{}{"status": "error", "message": "Falha ao enviar alerta"}
+		}
+
+		return map[string]interface{}{"status": "alerta_enviado", "message": "Família foi notificada via ligação de voz"}
 
 	case "confirm_medication":
 		med, _ := args["medicamento"].(string)

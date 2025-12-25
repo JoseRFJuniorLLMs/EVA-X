@@ -17,7 +17,7 @@ import (
 	"github.com/rs/zerolog"
 )
 
-func Start(ctx context.Context, db *database.DB, cfg *config.Config, logger zerolog.Logger) {
+func Start(ctx context.Context, db *database.DB, cfg *config.Config, logger zerolog.Logger, alertService *voice.AlertService) {
 	ticker := time.NewTicker(time.Minute * time.Duration(cfg.SchedulerInterval))
 	defer ticker.Stop()
 
@@ -31,12 +31,12 @@ func Start(ctx context.Context, db *database.DB, cfg *config.Config, logger zero
 			logger.Info().Msg("Scheduler encerrado")
 			return
 		case <-ticker.C:
-			processAgendamentos(ctx, db, cfg, logger)
+			processAgendamentos(ctx, db, cfg, logger, alertService)
 		}
 	}
 }
 
-func processAgendamentos(ctx context.Context, db *database.DB, cfg *config.Config, logger zerolog.Logger) {
+func processAgendamentos(ctx context.Context, db *database.DB, cfg *config.Config, logger zerolog.Logger, alertService *voice.AlertService) {
 	logger.Info().Msg("Verificando agendamentos pendentes...")
 
 	ags, err := db.GetPendingCalls(ctx)
@@ -49,17 +49,18 @@ func processAgendamentos(ctx context.Context, db *database.DB, cfg *config.Confi
 
 	for _, ag := range ags {
 		if ag.TentativasRealizadas < ag.MaxRetries {
-			go handleAgendamento(ctx, ag, db, cfg, logger)
+			go handleAgendamento(ctx, ag, db, cfg, logger, alertService)
 		} else {
 			l := logger.With().Int("ag_id", ag.ID).Str("idoso", ag.NomeIdoso).Logger()
 			l.Warn().Msg("Limite de tentativas atingido. Iniciando escalonamento.")
-			// TODO: Implementar lógica real de escalonamento (e-mail, SMS, etc)
-			db.UpdateCallStatus(ctx, ag.ID, "falhou", 0)
+			// Escalonamento para família
+			db.UpdateCallStatus(ctx, ag.ID, "falhou_definitivamente", 0)
+			alertService.TriggerEscalationCall(ctx, ag)
 		}
 	}
 }
 
-func handleAgendamento(ctx context.Context, ag models.Agendamento, db *database.DB, cfg *config.Config, logger zerolog.Logger) {
+func handleAgendamento(ctx context.Context, ag models.Agendamento, db *database.DB, cfg *config.Config, logger zerolog.Logger, alertService *voice.AlertService) {
 	l := logger.With().
 		Int("ag_id", ag.ID).
 		Str("idoso", ag.NomeIdoso).
@@ -157,7 +158,18 @@ func handleAgendamento(ctx context.Context, ag models.Agendamento, db *database.
 	if err != nil {
 		l.Error().Err(err).Msg("Falha na ligação Twilio")
 		voice.RemoveSession(agIDStr)
-		db.UpdateCallStatus(ctx, ag.ID, "aguardando_retry", ag.RetryIntervalMinutes)
+
+		// Incrementa tentativas
+		db.IncrementAttempts(ctx, ag.ID)
+
+		// Verifica se atingiu o limite para escalonar
+		if ag.TentativasRealizadas+1 >= ag.MaxRetries {
+			l.Warn().Msg("Limite de tentativas atingido. Escalonando para família.")
+			db.UpdateCallStatus(ctx, ag.ID, "falhou_definitivamente", 0)
+			alertService.TriggerEscalationCall(ctx, ag)
+		} else {
+			db.UpdateCallStatus(ctx, ag.ID, "aguardando_retry", ag.RetryIntervalMinutes)
+		}
 		return
 	}
 

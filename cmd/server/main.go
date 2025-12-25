@@ -41,15 +41,18 @@ func main() {
 	}
 	defer db.Close()
 
-	// 4. Start Scheduler in background
+	// 4. Start Alert Service
+	alertService := voice.NewAlertService(db, cfg, logger)
+
+	// 5. Start Scheduler in background
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	logger.Info().Msg("Starting scheduler")
-	go scheduler.Start(ctx, db, cfg, logger)
+	go scheduler.Start(ctx, db, cfg, logger, alertService)
 
-	// 5. Setup Router
-	r := SetupRouter(db, cfg, logger)
+	// 6. Setup Router
+	r := SetupRouter(db, cfg, logger, alertService)
 
 	// 6. Start Server
 	server := &http.Server{
@@ -78,10 +81,10 @@ func main() {
 	logger.Info().Msg("Server exited")
 }
 
-func SetupRouter(db *database.DB, cfg *config.Config, logger zerolog.Logger) *gin.Engine {
+func SetupRouter(db *database.DB, cfg *config.Config, logger zerolog.Logger, alertService *voice.AlertService) *gin.Engine {
 	r := gin.Default()
 
-	voiceHandler := voice.NewHandler(db, cfg, logger)
+	voiceHandler := voice.NewHandler(db, cfg, logger, alertService)
 	twilioHandler := twilio.NewTwimlHandler(cfg)
 
 	// Health check

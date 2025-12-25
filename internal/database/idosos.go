@@ -13,7 +13,9 @@ func (db *DB) GetIdosoByID(ctx context.Context, id int) (*models.CallContext, er
 			nome,
 			telefone,
 			nivel_cognitivo,
-			limitacoes_auditivas
+			limitacoes_auditivas,
+			familiar_principal->>'nome' as familiar_nome,
+			familiar_principal->>'telefone' as familiar_telefone
 		FROM idosos
 		WHERE id = $1
 	`
@@ -25,6 +27,8 @@ func (db *DB) GetIdosoByID(ctx context.Context, id int) (*models.CallContext, er
 		&callCtx.Telefone,
 		&callCtx.NivelCognitivo,
 		&callCtx.LimitacoesAuditivas,
+		&callCtx.FamiliarNome,
+		&callCtx.FamiliarTelefone,
 	)
 
 	if err != nil {
