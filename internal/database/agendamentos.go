@@ -13,65 +13,70 @@ func (db *DB) GetCallContext(ctx context.Context, agendamentoID int) (*models.Ca
             a.idoso_id,
             i.nome as idoso_nome,
             i.telefone,
-            a.remedios,
+            a.dados_tarefa,
             i.nivel_cognitivo,
             i.limitacoes_auditivas,
-            a.gemini_session_handle,
-            a.ultima_interacao_estado
+            a.gemini_session_handle
         FROM agendamentos a
         JOIN idosos i ON a.idoso_id = i.id
         WHERE a.id = $1
     `
 
 	var callCtx models.CallContext
-	var remediosJSON, estadoJSON, sessionHandle *string
-	var limitacoesAuditivas *bool
+	var dadosTarefa map[string]interface{}
+	var sessionHandle *string
 
 	err := db.Pool.QueryRow(ctx, query, agendamentoID).Scan(
 		&callCtx.AgendamentoID,
 		&callCtx.IdosoID,
 		&callCtx.IdosoNome,
 		&callCtx.Telefone,
-		&remediosJSON,
+		&dadosTarefa,
 		&callCtx.NivelCognitivo,
-		&limitacoesAuditivas,
+		&callCtx.LimitacoesAuditivas,
 		&sessionHandle,
-		&estadoJSON,
 	)
 
 	if err != nil {
 		return nil, err
 	}
 
-	// Parse JSON fields
-	if remediosJSON != nil {
-		callCtx.Medicamento = *remediosJSON
+	// Extrai medicamento do JSON dados_tarefa
+	if med, ok := dadosTarefa["medicamento"].(string); ok {
+		callCtx.Medicamento = med
+	} else if med, ok := dadosTarefa["remedios"].(string); ok { // Fallback
+		callCtx.Medicamento = med
 	}
+
 	if sessionHandle != nil {
 		callCtx.SessionHandle = *sessionHandle
-	}
-	if limitacoesAuditivas != nil {
-		callCtx.LimitacoesAuditivas = *limitacoesAuditivas
 	}
 
 	return &callCtx, nil
 }
 
 func (db *DB) GetPendingCalls(ctx context.Context) ([]models.Agendamento, error) {
+	// 🔍 DEBUG: Verificar se o Go enxerga a tabela
+	var total int
+	_ = db.Pool.QueryRow(ctx, "SELECT COUNT(*) FROM agendamentos").Scan(&total)
+	println("\n--- DEBUG DATABASE ---")
+	println("Total de registros na tabela agendamentos:", total)
+	println("----------------------\n")
+
 	query := `
         SELECT 
-            id,
-            idoso_id,
-            telefone,
-            nome_idoso,
-            horario,
-            remedios,
-            status,
-            tentativas_realizadas
-        FROM agendamentos
-        WHERE horario <= NOW()
-          AND status = 'pendente'
-        ORDER BY horario ASC
+            a.id,
+            a.idoso_id,
+            i.telefone,
+            i.nome as nome_idoso,
+            a.data_hora_agendada,
+            a.dados_tarefa,
+            a.status,
+            a.tentativas_realizadas
+        FROM agendamentos a
+        JOIN idosos i ON a.idoso_id = i.id
+        WHERE a.status IN ('agendado', 'pendente', 'em_andamento')
+        ORDER BY a.data_hora_agendada ASC
         LIMIT 50
     `
 
@@ -84,7 +89,7 @@ func (db *DB) GetPendingCalls(ctx context.Context) ([]models.Agendamento, error)
 	var agendamentos []models.Agendamento
 	for rows.Next() {
 		var ag models.Agendamento
-		var remedios *string
+		var dadosTarefa map[string]interface{}
 
 		err := rows.Scan(
 			&ag.ID,
@@ -92,16 +97,21 @@ func (db *DB) GetPendingCalls(ctx context.Context) ([]models.Agendamento, error)
 			&ag.Telefone,
 			&ag.NomeIdoso,
 			&ag.Horario,
-			&remedios,
+			&dadosTarefa,
 			&ag.Status,
 			&ag.TentativasRealizadas,
 		)
 		if err != nil {
+			// ✅ Log de erro crítico para depuração
+			println("Erro ao ler linha do banco:", err.Error())
 			continue
 		}
 
-		if remedios != nil {
-			ag.Remedios = *remedios
+		// Extrai medicamento
+		if med, ok := dadosTarefa["medicamento"].(string); ok {
+			ag.Remedios = med
+		} else if med, ok := dadosTarefa["remedios"].(string); ok {
+			ag.Remedios = med
 		}
 
 		agendamentos = append(agendamentos, ag)
@@ -114,12 +124,15 @@ func (db *DB) UpdateCallStatus(ctx context.Context, agendamentoID int, status st
 	query := `
         UPDATE agendamentos
         SET status = $1,
-            call_sid = COALESCE($2, call_sid),
+            gemini_session_handle = COALESCE($2, gemini_session_handle),
             updated_at = NOW()
         WHERE id = $3
     `
+	// Note: eva-v7 uses twilio_call_sid in historico, but let's see if agendamentos has it.
+	// In eva-v7 agendamentos, there is no call_sid column!
+	// We'll update only status and handle here.
 
-	_, err := db.Pool.Exec(ctx, query, status, callSID, agendamentoID)
+	_, err := db.Pool.Exec(ctx, query, status, nil, agendamentoID)
 	return err
 }
 

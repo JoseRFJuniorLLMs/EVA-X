@@ -10,7 +10,7 @@ import (
 func (db *DB) CreateHistorico(ctx context.Context, hist *models.Historico) (int, error) {
 	query := `
         INSERT INTO historico_ligacoes 
-        (agendamento_id, idoso_id, call_sid, status, inicio)
+        (agendamento_id, idoso_id, twilio_call_sid, status, inicio_chamada)
         VALUES ($1, $2, $3, $4, $5)
         RETURNING id
     `
@@ -33,11 +33,11 @@ func (db *DB) UpdateHistorico(ctx context.Context, id int, updates map[string]in
 	// Implementar update dinâmico baseado no map
 	query := `
         UPDATE historico_ligacoes
-        SET fim = COALESCE($1, fim),
+        SET fim_chamada = COALESCE($1, fim_chamada),
             status = COALESCE($2, status),
             qualidade_audio = COALESCE($3, qualidade_audio),
             interrupcoes_detectadas = COALESCE($4, interrupcoes_detectadas),
-            call_sid = COALESCE($5, call_sid)
+            twilio_call_sid = COALESCE($5, twilio_call_sid)
         WHERE id = $6
     `
 

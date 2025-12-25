@@ -38,29 +38,10 @@ func Start(ctx context.Context, db *database.DB, cfg *config.Config, logger zero
 func processAgendamentos(ctx context.Context, db *database.DB, cfg *config.Config, logger zerolog.Logger) {
 	logger.Info().Msg("Verificando agendamentos pendentes...")
 
-	query := `
-		SELECT id, idoso_id, telefone, nome_idoso, remedios 
-		FROM agendamentos 
-		WHERE horario <= NOW() + INTERVAL '5 minutes' 
-		  AND horario > NOW() - INTERVAL '5 minutes'
-		  AND status = 'pendente'
-		  AND tentativas_realizadas < $1`
-
-	rows, err := db.Pool.Query(ctx, query, cfg.MaxRetries)
+	ags, err := db.GetPendingCalls(ctx)
 	if err != nil {
-		logger.Error().Err(err).Msg("Erro ao buscar agendamentos")
+		logger.Error().Err(err).Msg("Erro ao buscar agendamentos do banco")
 		return
-	}
-	defer rows.Close()
-
-	var ags []models.Agendamento
-	for rows.Next() {
-		var ag models.Agendamento
-		if err := rows.Scan(&ag.ID, &ag.IdosoID, &ag.Telefone, &ag.NomeIdoso, &ag.Remedios); err != nil {
-			logger.Error().Err(err).Msg("Erro ao escanear agendamento")
-			continue
-		}
-		ags = append(ags, ag)
 	}
 
 	logger.Info().Int("count", len(ags)).Msg("Agendamentos encontrados")

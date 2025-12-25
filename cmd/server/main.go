@@ -25,7 +25,8 @@ func main() {
 	logger.Info().Msg("Starting EVA-Mind Server")
 
 	// 2. Load Config
-	godotenv.Load("../../.env") // Para desenvolvimento local
+	godotenv.Load()             // Tenta carregar da raiz (se rodar de EVA-Mind)
+	godotenv.Load("../../.env") // Fallback se rodar de cmd/server
 	cfg := config.Load()
 
 	// 3. Connect to Database
