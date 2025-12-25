@@ -65,6 +65,22 @@ func handleAgendamento(ctx context.Context, ag models.Agendamento, db *database.
 		Str("telefone", ag.Telefone).
 		Logger()
 
+	// ✅ Tenta adquirir lock para evitar processamento duplicado
+	acquired, err := db.AcquireLock(ctx, ag.ID)
+	if err != nil {
+		l.Error().Err(err).Msg("Erro ao tentar adquirir lock do banco")
+		return
+	}
+	if !acquired {
+		l.Warn().Msg("Agendamento já está sendo processado por outra instância")
+		return
+	}
+	defer func() {
+		if _, err := db.ReleaseLock(ctx, ag.ID); err != nil {
+			l.Error().Err(err).Msg("Erro ao liberar lock")
+		}
+	}()
+
 	l.Info().Msg("Processando agendamento")
 
 	// ✅ Incrementa tentativas
@@ -73,7 +89,7 @@ func handleAgendamento(ctx context.Context, ag models.Agendamento, db *database.
 	}
 
 	// 1. Atualiza status para em_andamento
-	err := db.UpdateCallStatus(ctx, ag.ID, "em_andamento", 0)
+	err = db.UpdateCallStatus(ctx, ag.ID, "em_andamento", 0)
 	if err != nil {
 		l.Error().Err(err).Msg("Falha ao atualizar status para em_andamento")
 		return

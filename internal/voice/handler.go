@@ -1,6 +1,7 @@
 package voice
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 
 	"eva-mind/internal/config"
 	"eva-mind/internal/database"
+	"eva-mind/internal/telemetry"
 	"eva-mind/pkg/models"
 
 	"github.com/gorilla/websocket"
@@ -58,8 +60,10 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ✅ Busca contexto do agendamento no DB
-	ctx := r.Context()
+	// ✅ Busca contexto do agendamento no DB com timeout de 10 minutos
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+	defer cancel()
+
 	callCtx, err := h.db.GetCallContext(ctx, agID)
 	if err != nil {
 		h.logger.Error().Err(err).Int("ag_id", agID).Msg("Erro ao buscar contexto")
@@ -106,6 +110,13 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 	errors := make(chan error, 2)
 	startTime := time.Now()
 
+	// ✅ Telemetria: Registra métrica ao final
+	defer func() {
+		duration := time.Since(startTime)
+		telemetry.CallDuration.Observe(duration.Seconds())
+		l.Info().Dur("duration", duration).Msg("Sessão finalizada")
+	}()
+
 	// ✅ Goroutine: Gemini -> Twilio (com timeout)
 	go func() {
 		defer RemoveSession(agIDStr)
@@ -117,8 +128,8 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 			default:
 				resp, err := geminiClient.ReadResponse()
 				if err != nil {
-					l.Error().Err(err).Msg("Erro ao ler resposta Gemini")
-					errors <- err
+					l.Warn().Err(err).Msg("Sessão Gemini encerrada ou erro de leitura")
+					// errors <- err // Não envia aqui para deixar a outra goroutine limpar se necessário ou aguardar stop
 					return
 				}
 
@@ -128,7 +139,7 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 				}
 
 				// ✅ Converte PCM (Gemini) para mu-law (Twilio)
-				mulawData, err := convertPCMToMulaw(audioData)
+				mulawData, err := h.convertPCMToMulaw(audioData)
 				if err != nil {
 					l.Error().Err(err).Msg("Erro na conversão PCM->mulaw")
 					continue
@@ -184,14 +195,14 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 					payloadBase64, _ := media["payload"].(string)
 					mulawData, _ := base64.StdEncoding.DecodeString(payloadBase64)
 
-					pcmData, err := convertMulawToPCM(mulawData)
+					pcmData, err := h.convertMulawToPCM(mulawData)
 					if err != nil {
 						l.Error().Err(err).Msg("Erro na conversão mulaw->PCM")
 						continue
 					}
 
 					if err := geminiClient.SendAudio(pcmData); err != nil {
-						l.Error().Err(err).Msg("Erro ao enviar áudio para Gemini")
+						l.Warn().Err(err).Msg("Sessão Gemini encerrada ou erro ao enviar áudio")
 						errors <- err
 						return
 					}
@@ -208,11 +219,6 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 
 	// ✅ Aguarda finalização
 	err = <-errors
-	duration := time.Since(startTime)
-
-	l.Info().
-		Dur("duration", duration).
-		Msg("Cleaning up session")
 
 	// ✅ Atualiza status final
 	finalStatus := "concluido"
@@ -223,6 +229,9 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 	} else {
 		h.db.UpdateCallStatus(ctx, agID, finalStatus, 0)
 	}
+
+	// ✅ Registra métrica de status
+	telemetry.CallsTotal.WithLabelValues(finalStatus).Inc()
 
 	// ✅ Atualiza histórico final
 	h.db.UpdateHistorico(ctx, histID, map[string]interface{}{
@@ -278,43 +287,43 @@ func extractAudio(resp map[string]interface{}) ([]byte, bool) {
 }
 
 // ✅ CONVERSÃO COMPLETA: mu-law 8kHz -> PCM 16kHz
-func convertMulawToPCM(mulaw []byte) ([]byte, error) {
+func (h *Handler) convertMulawToPCM(mulaw []byte) ([]byte, error) {
 	if len(mulaw) == 0 {
 		return nil, fmt.Errorf("empty mulaw data")
 	}
 
 	// 1. Decodifica mu-law para PCM 16-bit bytes (ainda 8kHz)
 	pcm8kBytes := g711.DecodeUlaw(mulaw)
-	pcm8k := bytesToInt16(pcm8kBytes)
+	pcm8k := h.bytesToInt16(pcm8kBytes)
 
 	// 2. Resample de 8kHz para 16kHz (dobra as amostras)
-	pcm16k := resample8to16kHz(pcm8k)
+	pcm16k := h.resample8to16kHz(pcm8k)
 
 	// 3. Converte int16 para bytes (little-endian)
-	return int16ToBytes(pcm16k), nil
+	return h.int16ToBytes(pcm16k), nil
 }
 
 // ✅ CONVERSÃO COMPLETA: PCM 24kHz -> mu-law 8kHz
-func convertPCMToMulaw(pcm []byte) ([]byte, error) {
+func (h *Handler) convertPCMToMulaw(pcm []byte) ([]byte, error) {
 	if len(pcm) == 0 {
 		return nil, fmt.Errorf("empty pcm data")
 	}
 
 	// 1. Converte bytes para int16
-	samples := bytesToInt16(pcm)
+	samples := h.bytesToInt16(pcm)
 
 	// 2. Resample de 24kHz para 8kHz (reduz por fator de 3)
-	samples8k := resample24to8kHz(samples)
+	samples8k := h.resample24to8kHz(samples)
 
 	// 3. Codifica para mu-law
-	samples8kBytes := int16ToBytes(samples8k)
+	samples8kBytes := h.int16ToBytes(samples8k)
 	mulaw := g711.EncodeUlaw(samples8kBytes)
 
 	return mulaw, nil
 }
 
 // ✅ Resample 8kHz -> 16kHz (linear interpolation)
-func resample8to16kHz(samples []int16) []int16 {
+func (h *Handler) resample8to16kHz(samples []int16) []int16 {
 	outLen := len(samples) * 2
 	output := make([]int16, outLen)
 
@@ -333,7 +342,7 @@ func resample8to16kHz(samples []int16) []int16 {
 }
 
 // ✅ Resample 24kHz -> 8kHz (decimate by 3)
-func resample24to8kHz(samples []int16) []int16 {
+func (h *Handler) resample24to8kHz(samples []int16) []int16 {
 	outLen := len(samples) / 3
 	output := make([]int16, outLen)
 
@@ -352,7 +361,7 @@ func resample24to8kHz(samples []int16) []int16 {
 }
 
 // ✅ Converte int16 para bytes (little-endian)
-func int16ToBytes(samples []int16) []byte {
+func (h *Handler) int16ToBytes(samples []int16) []byte {
 	bytes := make([]byte, len(samples)*2)
 	for i, sample := range samples {
 		bytes[i*2] = byte(sample)
@@ -361,10 +370,10 @@ func int16ToBytes(samples []int16) []byte {
 	return bytes
 }
 
-// ✅ Converte bytes para int16 (little-endian)
-func bytesToInt16(bytes []byte) []int16 {
+// ✅ Converte bytes para int16 (little-endian) com validação
+func (h *Handler) bytesToInt16(bytes []byte) []int16 {
 	if len(bytes)%2 != 0 {
-		// Log ou tratamento de erro se necessário, mas aqui apenas truncamos
+		h.logger.Warn().Int("len", len(bytes)).Msg("PCM data has odd number of bytes, truncating last byte")
 		bytes = bytes[:len(bytes)-1]
 	}
 	samples := make([]int16, len(bytes)/2)

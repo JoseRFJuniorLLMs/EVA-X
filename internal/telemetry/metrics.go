@@ -3,7 +3,27 @@ package telemetry
 import (
 	"net/http"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+)
+
+var (
+	CallsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "eva_calls_total",
+			Help: "Total number of calls processed by EVA",
+		},
+		[]string{"status"},
+	)
+
+	CallDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "eva_call_duration_seconds",
+			Help:    "Duration of calls in seconds",
+			Buckets: prometheus.DefBuckets,
+		},
+	)
 )
 
 func StartMetricsServer(port string) *http.Server {
