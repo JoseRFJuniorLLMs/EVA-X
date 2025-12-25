@@ -31,6 +31,7 @@ type CallContext struct {
 	Medicamento         string `json:"medicamento"`
 	NivelCognitivo      string `json:"nivel_cognitivo"`
 	LimitacoesAuditivas bool   `json:"limitacoes_auditivas"`
+	TomVoz              string `json:"tom_voz"`
 	SessionHandle       string `json:"session_handle"`
 	RetryInterval       int    `json:"retry_interval"`
 	Idade               int    `json:"idade"`

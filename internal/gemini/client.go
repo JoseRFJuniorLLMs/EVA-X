@@ -62,7 +62,7 @@ func (c *Client) ReadResponse() (map[string]interface{}, error) {
 	return resp, err
 }
 
-func (c *Client) SendSetup(context string) error {
+func (c *Client) SendSetup(context string, tools []map[string]interface{}) error {
 	setup := map[string]interface{}{
 		"setup": map[string]interface{}{
 			"model": "models/" + c.cfg.ModelID,
@@ -74,9 +74,15 @@ func (c *Client) SendSetup(context string) error {
 					{"text": context},
 				},
 			},
+			"tools": tools,
 		},
 	}
 	return c.conn.WriteJSON(setup)
+}
+
+// WriteJSON envia uma mensagem arbitrária via WebSocket
+func (c *Client) WriteJSON(v interface{}) error {
+	return c.conn.WriteJSON(v)
 }
 
 // Ping verifica se a conexão ainda está ativa

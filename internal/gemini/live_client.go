@@ -11,7 +11,7 @@ func NewLiveClient(ctx context.Context, cfg *config.Config, systemPrompt string)
 	if err != nil {
 		return nil, err
 	}
-	err = client.SendSetup(systemPrompt)
+	err = client.SendSetup(systemPrompt, GetDefaultTools())
 	if err != nil {
 		client.Close() // Cleanup em caso de erro
 		return nil, err

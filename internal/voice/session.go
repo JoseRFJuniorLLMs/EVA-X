@@ -35,6 +35,17 @@ func (s *SafeSession) ReadResponse() (map[string]interface{}, error) {
 	return s.Client.ReadResponse()
 }
 
+func (s *SafeSession) SendToolResponse(resp map[string]interface{}) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
+		return fmt.Errorf("session closed")
+	}
+	// Usamos o Client diretamente pois o WriteJSON já é um wrapper no websocket.Conn
+	// mas mantemos o RLock para garantir que a conexão não feche durante o envio
+	return s.Client.WriteJSON(resp)
+}
+
 func (s *SafeSession) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()

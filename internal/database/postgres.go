@@ -95,3 +95,17 @@ func (db *DB) ReleaseLock(ctx context.Context, lockID int) (bool, error) {
 	err := db.Pool.QueryRow(ctx, query, lockID).Scan(&released)
 	return released, err
 }
+
+// GetTemplate busca um template de prompt pelo nome e versão
+func (db *DB) GetTemplate(ctx context.Context, nome, versao string) (string, error) {
+	var template string
+	query := `
+		SELECT template 
+		FROM prompt_templates 
+		WHERE nome = $1 AND (versao = $2 OR $2 = '') AND ativo = true
+		ORDER BY versao DESC
+		LIMIT 1
+	`
+	err := db.Pool.QueryRow(ctx, query, nome, versao).Scan(&template)
+	return template, err
+}

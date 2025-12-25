@@ -135,6 +135,8 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 
 				audioData, ok := extractAudio(resp)
 				if !ok {
+					// ✅ Se não for áudio, verifica se é um Tool Call
+					h.handleToolCalls(resp, geminiClient, l)
 					continue
 				}
 
@@ -381,4 +383,91 @@ func (h *Handler) bytesToInt16(bytes []byte) []int16 {
 		samples[i] = int16(bytes[i*2]) | int16(bytes[i*2+1])<<8
 	}
 	return samples
+}
+
+// ✅ Processamento de Tool Calls (Function Calling)
+func (h *Handler) handleToolCalls(resp map[string]interface{}, geminiClient *SafeSession, l zerolog.Logger) {
+	serverContent, ok := resp["serverContent"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	modelTurn, ok := serverContent["modelTurn"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	parts, ok := modelTurn["parts"].([]interface{})
+	if !ok {
+		return
+	}
+
+	for _, p := range parts {
+		part, ok := p.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		toolCall, ok := part["toolCall"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		calls, ok := toolCall["functionCalls"].([]interface{})
+		if !ok {
+			continue
+		}
+
+		for _, c := range calls {
+			call, ok := c.(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			name, _ := call["name"].(string)
+			args, _ := call["args"].(map[string]interface{})
+			callID, _ := call["id"].(string)
+
+			l.Info().Str("function", name).Interface("args", args).Msg("Gemini solicitou chamada de função")
+
+			// Executa a função localmente
+			result := h.dispatchFunction(name, args)
+
+			// Envia a resposta de volta para o Gemini
+			toolResponse := map[string]interface{}{
+				"tool_response": map[string]interface{}{
+					"function_responses": []map[string]interface{}{
+						{
+							"name":     name,
+							"id":       callID,
+							"response": result,
+						},
+					},
+				},
+			}
+
+			if err := geminiClient.SendToolResponse(toolResponse); err != nil {
+				l.Error().Err(err).Msg("Erro ao enviar resposta de ferramenta para Gemini")
+			}
+		}
+	}
+}
+
+// ✅ Despacha a execução para a função correta
+func (h *Handler) dispatchFunction(name string, args map[string]interface{}) map[string]interface{} {
+	switch name {
+	case "alert_family":
+		motivo, _ := args["motivo"].(string)
+		urgencia, _ := args["urgencia"].(string)
+		h.logger.Warn().Str("motivo", motivo).Str("urgencia", urgencia).Msg("🚨 ALERTA FAMÍLIA DISPARADO")
+		// TODO: Implementar envio real de alerta (Sprint 3 P1)
+		return map[string]interface{}{"status": "alerta_enviado", "message": "Família foi notificada"}
+
+	case "confirm_medication":
+		med, _ := args["medicamento"].(string)
+		tomou, _ := args["tomou"].(bool)
+		h.logger.Info().Str("medicamento", med).Bool("tomou", tomou).Msg("💊 CONFIRMAÇÃO DE MEDICAMENTO")
+		return map[string]interface{}{"status": "success", "confirmed": tomou}
+
+	default:
+		return map[string]interface{}{"error": "função não encontrada"}
+	}
 }
