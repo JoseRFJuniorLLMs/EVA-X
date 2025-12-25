@@ -1,0 +1,17 @@
+UPDATE agendamentos 
+SET data_hora_agendada = NOW() - INTERVAL '5 minutes',
+    status = 'agendado',
+    tentativas_realizadas = 0
+WHERE id = 1;
+
+-- 1. Mudar o telefone de TODOS os idosos para o seu número
+UPDATE idosos SET telefone = '+351966805210';
+
+-- 2. Resetar TODOS os agendamentos para disparar agora
+UPDATE agendamentos 
+SET status = 'agendado', 
+    tentativas_realizadas = 0,
+    data_hora_agendada = NOW() - INTERVAL '1 minute',
+    proxima_tentativa = NULL;
+
+	

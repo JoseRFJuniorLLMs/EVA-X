@@ -231,7 +231,7 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 				audioData, ok := extractAudio(resp)
 				if !ok {
 					// ✅ Se não for áudio, verifica se é um Tool Call ou Transcrição de Texto
-					h.handleToolCalls(ctx, callCtx.IdosoID, resp, geminiClient, l)
+					h.handleToolCalls(ctx, agID, callCtx.IdosoID, resp, geminiClient, l)
 					if txt, autor, exists := extractText(resp); exists {
 						l.Info().Str("autor", autor).Str("texto", txt).Msg("Transcrição capturada")
 						transcript.WriteString(fmt.Sprintf("%s: %s\n", autor, txt))
@@ -588,7 +588,7 @@ func (h *Handler) analyzeConversation(ctx context.Context, transcript string) (s
 }
 
 // ✅ Processamento de Tool Calls (Function Calling)
-func (h *Handler) handleToolCalls(ctx context.Context, idosoID int, resp map[string]interface{}, geminiClient *SafeSession, l zerolog.Logger) {
+func (h *Handler) handleToolCalls(ctx context.Context, agendamentoID int, idosoID int, resp map[string]interface{}, geminiClient *SafeSession, l zerolog.Logger) {
 	serverContent, ok := resp["serverContent"].(map[string]interface{})
 	if !ok {
 		return
@@ -631,7 +631,7 @@ func (h *Handler) handleToolCalls(ctx context.Context, idosoID int, resp map[str
 			l.Info().Str("function", name).Interface("args", args).Msg("Gemini solicitou chamada de função")
 
 			// Executa a função localmente
-			result := h.dispatchFunction(ctx, idosoID, name, args)
+			result := h.dispatchFunction(ctx, agendamentoID, idosoID, name, args)
 
 			// Envia a resposta de volta para o Gemini
 			toolResponse := map[string]interface{}{
@@ -654,7 +654,7 @@ func (h *Handler) handleToolCalls(ctx context.Context, idosoID int, resp map[str
 }
 
 // ✅ Despacha a execução para a função correta
-func (h *Handler) dispatchFunction(ctx context.Context, idosoID int, name string, args map[string]interface{}) map[string]interface{} {
+func (h *Handler) dispatchFunction(ctx context.Context, agendamentoID int, idosoID int, name string, args map[string]interface{}) map[string]interface{} {
 	switch name {
 	case "alert_family":
 		motivo, _ := args["motivo"].(string)
@@ -672,7 +672,15 @@ func (h *Handler) dispatchFunction(ctx context.Context, idosoID int, name string
 	case "confirm_medication":
 		med, _ := args["medicamento"].(string)
 		tomou, _ := args["tomou"].(bool)
+
 		h.logger.Info().Str("medicamento", med).Bool("tomou", tomou).Msg("💊 CONFIRMAÇÃO DE MEDICAMENTO")
+
+		// ✅ PERSISTÊNCIA NO BANCO
+		if err := h.db.ConfirmMedication(ctx, agendamentoID, tomou); err != nil {
+			h.logger.Error().Err(err).Msg("Erro ao salvar confirmação de medicamento no DB")
+			return map[string]interface{}{"status": "error", "message": "Erro ao salvar no banco"}
+		}
+
 		return map[string]interface{}{"status": "success", "confirmed": tomou}
 
 	default:

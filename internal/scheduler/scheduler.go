@@ -111,6 +111,14 @@ func handleAgendamento(ctx context.Context, ag models.Agendamento, db *database.
 		template = "Você é Eva, uma assistente carinhosa. Conversando com {{nome_idoso}} sobre {{medicamento}}."
 	}
 
+	// ✅ BUSCA CONFIGURAÇÕES DINÂMICAS DO SISTEMA
+	modelID, err := db.GetSystemSetting(ctx, "gemini.model_id")
+	if err == nil && modelID != "" {
+		l.Info().Str("model", modelID).Msg("Usando modelo configurado no DB")
+		cfg.ModelID = modelID
+	}
+	// TODO: Suporte para injection de VoiceConfig no NewLiveClient (precisa refatorar NewLiveClient para aceitar options)
+
 	// Prepara mapa de dados para o template
 	templateData := map[string]interface{}{
 		"nome_idoso":           ag.NomeIdoso,
