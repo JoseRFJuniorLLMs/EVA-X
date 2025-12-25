@@ -65,8 +65,8 @@ func handleAgendamento(ctx context.Context, ag models.Agendamento, db *database.
 		l.Error().Err(err).Msg("Erro ao incrementar tentativas")
 	}
 
-	// 1. Atualiza status
-	_, err := db.Pool.Exec(ctx, `UPDATE agendamentos SET status = 'em_andamento' WHERE id = $1`, ag.ID)
+	// 1. Atualiza status para em_andamento
+	err := db.UpdateCallStatus(ctx, ag.ID, "em_andamento", 0)
 	if err != nil {
 		l.Error().Err(err).Msg("Falha ao atualizar status para em_andamento")
 		return
@@ -77,17 +77,6 @@ func handleAgendamento(ctx context.Context, ag models.Agendamento, db *database.
 Você é Eva, uma assistente carinhosa e companheira para idosos.
 Hoje você vai conversar com %s.
 Tópico da conversa: %s.
-
-Instruções importantes:
-- Fale devagar e com clareza
-- Use frases curtas e simples
-- Pergunte como a pessoa está se sentindo
-- Escute com atenção e paciência
-- Seja carinhosa e empática
-- Se a pessoa parecer confusa, repita gentilmente
-- Termine sempre desejando um ótimo dia
-
-Lembre-se: você está falando por telefone, então seja clara e objetiva.
 `, ag.NomeIdoso, ag.Remedios)
 
 	l.Debug().Msg("Criando sessão Gemini Live")
@@ -96,7 +85,7 @@ Lembre-se: você está falando por telefone, então seja clara e objetiva.
 	geminiClient, err := gemini.NewLiveClient(ctx, cfg, systemPrompt)
 	if err != nil {
 		l.Error().Err(err).Msg("Falha ao criar Gemini Live")
-		db.Pool.Exec(ctx, `UPDATE agendamentos SET status = 'falhou' WHERE id = $1`, ag.ID)
+		db.UpdateCallStatus(ctx, ag.ID, "aguardando_retry", ag.RetryIntervalMinutes)
 		return
 	}
 
@@ -111,7 +100,7 @@ Lembre-se: você está falando por telefone, então seja clara e objetiva.
 	if err != nil {
 		l.Error().Err(err).Msg("Falha na ligação Twilio")
 		voice.RemoveSession(agIDStr)
-		db.Pool.Exec(ctx, `UPDATE agendamentos SET status = 'falhou' WHERE id = $1`, ag.ID)
+		db.UpdateCallStatus(ctx, ag.ID, "aguardando_retry", ag.RetryIntervalMinutes)
 		return
 	}
 

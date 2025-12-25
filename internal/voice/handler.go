@@ -84,7 +84,7 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 	l.Info().Msg("Twilio Media Stream connected")
 
 	// ✅ Atualiza status para em_andamento
-	if err := h.db.UpdateCallStatus(ctx, agID, "em_andamento", nil); err != nil {
+	if err := h.db.UpdateCallStatus(ctx, agID, "em_andamento", 0); err != nil {
 		l.Error().Err(err).Msg("Erro ao atualizar status")
 	}
 
@@ -188,8 +188,8 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 							callSID = sid
 							l.Info().Str("call_sid", callSID).Msg("Call SID capturado")
 
-							// Atualiza no DB
-							h.db.UpdateCallStatus(ctx, agID, "em_andamento", &callSID)
+							// Atualiza no DB (não mudamos o status, apenas garantimos que está em_andamento)
+							h.db.UpdateCallStatus(ctx, agID, "em_andamento", 0)
 
 							// Atualiza histórico com call_sid
 							h.db.UpdateHistorico(ctx, histID, map[string]interface{}{
@@ -258,11 +258,12 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 	// ✅ Atualiza status final
 	finalStatus := "concluido"
 	if err != nil {
-		finalStatus = "falhou"
+		finalStatus = "aguardando_retry"
 		l.Error().Err(err).Msg("Chamada falhou")
+		h.db.UpdateCallStatus(ctx, agID, finalStatus, callCtx.RetryInterval)
+	} else {
+		h.db.UpdateCallStatus(ctx, agID, finalStatus, 0)
 	}
-
-	h.db.UpdateCallStatus(ctx, agID, finalStatus, &callSID)
 
 	// ✅ Atualiza histórico final
 	h.db.UpdateHistorico(ctx, histID, map[string]interface{}{

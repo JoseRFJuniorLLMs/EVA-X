@@ -3,15 +3,24 @@ package models
 import "time"
 
 type Agendamento struct {
-	ID                   int       `json:"id"`
-	IdosoID              int       `json:"idoso_id"`
-	Telefone             string    `json:"telefone"`
-	NomeIdoso            string    `json:"nome_idoso"`
-	Horario              time.Time `json:"horario"`
-	Remedios             string    `json:"remedios"`
-	Status               string    `json:"status"`
-	TentativasRealizadas int       `json:"tentativas_realizadas"`
-	CallSID              *string   `json:"call_sid,omitempty"`
+	ID                   int                    `json:"id"`
+	IdosoID              int                    `json:"idoso_id"`
+	Telefone             string                 `json:"telefone"`
+	NomeIdoso            string                 `json:"nome_idoso"`
+	Horario              time.Time              `json:"horario"` // Mapping to data_hora_agendada
+	DataHoraRealizada    *time.Time             `json:"data_hora_realizada,omitempty"`
+	Remedios             string                 `json:"remedios"` // Extracted from dados_tarefa
+	Status               string                 `json:"status"`
+	MaxRetries           int                    `json:"max_retries"`
+	RetryIntervalMinutes int                    `json:"retry_interval_minutes"`
+	TentativasRealizadas int                    `json:"tentativas_realizadas"`
+	ProximaTentativa     *time.Time             `json:"proxima_tentativa,omitempty"`
+	EscalationPolicy     string                 `json:"escalation_policy"`
+	Prioridade           string                 `json:"prioridade"`
+	CallSID              *string                `json:"call_sid,omitempty"`
+	GeminiSessionHandle  string                 `json:"gemini_session_handle"`
+	SessionExpiresAt     *time.Time             `json:"session_expires_at,omitempty"`
+	DadosTarefa          map[string]interface{} `json:"dados_tarefa"`
 }
 
 type CallContext struct {
@@ -23,6 +32,9 @@ type CallContext struct {
 	NivelCognitivo      string `json:"nivel_cognitivo"`
 	LimitacoesAuditivas bool   `json:"limitacoes_auditivas"`
 	SessionHandle       string `json:"session_handle"`
+	RetryInterval       int    `json:"retry_interval"`
+	Idade               int    `json:"idade"`
+	Timezone            string `json:"timezone"`
 }
 
 // Historico representa o log de uma chamada realizada

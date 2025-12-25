@@ -16,7 +16,10 @@ func (db *DB) GetCallContext(ctx context.Context, agendamentoID int) (*models.Ca
             a.dados_tarefa,
             i.nivel_cognitivo,
             i.limitacoes_auditivas,
-            a.gemini_session_handle
+            a.gemini_session_handle,
+            a.retry_interval_minutes,
+            EXTRACT(YEAR FROM AGE(i.data_nascimento))::int as idade,
+            i.timezone
         FROM agendamentos a
         JOIN idosos i ON a.idoso_id = i.id
         WHERE a.id = $1
@@ -35,6 +38,9 @@ func (db *DB) GetCallContext(ctx context.Context, agendamentoID int) (*models.Ca
 		&callCtx.NivelCognitivo,
 		&callCtx.LimitacoesAuditivas,
 		&sessionHandle,
+		&callCtx.RetryInterval,
+		&callCtx.Idade,
+		&callCtx.Timezone,
 	)
 
 	if err != nil {
@@ -56,12 +62,7 @@ func (db *DB) GetCallContext(ctx context.Context, agendamentoID int) (*models.Ca
 }
 
 func (db *DB) GetPendingCalls(ctx context.Context) ([]models.Agendamento, error) {
-	// 🔍 DEBUG: Verificar se o Go enxerga a tabela
-	var total int
-	_ = db.Pool.QueryRow(ctx, "SELECT COUNT(*) FROM agendamentos").Scan(&total)
-	println("\n--- DEBUG DATABASE ---")
-	println("Total de registros na tabela agendamentos:", total)
-	println("----------------------\n")
+	// Limpeza dos logs de depuração agora que o problema foi identificado
 
 	query := `
         SELECT 
@@ -72,11 +73,22 @@ func (db *DB) GetPendingCalls(ctx context.Context) ([]models.Agendamento, error)
             a.data_hora_agendada,
             a.dados_tarefa,
             a.status,
-            a.tentativas_realizadas
+            a.tentativas_realizadas,
+            a.max_retries,
+            a.retry_interval_minutes,
+            a.prioridade
         FROM agendamentos a
         JOIN idosos i ON a.idoso_id = i.id
-        WHERE a.status IN ('agendado', 'pendente', 'em_andamento')
-        ORDER BY a.data_hora_agendada ASC
+        WHERE (a.data_hora_agendada <= (NOW() + INTERVAL '1 minute') OR (a.proxima_tentativa IS NOT NULL AND a.proxima_tentativa <= NOW()))
+          AND a.status IN ('agendado', 'pendente', 'aguardando_retry')
+          AND a.tentativas_realizadas < a.max_retries
+        ORDER BY 
+            CASE a.prioridade 
+                WHEN 'alta' THEN 1 
+                WHEN 'normal' THEN 2 
+                WHEN 'baixa' THEN 3 
+            END ASC, 
+            a.data_hora_agendada ASC
         LIMIT 50
     `
 
@@ -89,28 +101,28 @@ func (db *DB) GetPendingCalls(ctx context.Context) ([]models.Agendamento, error)
 	var agendamentos []models.Agendamento
 	for rows.Next() {
 		var ag models.Agendamento
-		var dadosTarefa map[string]interface{}
-
 		err := rows.Scan(
 			&ag.ID,
 			&ag.IdosoID,
 			&ag.Telefone,
 			&ag.NomeIdoso,
 			&ag.Horario,
-			&dadosTarefa,
+			&ag.DadosTarefa,
 			&ag.Status,
 			&ag.TentativasRealizadas,
+			&ag.MaxRetries,
+			&ag.RetryIntervalMinutes,
+			&ag.Prioridade,
 		)
 		if err != nil {
-			// ✅ Log de erro crítico para depuração
 			println("Erro ao ler linha do banco:", err.Error())
 			continue
 		}
 
-		// Extrai medicamento
-		if med, ok := dadosTarefa["medicamento"].(string); ok {
+		// Extrai medicamento do JSON
+		if med, ok := ag.DadosTarefa["medicamento"].(string); ok {
 			ag.Remedios = med
-		} else if med, ok := dadosTarefa["remedios"].(string); ok {
+		} else if med, ok := ag.DadosTarefa["remedios"].(string); ok {
 			ag.Remedios = med
 		}
 
@@ -120,19 +132,39 @@ func (db *DB) GetPendingCalls(ctx context.Context) ([]models.Agendamento, error)
 	return agendamentos, nil
 }
 
-func (db *DB) UpdateCallStatus(ctx context.Context, agendamentoID int, status string, callSID *string) error {
-	query := `
-        UPDATE agendamentos
-        SET status = $1,
-            gemini_session_handle = COALESCE($2, gemini_session_handle),
-            updated_at = NOW()
-        WHERE id = $3
-    `
-	// Note: eva-v7 uses twilio_call_sid in historico, but let's see if agendamentos has it.
-	// In eva-v7 agendamentos, there is no call_sid column!
-	// We'll update only status and handle here.
+func (db *DB) UpdateCallStatus(ctx context.Context, agendamentoID int, status string, retryInMinutes int) error {
+	var query string
+	var args []interface{}
 
-	_, err := db.Pool.Exec(ctx, query, status, nil, agendamentoID)
+	if status == "concluido" {
+		query = `
+            UPDATE agendamentos
+            SET status = $1,
+                data_hora_realizada = NOW(),
+                atualizado_em = NOW()
+            WHERE id = $2
+        `
+		args = []interface{}{status, agendamentoID}
+	} else if status == "aguardando_retry" {
+		query = `
+            UPDATE agendamentos
+            SET status = $1,
+                proxima_tentativa = NOW() + ($2 || ' minutes')::interval,
+                atualizado_em = NOW()
+            WHERE id = $3
+        `
+		args = []interface{}{status, retryInMinutes, agendamentoID}
+	} else {
+		query = `
+            UPDATE agendamentos
+            SET status = $1,
+                atualizado_em = NOW()
+            WHERE id = $2
+        `
+		args = []interface{}{status, agendamentoID}
+	}
+
+	_, err := db.Pool.Exec(ctx, query, args...)
 	return err
 }
 
@@ -141,7 +173,8 @@ func (db *DB) SaveSessionHandle(ctx context.Context, agendamentoID int, handle s
         UPDATE agendamentos
         SET gemini_session_handle = $1,
             ultima_interacao_estado = $2,
-            updated_at = NOW()
+            session_expires_at = NOW() + INTERVAL '2 hours',
+            atualizado_em = NOW()
         WHERE id = $3
     `
 
@@ -153,7 +186,7 @@ func (db *DB) IncrementAttempts(ctx context.Context, agendamentoID int) error {
 	query := `
         UPDATE agendamentos
         SET tentativas_realizadas = tentativas_realizadas + 1,
-            updated_at = NOW()
+            atualizado_em = NOW()
         WHERE id = $1
     `
 	_, err := db.Pool.Exec(ctx, query, agendamentoID)
