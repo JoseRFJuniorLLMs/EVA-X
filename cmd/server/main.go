@@ -8,66 +8,94 @@ import (
 	"syscall"
 	"time"
 
-	"eva-mind/api"
 	"eva-mind/internal/config"
 	"eva-mind/internal/database"
+	"eva-mind/internal/scheduler"
+	"eva-mind/internal/twilio"
+	"eva-mind/internal/voice"
 
+	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"github.com/rs/zerolog"
 )
 
 func main() {
-	// Carrega .env
-	godotenv.Load()
+	// 1. Setup Logger
+	logger := zerolog.New(os.Stdout).With().Timestamp().Logger()
+	logger.Info().Msg("Starting EVA-Mind Server")
 
-	// Carrega configuração
+	// 2. Load Config
+	godotenv.Load("../../.env") // Para desenvolvimento local
 	cfg := config.Load()
 
-	// Setup logger (simples para agora)
-	logger := zerolog.New(os.Stdout).With().Timestamp().Logger()
-	logger.Info().Msg("🚀 Starting EVA-Mind...")
-
-	// Conecta ao banco de dados
+	// 3. Connect to Database
 	db, err := database.Connect(cfg.DatabaseURL)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("Failed to connect to database")
 	}
 	defer db.Close()
-	logger.Info().Msg("✓ Database connected")
 
-	// Setup HTTP router
-	router := api.NewRouter(db, cfg, logger)
+	// 4. Start Scheduler in background
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	// HTTP Server
+	logger.Info().Msg("Starting scheduler")
+	go scheduler.Start(ctx, db, cfg, logger)
+
+	// 5. Setup Router
+	r := SetupRouter(db, cfg, logger)
+
+	// 6. Start Server
 	server := &http.Server{
-		Addr:         ":" + cfg.Port,
-		Handler:      router,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Addr:    ":" + cfg.Port,
+		Handler: r,
 	}
 
-	// Start server em goroutine
 	go func() {
-		logger.Info().Msgf("🎙️  EVA-Mind listening on :%s", cfg.Port)
+		logger.Info().Msgf("HTTP Server running on port %s", cfg.Port)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Fatal().Err(err).Msg("Server failed")
 		}
 	}()
 
-	// Graceful shutdown
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	// Wait for termination
+	<-ctx.Done()
+	logger.Info().Msg("Shutting down server...")
 
-	logger.Info().Msg("🛑 Shutting down gracefully...")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := server.Shutdown(ctx); err != nil {
-		logger.Error().Err(err).Msg("Server forced to shutdown")
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		logger.Fatal().Err(err).Msg("Server forced to shutdown")
 	}
 
-	logger.Info().Msg("✓ Server stopped")
+	logger.Info().Msg("Server exited")
+}
+
+func SetupRouter(db *database.DB, cfg *config.Config, logger zerolog.Logger) *gin.Engine {
+	r := gin.Default()
+
+	voiceHandler := voice.NewHandler(db, cfg, logger)
+	twilioHandler := twilio.NewTwimlHandler(cfg)
+
+	// Health check
+	r.GET("/health", func(c *gin.Context) {
+		if err := db.Health(); err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "error", "db": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+
+	// Twilio TwiML endpoint for incoming/outgoing calls
+	r.POST("/calls/twiml", func(c *gin.Context) {
+		twilioHandler.TwimlHandler(c.Writer, c.Request)
+	})
+
+	// Media Stream WebSocket
+	r.GET("/calls/stream/:agendamento_id", func(c *gin.Context) {
+		voiceHandler.HandleMediaStream(c.Writer, c.Request)
+	})
+
+	return r
 }
