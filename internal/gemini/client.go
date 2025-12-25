@@ -41,13 +41,14 @@ func (c *Client) Close() error {
 	return nil
 }
 
+// SendAudio envia áudio PCM 16kHz para o Gemini
 func (c *Client) SendAudio(data []byte) error {
 	msg := map[string]interface{}{
 		"realtime_input": map[string]interface{}{
 			"media_chunks": []map[string]interface{}{
 				{
 					"data":      data,
-					"mime_type": "audio/pcm;rate=8000", // Twilio is 8k mu-law, but if converted to PCM
+					"mime_type": "audio/pcm;rate=16000", // ✅ CORRIGIDO!
 				},
 			},
 		},
@@ -76,4 +77,12 @@ func (c *Client) SendSetup(context string) error {
 		},
 	}
 	return c.conn.WriteJSON(setup)
+}
+
+// Ping verifica se a conexão ainda está ativa
+func (c *Client) Ping() error {
+	if c.conn == nil {
+		return fmt.Errorf("connection is nil")
+	}
+	return c.conn.WriteMessage(websocket.PingMessage, nil)
 }

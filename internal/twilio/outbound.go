@@ -1,0 +1,28 @@
+package twilio
+
+import (
+	"fmt"
+
+	"eva-mind/internal/config"
+
+	"github.com/twilio/twilio-go"
+	twilioApi "github.com/twilio/twilio-go/rest/api/v2010"
+)
+
+func MakeOutboundCall(cfg *config.Config, toPhone string, agendamentoID int64) error {
+	client := twilio.NewRestClientWithParams(twilio.ClientParams{
+		Username: cfg.TwilioAccountSID,
+		Password: cfg.TwilioAuthToken,
+	})
+
+	twimlURL := fmt.Sprintf("https://%s/calls/twiml?agendamento_id=%d", cfg.ServiceDomain, agendamentoID)
+
+	params := &twilioApi.CreateCallParams{
+		To:   &toPhone,
+		From: &cfg.TwilioPhoneNumber,
+		Url:  &twimlURL, // Twilio vai chamar esse endpoint ao conectar
+	}
+
+	_, err := client.Api.CreateCall(params)
+	return err
+}

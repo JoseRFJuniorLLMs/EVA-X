@@ -36,8 +36,9 @@ func (db *DB) UpdateHistorico(ctx context.Context, id int, updates map[string]in
         SET fim = COALESCE($1, fim),
             status = COALESCE($2, status),
             qualidade_audio = COALESCE($3, qualidade_audio),
-            interrupcoes_detectadas = COALESCE($4, interrupcoes_detectadas)
-        WHERE id = $5
+            interrupcoes_detectadas = COALESCE($4, interrupcoes_detectadas),
+            call_sid = COALESCE($5, call_sid)
+        WHERE id = $6
     `
 
 	_, err := db.Pool.Exec(
@@ -47,6 +48,7 @@ func (db *DB) UpdateHistorico(ctx context.Context, id int, updates map[string]in
 		updates["status"],
 		updates["qualidade_audio"],
 		updates["interrupcoes_detectadas"],
+		updates["call_sid"],
 		id,
 	)
 
