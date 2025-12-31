@@ -32,7 +32,7 @@ type Config struct {
 func Load() *Config {
     return &Config{
         // Server
-        Port:        getEnv("PORT", "8081"),
+        Port:        getEnv("PORT", "8080"),
         Environment: getEnv("ENVIRONMENT", "development"),
         MetricsPort: getEnv("METRICS_PORT", "9090"),
 

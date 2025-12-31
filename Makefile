@@ -31,7 +31,7 @@ docker-build:
 
 docker-run:
 	@echo "🐳 Running Docker container..."
-	docker run -p 8081:8081 -p 9090:9090 --env-file .env eva-mind:latest
+	docker run -p 8080:8080 -p 9090:9090 --env-file .env eva-mind:latest
 
 clean:
 	@echo "🧹 Cleaning..."

@@ -1,0 +1,20 @@
+# Server
+PORT=8080
+ENVIRONMENT=development
+METRICS_PORT=9090
+
+# Database
+DATABASE_URL=postgres://postgres:Debian23%40@34.39.249.108:5432/eva-db?sslmode=disable
+# Twilio
+SERVICE_DOMAIN=resurgent-jamee-unsaleably.ngrok-free.dev
+TWILIO_ACCOUNT_SID=AC4ec3781eec6990a67014c74a9580a705
+TWILIO_AUTH_TOKEN=0e1edb3a1242d17901c62d5119aa51f0
+TWILIO_PHONE_NUMBER=+351966805210
+
+# Google/Gemini
+GOOGLE_API_KEY=AIzaSyCL5RwY9F5QjzOiLNiOXAN4JjelhrB3S1U
+MODEL_ID=gemini-2.5-flash-native-audio-preview-12-2025
+
+# Scheduler
+SCHEDULER_INTERVAL=1
+MAX_RETRIES=3
