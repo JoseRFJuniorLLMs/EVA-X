@@ -46,6 +46,13 @@ import (
 	// 🧠 Krylov Memory Compression
 	krylovmem "eva-mind/internal/memory"
 
+	// 🧠 Cognitive Engines v2
+	"eva-mind/internal/memory/consolidation"
+	"eva-mind/internal/cortex/spectral"
+	"eva-mind/internal/cortex/attention"
+	"eva-mind/internal/cortex/consciousness"
+	"eva-mind/internal/cortex/learning"
+
 	// 🐝 Swarm Architecture
 	"eva-mind/internal/swarm"
 	swarmClinical "eva-mind/internal/swarm/clinical"
@@ -103,7 +110,19 @@ type SignalingServer struct {
 	brain *brain.Service
 
 	// 🐝 Swarm Orchestrator (substitui switch/case de tools)
-	orchestrator *swarm.Orchestrator
+	orchestrator  *swarm.Orchestrator
+	cellularSwarm *swarm.CellularSwarm
+
+	// 🧠 Cognitive Engines v2 (Neuroscience-inspired)
+	hierarchicalKrylov *krylovmem.HierarchicalKrylov
+	adaptiveKrylov     *krylovmem.AdaptiveKrylov
+	remConsolidator    *consolidation.REMConsolidator
+	synapticPruning    *consolidation.SynapticPruning
+	synaptogenesis     *spectral.SynaptogenesisEngine
+	waveletAttention   *attention.WaveletAttention
+	globalWorkspace    *consciousness.GlobalWorkspace
+	metaLearner        *learning.MetaLearner
+	dynamicEnneagram   *personality.DynamicEnneagram
 
 	// 🔒 Server-level context para controle de goroutines
 	ctx    context.Context
@@ -338,8 +357,34 @@ func NewSignalingServer(
 		log.Printf("❌ Swarm initialization error: %v", err)
 	}
 
+	// 🧠 Cognitive Engines v2 (Neuroscience-inspired)
+	server.hierarchicalKrylov = krylovmem.NewHierarchicalKrylov(1536)
+	server.adaptiveKrylov = krylovmem.NewAdaptiveKrylov(1536)
+	server.remConsolidator = consolidation.NewREMConsolidator(neo4jClient, krylovManager)
+	server.synapticPruning = consolidation.NewSynapticPruning(neo4jClient)
+	server.synaptogenesis = spectral.NewSynaptogenesisEngine(neo4jClient, 3.0)
+	server.waveletAttention = attention.NewWaveletAttention()
+	server.globalWorkspace = consciousness.NewGlobalWorkspace()
+	server.metaLearner = learning.NewMetaLearner()
+	server.dynamicEnneagram = personality.NewDynamicEnneagram()
+	server.cellularSwarm = swarm.NewCellularSwarm(server.orchestrator)
+
+	log.Println("🧠 Hierarchical Krylov initialized (4 levels: 16D/64D/256D/1024D)")
+	log.Println("🧠 Adaptive Neuroplasticity initialized (32D ↔ 256D)")
+	log.Println("🌙 REM Sleep Consolidation initialized")
+	log.Println("✂️  Synaptic Pruning initialized")
+	log.Println("🌱 Synaptogenesis Engine initialized")
+	log.Println("👁️  Wavelet Attention initialized (4 scales)")
+	log.Println("💡 Global Workspace initialized")
+	log.Println("🎓 Meta-Learner initialized")
+	log.Println("🎭 Dynamic Enneagram initialized")
+	log.Println("🐝 Cellular Swarm initialized")
+
 	// 🧠 Iniciar Scheduler de Pattern Mining (Gap 1) com context do servidor
 	go server.startPatternMiningScheduler(serverCtx)
+
+	// 🌙 Iniciar schedulers noturnos (REM + Pruning + Synaptogenesis)
+	go server.startNightlyConsolidation(serverCtx)
 
 	return server
 }
@@ -438,6 +483,83 @@ func (s *SignalingServer) runPatternMining() {
 		}
 	}
 
+}
+
+// startNightlyConsolidation executa REM + Pruning + Synaptogenesis a cada 6h
+func (s *SignalingServer) startNightlyConsolidation(ctx context.Context) {
+	// Aguardar inicializacao do sistema
+	time.Sleep(2 * time.Minute)
+
+	log.Println("🌙 [NIGHTLY] Consolidation scheduler started (interval: 6h)")
+	ticker := time.NewTicker(6 * time.Hour)
+	defer ticker.Stop()
+
+	// Executar imediatamente na startup
+	go s.runNightlyConsolidation()
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("🛑 [NIGHTLY] Consolidation scheduler stopped")
+			return
+		case <-ticker.C:
+			s.runNightlyConsolidation()
+		}
+	}
+}
+
+func (s *SignalingServer) runNightlyConsolidation() {
+	if s.neo4jClient == nil || s.db == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	// Buscar pacientes ativos
+	query := `SELECT DISTINCT idoso_id FROM conversas WHERE timestamp > NOW() - INTERVAL '7 days'`
+	rows, err := s.db.GetConnection().QueryContext(ctx, query)
+	if err != nil {
+		log.Printf("⚠️ [NIGHTLY] Query error: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var patientID int64
+		if err := rows.Scan(&patientID); err != nil {
+			continue
+		}
+
+		// 1. REM Sleep Consolidation
+		if s.remConsolidator != nil {
+			if result, err := s.remConsolidator.ConsolidateNightly(ctx, patientID); err != nil {
+				log.Printf("⚠️ [REM] Patient %d error: %v", patientID, err)
+			} else if result.SemanticNodesCreated > 0 {
+				log.Printf("🌙 [REM] Patient %d: %d semantic nodes created", patientID, result.SemanticNodesCreated)
+			}
+		}
+
+		// 2. Synaptic Pruning
+		if s.synapticPruning != nil {
+			if result, err := s.synapticPruning.PruneNightly(ctx, patientID); err != nil {
+				log.Printf("⚠️ [PRUNING] Patient %d error: %v", patientID, err)
+			} else if result.PrunedEdges > 0 {
+				log.Printf("✂️ [PRUNING] Patient %d: %d edges pruned", patientID, result.PrunedEdges)
+			}
+		}
+
+		// 3. Synaptogenesis
+		if s.synaptogenesis != nil {
+			if result, err := s.synaptogenesis.GrowConnections(ctx, patientID); err != nil {
+				log.Printf("⚠️ [SYNAPTOGENESIS] Patient %d error: %v", patientID, err)
+			} else if result.NewEdgesCreated > 0 {
+				log.Printf("🌱 [SYNAPTOGENESIS] Patient %d: %d new edges", patientID, result.NewEdgesCreated)
+			}
+		}
+	}
+
+	log.Println("🌙 [NIGHTLY] Consolidation cycle complete")
 }
 
 func main() {
@@ -2067,11 +2189,21 @@ func dashboardHandler(w http.ResponseWriter, r *http.Request) {
 			"legacy_active":  legacyEnabled,
 		},
 		"engines": map[string]interface{}{
-			"krylov":   "1536D → 64D (97% recall)",
-			"spectral": "Graph Laplacian + k-means",
-			"hmc":      "88% acceptance rate",
-			"fzpn":     "L1 Neo4j + L2 Redis + L3 Qdrant",
-			"transnar": "Desire inference active",
+			"krylov":               "1536D → 64D (97% recall)",
+			"hierarchical_krylov":  "4 levels: 16D/64D/256D/1024D",
+			"adaptive_krylov":      "32D ↔ 256D neuroplasticity",
+			"spectral":             "Graph Laplacian + k-means",
+			"synaptogenesis":       "Fractal auto-organization",
+			"rem_consolidation":    "Nightly episodic → semantic",
+			"synaptic_pruning":     "20% weak edges/cycle",
+			"wavelet_attention":    "4-scale temporal attention",
+			"global_workspace":     "Baars consciousness theory",
+			"meta_learner":         "Adaptive strategy selection",
+			"dynamic_enneagram":    "Probabilistic personality",
+			"cellular_swarm":       "Agent division/retraction",
+			"hmc":                  "88% acceptance rate",
+			"fzpn":                 "L1 Neo4j + L2 Redis + L3 Qdrant",
+			"transnar":             "Desire inference active",
 		},
 		"timestamp": time.Now().Format(time.RFC3339),
 	}
