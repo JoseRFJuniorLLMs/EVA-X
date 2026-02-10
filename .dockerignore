@@ -1,0 +1,40 @@
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Documentation (not needed in container)
+docs/
+*.md
+!requirements.txt
+
+# Tests
+*_test.go
+testdata/
+
+# Build artifacts
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Dev files
+.env
+.env.local
+.env.development
+
+# Monitoring (separate deployment)
+deployments/grafana/
+deployments/prometheus/
+deployments/docker-compose.monitoring.yml

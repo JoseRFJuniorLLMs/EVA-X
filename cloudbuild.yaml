@@ -1,0 +1,66 @@
+# ============================================================
+# EVA-Mind - Cloud Build for Google Cloud Run
+# ============================================================
+# Trigger: git push to main branch
+# Deploy: Cloud Run service "eva-mind"
+# Region: southamerica-east1 (Sao Paulo)
+# ============================================================
+
+steps:
+  # Step 1: Build Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '--build-arg=VERSION=${TAG_NAME:-latest}'
+      - '--build-arg=GIT_COMMIT=${SHORT_SHA}'
+      - '--build-arg=BUILD_TIME=${_BUILD_TIME}'
+      - '-t'
+      - 'gcr.io/${PROJECT_ID}/eva-mind:${SHORT_SHA}'
+      - '-t'
+      - 'gcr.io/${PROJECT_ID}/eva-mind:latest'
+      - '.'
+
+  # Step 2: Push image to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'gcr.io/${PROJECT_ID}/eva-mind:${SHORT_SHA}'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'gcr.io/${PROJECT_ID}/eva-mind:latest'
+
+  # Step 3: Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - 'eva-mind'
+      - '--image=gcr.io/${PROJECT_ID}/eva-mind:${SHORT_SHA}'
+      - '--region=southamerica-east1'
+      - '--platform=managed'
+      - '--port=8091'
+      - '--memory=1Gi'
+      - '--cpu=2'
+      - '--min-instances=1'
+      - '--max-instances=10'
+      - '--timeout=3600'
+      - '--concurrency=80'
+      - '--allow-unauthenticated'
+      - '--set-env-vars=ENVIRONMENT=production'
+      - '--session-affinity'
+
+substitutions:
+  _BUILD_TIME: '2026-02-10T00:00:00Z'
+
+images:
+  - 'gcr.io/${PROJECT_ID}/eva-mind:${SHORT_SHA}'
+  - 'gcr.io/${PROJECT_ID}/eva-mind:latest'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: 'E2_HIGHCPU_8'
+
+timeout: '1200s'
