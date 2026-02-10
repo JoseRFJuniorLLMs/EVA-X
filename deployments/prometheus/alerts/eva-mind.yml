@@ -1,0 +1,99 @@
+groups:
+  - name: eva-mind-critical
+    interval: 30s
+    rules:
+      - alert: SuicideRiskDetected
+        expr: increase(eva_suicide_risk_detected_total[5m]) > 0
+        for: 0s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Suicide risk detected"
+          description: "EVA-Mind detected a suicide risk indicator in the last 5 minutes"
+
+      - alert: CSSRSCriticalRisk
+        expr: increase(eva_cssrs_assessments_total{risk_level="critical"}[5m]) > 0
+        for: 0s
+        labels:
+          severity: critical
+        annotations:
+          summary: "C-SSRS Critical Risk Assessment"
+          description: "A C-SSRS assessment resulted in CRITICAL risk level"
+
+      - alert: CSSRSHighRisk
+        expr: increase(eva_cssrs_assessments_total{risk_level="high"}[5m]) > 0
+        for: 0s
+        labels:
+          severity: high
+        annotations:
+          summary: "C-SSRS High Risk Assessment"
+          description: "A C-SSRS assessment resulted in HIGH risk level"
+
+      - alert: ActiveAlertsBacklog
+        expr: eva_active_alerts > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Alert backlog accumulating"
+          description: "There are {{ $value }} unacknowledged alerts for more than 5 minutes"
+
+      - alert: AlertDeliveryFailure
+        expr: rate(eva_alerts_sent_total{channel!=""}[5m]) == 0 and rate(eva_alert_escalations_total{reason="failure"}[5m]) > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Alert delivery failing"
+          description: "Alert delivery is failing on all channels"
+
+  - name: eva-mind-performance
+    interval: 60s
+    rules:
+      - alert: HighLLMLatency
+        expr: histogram_quantile(0.95, rate(eva_llm_latency_seconds_bucket[5m])) > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High LLM latency"
+          description: "LLM response latency p95 is above 30 seconds"
+
+      - alert: HighErrorRate
+        expr: sum(rate(eva_errors_total[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High error rate"
+          description: "Error rate is above 0.1 per second"
+
+      - alert: NoActiveConnections
+        expr: eva_active_websocket_connections == 0
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "No active connections"
+          description: "No WebSocket connections for 10 minutes"
+
+  - name: eva-mind-clinical
+    interval: 60s
+    rules:
+      - alert: HighSeverePHQ9Rate
+        expr: rate(eva_phq9_assessments_total{severity="severe"}[1h]) > 0.1
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High rate of severe PHQ-9 assessments"
+          description: "There is an elevated rate of severe depression assessments"
+
+      - alert: HighSevereGAD7Rate
+        expr: rate(eva_gad7_assessments_total{severity="severe"}[1h]) > 0.1
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High rate of severe GAD-7 assessments"
+          description: "There is an elevated rate of severe anxiety assessments"

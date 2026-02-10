@@ -1,0 +1,13 @@
+apiVersion: 1
+
+providers:
+  - name: "EVA-Mind Dashboards"
+    orgId: 1
+    folder: "EVA-Mind"
+    folderUid: "eva-mind"
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
