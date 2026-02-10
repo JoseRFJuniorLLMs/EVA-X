@@ -29,7 +29,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -X main.Version=${VERSION} \
     -X main.GitCommit=${GIT_COMMIT} \
     -X main.BuildTime=${BUILD_TIME}" \
-    -o /eva-mind ./main.go
+    -o /eva-mind .
 
 # Stage 2: Minimal runtime
 FROM alpine:3.20
