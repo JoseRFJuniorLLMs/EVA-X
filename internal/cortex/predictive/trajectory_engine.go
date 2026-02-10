@@ -10,10 +10,12 @@ import (
 	"time"
 )
 
-// TrajectoryEngine simula trajetórias de saúde mental usando Monte Carlo
+// TrajectoryEngine simula trajetorias de saude mental usando HMC + Monte Carlo
 type TrajectoryEngine struct {
 	db           *sql.DB
 	modelVersion string
+	hmcSampler   *HMCSampler // Hamiltonian Monte Carlo sampler
+	useHMC       bool        // Flag para alternar entre HMC e random walk classico
 }
 
 // PatientState representa estado atual do paciente
@@ -103,11 +105,23 @@ type RecommendedIntervention struct {
 	Status               string
 }
 
-// NewTrajectoryEngine cria novo engine de trajetória
+// NewTrajectoryEngine cria novo engine de trajetoria com HMC habilitado
 func NewTrajectoryEngine(db *sql.DB) *TrajectoryEngine {
 	return &TrajectoryEngine{
 		db:           db,
-		modelVersion: "v1.0.0",
+		modelVersion: "v2.0.0-hmc",
+		hmcSampler:   NewHMCSampler(),
+		useHMC:       true,
+	}
+}
+
+// SetUseHMC alterna entre HMC (true) e random walk classico (false)
+func (te *TrajectoryEngine) SetUseHMC(use bool) {
+	te.useHMC = use
+	if use {
+		te.modelVersion = "v2.0.0-hmc"
+	} else {
+		te.modelVersion = "v1.0.0-random-walk"
 	}
 }
 
@@ -327,60 +341,70 @@ func (te *TrajectoryEngine) GenerateRecommendations(simulationID string) ([]Reco
 	return recommendations, nil
 }
 
-// runMonteCarloSimulations executa N simulações
+// runMonteCarloSimulations executa N simulacoes usando HMC ou random walk
 func (te *TrajectoryEngine) runMonteCarloSimulations(state *PatientState, daysAhead int, n int) [][]DailyState {
 	results := make([][]DailyState, n)
 
 	for sim := 0; sim < n; sim++ {
-		trajectory := make([]DailyState, daysAhead)
-		currentPHQ9 := state.PHQ9Score
-		currentAdherence := state.MedicationAdherence
-		currentSleep := state.SleepHours
-
-		for day := 0; day < daysAhead; day++ {
-			// Modelo de transição (simplificado - usar Bayesian Network real)
-
-			// PHQ9 tende a aumentar se adesão baixa
-			phq9Delta := rand.NormFloat64() * 0.5 // Ruído diário
-			if currentAdherence < 0.5 {
-				phq9Delta += 0.2 // Drift positivo se má adesão
+		if te.useHMC && te.hmcSampler != nil {
+			// HMC: usa gradientes de energia para explorar estados
+			initial := &HMCState{
+				PHQ9:      state.PHQ9Score,
+				Adherence: state.MedicationAdherence,
+				Sleep:     state.SleepHours,
 			}
-			if currentSleep < 5 {
-				phq9Delta += 0.15 // Sono ruim piora depressão
-			}
-			currentPHQ9 = math.Max(0, math.Min(27, currentPHQ9+phq9Delta))
-
-			// Adesão tem inércia mas pode decair
-			adherenceDelta := rand.NormFloat64() * 0.02
-			if currentPHQ9 > 15 {
-				adherenceDelta -= 0.01 // Depressão alta reduz adesão
-			}
-			currentAdherence = math.Max(0, math.Min(1, currentAdherence+adherenceDelta))
-
-			// Sono varia
-			sleepDelta := rand.NormFloat64() * 0.3
-			if currentPHQ9 > 15 {
-				sleepDelta -= 0.2 // Depressão afeta sono
-			}
-			currentSleep = math.Max(2, math.Min(10, currentSleep+sleepDelta))
-
-			// Determinar se há crise
-			crisisProbToday := te.calculateDailyCrisisProbability(currentPHQ9, currentAdherence, currentSleep)
-			crisis := rand.Float64() < crisisProbToday
-
-			trajectory[day] = DailyState{
-				Day:       day + 1,
-				PHQ9:      currentPHQ9,
-				Adherence: currentAdherence,
-				Sleep:     currentSleep,
-				Crisis:    crisis,
-			}
+			results[sim] = te.hmcSampler.RunHMCTrajectory(initial, daysAhead)
+		} else {
+			// Fallback: random walk classico (v1.0)
+			results[sim] = te.runRandomWalkTrajectory(state, daysAhead)
 		}
-
-		results[sim] = trajectory
 	}
 
 	return results
+}
+
+// runRandomWalkTrajectory implementacao original com random walk (fallback)
+func (te *TrajectoryEngine) runRandomWalkTrajectory(state *PatientState, daysAhead int) []DailyState {
+	trajectory := make([]DailyState, daysAhead)
+	currentPHQ9 := state.PHQ9Score
+	currentAdherence := state.MedicationAdherence
+	currentSleep := state.SleepHours
+
+	for day := 0; day < daysAhead; day++ {
+		phq9Delta := rand.NormFloat64() * 0.5
+		if currentAdherence < 0.5 {
+			phq9Delta += 0.2
+		}
+		if currentSleep < 5 {
+			phq9Delta += 0.15
+		}
+		currentPHQ9 = math.Max(0, math.Min(27, currentPHQ9+phq9Delta))
+
+		adherenceDelta := rand.NormFloat64() * 0.02
+		if currentPHQ9 > 15 {
+			adherenceDelta -= 0.01
+		}
+		currentAdherence = math.Max(0, math.Min(1, currentAdherence+adherenceDelta))
+
+		sleepDelta := rand.NormFloat64() * 0.3
+		if currentPHQ9 > 15 {
+			sleepDelta -= 0.2
+		}
+		currentSleep = math.Max(2, math.Min(10, currentSleep+sleepDelta))
+
+		crisisProbToday := te.calculateDailyCrisisProbability(currentPHQ9, currentAdherence, currentSleep)
+		crisis := rand.Float64() < crisisProbToday
+
+		trajectory[day] = DailyState{
+			Day:       day + 1,
+			PHQ9:      currentPHQ9,
+			Adherence: currentAdherence,
+			Sleep:     currentSleep,
+			Crisis:    crisis,
+		}
+	}
+
+	return trajectory
 }
 
 // calculateDailyCrisisProbability calcula probabilidade de crise em um dia

@@ -43,6 +43,9 @@ import (
 	"eva-mind/internal/security"
 	"eva-mind/pkg/types"
 
+	// 🧠 Krylov Memory Compression
+	krylovmem "eva-mind/internal/memory"
+
 	// 🐝 Swarm Architecture
 	"eva-mind/internal/swarm"
 	swarmClinical "eva-mind/internal/swarm/clinical"
@@ -304,6 +307,10 @@ func NewSignalingServer(
 		embeddingService,
 	)
 
+	// 🧠 Initialize Krylov Memory Compression (1536D -> 64D)
+	krylovManager := krylovmem.NewKrylovMemoryManager(1536, 64, 10000)
+	log.Println("🧠 Krylov Memory Manager initialized (1536D -> 64D, window=10K)")
+
 	// 🐝 Initialize Swarm Orchestrator
 	deps := &swarm.Dependencies{
 		DB:           db,
@@ -313,6 +320,7 @@ func NewSignalingServer(
 		Push:         pushService,
 		Config:       cfg,
 		GoogleAPIKey: cfg.GoogleAPIKey,
+		Krylov:       krylovManager,
 	}
 	server.orchestrator = swarm.NewOrchestrator(deps)
 
