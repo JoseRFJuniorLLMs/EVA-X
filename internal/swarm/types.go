@@ -105,13 +105,14 @@ type AgentMetrics struct {
 
 // Dependencies agrupa dependências compartilhadas entre swarms
 type Dependencies struct {
-	DB          interface{} // *database.DB
-	Neo4j       interface{} // *graph.Neo4jClient
-	Qdrant      interface{} // *vector.QdrantClient
-	Redis       interface{} // *cache.RedisClient
-	Push        interface{} // *push.FirebaseService
-	Config      interface{} // *config.Config
+	DB           interface{} // *database.DB
+	Neo4j        interface{} // *graph.Neo4jClient
+	Qdrant       interface{} // *vector.QdrantClient
+	Redis        interface{} // *cache.RedisClient
+	Push         interface{} // *push.FirebaseService
+	Config       interface{} // *config.Config
 	GoogleAPIKey string
+	Krylov       interface{} // *memory.KrylovMemoryManager
 }
 
 // SwarmAgent é a interface que todo swarm agent deve implementar

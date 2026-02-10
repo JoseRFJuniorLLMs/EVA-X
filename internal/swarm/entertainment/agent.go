@@ -2,7 +2,6 @@ package entertainment
 
 import (
 	"context"
-	"fmt"
 	"log"
 
 	"eva-mind/internal/swarm"

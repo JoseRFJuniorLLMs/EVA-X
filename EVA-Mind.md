@@ -468,6 +468,59 @@ Monitora 3 riscos éticos:
 
 ---
 
+## Krylov Memory Engine
+
+### KrylovMemoryManager (`internal/memory/krylov_manager.go`)
+
+Coracao matematico do EVA-Mind. Comprime embeddings de 1536D para 64D usando subespacos de Krylov com Rank-1 Updates.
+
+| Operacao | Complexidade | Tempo |
+|----------|-------------|-------|
+| UpdateSubspace (nova memoria) | O(nk) | 52us |
+| CompressVector (1536D -> 64D) | O(nk) | ~50us |
+| ReconstructVector (64D -> 1536D) | O(nk) | ~50us |
+| Reorthogonalize (QR) | O(nk^2) | ~1ms |
+
+- **Gram-Schmidt Modificado** para estabilidade numerica
+- **Sliding Window FIFO** (ultimas 10K memorias)
+- **Dual Mutex** (dados + consolidacao) para evitar deadlock
+- **Checkpoint** save/load para persistencia
+- **12 testes passando**, Recall@10 = 97%
+
+### gRPC/HTTP Bridge
+
+| Servico | Porta | Protocolo |
+|---------|-------|-----------|
+| KrylovService gRPC | 50051 | Protocol Buffers |
+| KrylovService HTTP | 50052 | JSON (bridge para FastAPI) |
+
+Endpoints HTTP: `/krylov/compress`, `/krylov/reconstruct`, `/krylov/batch_compress`, `/krylov/update`, `/krylov/stats`, `/krylov/health`
+
+Python client: `clients/python/krylov_client.py` (HTTP + FastAPI router factory)
+
+### Spectral Community Engine (`internal/cortex/spectral/`)
+
+Clustering espectral do grafo Neo4j. Descobre comunidades naturais de memoria.
+
+**Pipeline:** Neo4j -> Adjacency Matrix -> Graph Laplacian L=D-A -> EigenSym -> Spectral Gap -> k-means -> Comunidades
+
+| Tipo de Comunidade | Descricao |
+|-------------------|-----------|
+| **emocional** | Significantes + emocoes (solidao, abandono, tristeza) |
+| **tematica** | Topics relacionados (familia, trabalho) |
+| **clinica** | Condicoes + medicamentos + sintomas |
+| **episodica** | Eventos temporalmente proximos |
+
+**Fractal Dimension Analysis:**
+- Dimensao espectral (IDOS + regressao log-log)
+- Lacunaridade (variabilidade de comunidades)
+- Hurst do espectro (memoria de longo alcance no grafo)
+- Classificacao: random / modular / hierarchical / scale-free
+
+**Performance:** 100 nos em 892us, 500 nos em 115ms (Intel Core Ultra 9 288V)
+
+---
+
 ## Sistemas de Memória
 
 ### Memória Tripla
@@ -513,6 +566,52 @@ Sistema de repetição espaçada para reforçar memórias do paciente:
 - Reforço baseado em SM-2 (SuperMemo)
 - Qualidade 0-5 determina próximo intervalo
 - Importância 1-5 define frequência
+
+### Temporal Decay (`internal/cortex/lacan/temporal_decay.go`)
+
+Envelhecimento das conexoes no grafo Neo4j via curva de Ebbinghaus: `weight = frequency * e^(-t/tau)`
+
+| Parametro | Default | Funcao |
+|-----------|---------|--------|
+| tau | 90 dias | Constante de tempo (63% de perda em tau) |
+| min_weight | 0.01 | Threshold para poda |
+
+- `GetDecayedSignifiers()` - Significantes com peso temporal
+- `GetDecayedRelations()` - Relacoes com decay
+- `PruneDecayedConnections()` - Remove conexoes irrelevantes
+- `RefreshSignifierDecay()` - Batch update de todos os nos
+
+### HMC Trajectory Engine (`internal/cortex/predictive/`)
+
+Hamiltonian Monte Carlo para predicao de trajetorias clinicas. Substitui random walk.
+
+**Energia Potencial:** PHQ-9 (depressao) + aderencia a medicamentos + qualidade do sono + coupling entre variaveis
+
+**Algoritmo:**
+1. Leapfrog integration (Stormer-Verlet, simplectico)
+2. Metropolis-Hastings acceptance
+3. Gradiente numerico (central difference)
+
+| Metrica | Valor |
+|---------|-------|
+| Acceptance rate | 88% |
+| Energy conservation | |dH| = 0.000033 |
+| Crisis detection | 37.5% vs 75.5% random walk (menos falsos positivos) |
+
+### Legacy Mode (`internal/legacy/service.go`)
+
+Imortalidade digital pos-morte com consent granular por herdeiro.
+
+**Funcionalidades:**
+- `EnableLegacyMode()` - Ativa modo legado para paciente
+- `RegisterHeir()` - Cadastra herdeiro com 7 permissoes granulares
+- `ActivatePosMorte()` - Herdeiro autorizado ativa modo pos-morte
+- `CreatePersonalitySnapshot()` - Exporta: Enneagram + significantes + memorias + perfil emocional
+- `ReadMemoriesAsHeir()` / `ReadPersonalityAsHeir()` - Acesso read-only com audit trail
+
+**Permissoes por herdeiro:** can_read_memories, can_read_emotions, can_read_signifiers, can_read_personality, can_read_clinical, can_activate_pos_morte, can_export_snapshot
+
+**Migration:** `026_legacy_mode.sql` (4 tabelas + view + stored function)
 
 ### Pattern Mining
 
@@ -804,6 +903,8 @@ EVA-Mind/
 │   │   ├── explainability/           # Explicabilidade clínica
 │   │   ├── scales/                   # PHQ-9, GAD-7, C-SSRS
 │   │   ├── prediction/              # Redes bayesianas, predição de crise
+│   │   ├── predictive/              # HMC trajectory engine + Monte Carlo
+│   │   ├── spectral/                # Spectral clustering + fractal dimension
 │   │   ├── learning/                 # Aprendizado contínuo
 │   │   ├── medgemma/                 # Análise de exames médicos
 │   │   ├── kids/                     # Modo criança
@@ -829,6 +930,8 @@ EVA-Mind/
 │   │   ├── scheduler/                # Agendamentos
 │   │   └── workers/                  # Background jobs
 │   │
+│   ├── memory/                       # KrylovMemoryManager + gRPC/HTTP bridge
+│   ├── legacy/                       # Legacy Mode (pos-morte, herdeiros)
 │   ├── integration/                  # FHIR, webhooks, exportação
 │   ├── security/                     # CORS, validação, errors
 │   ├── metrics/                      # Prometheus metrics
@@ -849,8 +952,11 @@ EVA-Mind/
 | **Arquivos Go** | 222 |
 | **Swarm Agents** | 8 |
 | **Tools registradas** | 104 |
-| **SQL Migrations** | 32 |
+| **SQL Migrations** | 33 (incluindo 026_legacy_mode) |
 | **Sistemas de memória** | 12 + 8 consciência + 4 críticos |
+| **Krylov Recall@10** | 97% (1536D -> 64D) |
+| **Spectral clustering** | 892us/100 nós |
+| **HMC acceptance** | 88% |
 | **Tipos Enneagram** | 9 |
 | **Idiomas suportados** | 30 (via Gemini Live API) |
 | **Módulos cortex** | 15 sub-packages |

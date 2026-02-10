@@ -1,0 +1,418 @@
+// sliding_window_krylov.go
+// Implementação de Janela Deslizante de Krylov para o EVA-Mind
+// Permite atualização incremental de subespaços sem recalcular tudo
+// 
+// Por: Junior (Criador do Projeto EVA)
+// Arquitetura: eva-ai (Go) para operações CPU-bound
+
+package krylov
+
+import (
+	"fmt"
+	"math"
+	"sync"
+	"time"
+
+	"gonum.org/v1/gonum/mat"
+)
+
+// WindowConfig define os parâmetros da janela deslizante
+type WindowConfig struct {
+	WindowSize      int     // Tamanho da janela temporal (ex: últimas 10.000 memórias)
+	SubspaceSize    int     // Dimensão do subespaço de Krylov (k)
+	UpdateThreshold int     // Número de novas memórias antes de atualizar
+	DecayFactor     float64 // Fator de decaimento para memórias antigas (0-1)
+}
+
+// SlidingKrylovWindow mantém o estado do subespaço incremental
+type SlidingKrylovWindow struct {
+	config       WindowConfig
+	subspace     *mat.Dense     // Matriz Q do subespaço atual (n × k)
+	eigenvalues  []float64      // Autovalores principais
+	memoryBuffer [][]float64    // Buffer de novas memórias pendentes
+	totalMemories int           // Total de memórias processadas
+	lastUpdate   time.Time      // Timestamp da última atualização
+	mutex        sync.RWMutex   // Thread-safe para concorrência
+}
+
+// NewSlidingKrylovWindow inicializa uma nova janela
+func NewSlidingKrylovWindow(config WindowConfig) *SlidingKrylovWindow {
+	return &SlidingKrylovWindow{
+		config:       config,
+		memoryBuffer: make([][]float64, 0, config.UpdateThreshold),
+		lastUpdate:   time.Now(),
+	}
+}
+
+// AddMemory adiciona uma nova memória ao buffer de forma thread-safe
+func (skw *SlidingKrylovWindow) AddMemory(embedding []float64) error {
+	skw.mutex.Lock()
+	defer skw.mutex.Unlock()
+
+	// Validação de dimensionalidade
+	if len(embedding) == 0 {
+		return fmt.Errorf("embedding vazio")
+	}
+
+	// Adiciona ao buffer
+	skw.memoryBuffer = append(skw.memoryBuffer, embedding)
+	skw.totalMemories++
+
+	// Verifica se deve disparar atualização incremental
+	if len(skw.memoryBuffer) >= skw.config.UpdateThreshold {
+		go skw.incrementalUpdate() // Atualização assíncrona
+	}
+
+	return nil
+}
+
+// incrementalUpdate atualiza o subespaço sem recalcular tudo
+// Esta é a "mágica" que torna o EVA-Mind escalável
+func (skw *SlidingKrylovWindow) incrementalUpdate() {
+	skw.mutex.Lock()
+	defer skw.mutex.Unlock()
+
+	if len(skw.memoryBuffer) == 0 {
+		return
+	}
+
+	startTime := time.Now()
+	fmt.Printf("[Krylov] Iniciando atualização incremental com %d novas memórias...\n", 
+		len(skw.memoryBuffer))
+
+	// Etapa 1: Converte buffer para matriz
+	newMemories := skw.bufferToMatrix()
+
+	// Etapa 2: Aplica decaimento ao subespaço antigo (memórias envelhecem)
+	if skw.subspace != nil {
+		skw.applyDecay()
+	}
+
+	// Etapa 3: Iteração de Arnoldi Incremental
+	// Em vez de recalcular tudo, expande o subespaço existente
+	skw.subspace = skw.incrementalArnoldi(skw.subspace, newMemories)
+
+	// Etapa 4: Reortogonalização (mantém o subespaço ortogonal)
+	skw.reorthogonalize()
+
+	// Etapa 5: Limpa o buffer
+	skw.memoryBuffer = skw.memoryBuffer[:0]
+	skw.lastUpdate = time.Now()
+
+	elapsed := time.Since(startTime)
+	fmt.Printf("[Krylov] Atualização concluída em %v\n", elapsed)
+}
+
+// incrementalArnoldi expande o subespaço existente com novas memórias
+// Esta é a implementação do "atalho" de Krylov
+func (skw *SlidingKrylovWindow) incrementalArnoldi(
+	oldSubspace *mat.Dense, 
+	newMemories *mat.Dense,
+) *mat.Dense {
+	
+	n, _ := newMemories.Dims()
+	k := skw.config.SubspaceSize
+
+	// Se não há subespaço antigo, cria um novo via Arnoldi completo
+	if oldSubspace == nil {
+		return skw.fullArnoldi(newMemories, k)
+	}
+
+	// Caso contrário, expande incrementalmente
+	_, oldK := oldSubspace.Dims()
+	
+	// Projeta novas memórias no subespaço antigo
+	projection := mat.NewDense(n, oldK, nil)
+	projection.Mul(newMemories, oldSubspace)
+
+	// Calcula resíduo (parte que não está no subespaço antigo)
+	residual := mat.NewDense(n, oldK, nil)
+	residual.Sub(newMemories, projection)
+
+	// Executa Arnoldi no resíduo para obter novas direções
+	newDirections := skw.arnoldiOnResidual(residual, k-oldK)
+
+	// Combina subespaço antigo com novas direções
+	expandedSubspace := mat.NewDense(n, k, nil)
+	expandedSubspace.Augment(oldSubspace, newDirections)
+
+	return expandedSubspace
+}
+
+// fullArnoldi executa a iteração completa de Arnoldi
+// Usado apenas na primeira execução ou quando o subespaço está vazio
+func (skw *SlidingKrylovWindow) fullArnoldi(A *mat.Dense, k int) *mat.Dense {
+	n, m := A.Dims()
+	Q := mat.NewDense(n, k, nil) // Matriz ortogonal do subespaço
+	H := mat.NewDense(k, k, nil) // Matriz de Hessenberg
+
+	// Vetor inicial normalizado (primeira coluna de Q)
+	v := mat.NewVecDense(n, nil)
+	for i := 0; i < n; i++ {
+		v.SetVec(i, A.At(i, 0))
+	}
+	norm := mat.Norm(v, 2)
+	v.ScaleVec(1.0/norm, v)
+	Q.SetCol(0, v.RawVector().Data)
+
+	// Iteração de Arnoldi
+	for j := 0; j < k-1; j++ {
+		// w = A * q_j
+		qj := mat.NewVecDense(n, nil)
+		for i := 0; i < n; i++ {
+			qj.SetVec(i, Q.At(i, j))
+		}
+		w := mat.NewVecDense(n, nil)
+		w.MulVec(A, qj)
+
+		// Ortogonalização de Gram-Schmidt
+		for i := 0; i <= j; i++ {
+			qi := mat.NewVecDense(n, nil)
+			for row := 0; row < n; row++ {
+				qi.SetVec(row, Q.At(row, i))
+			}
+			
+			hij := mat.Dot(w, qi)
+			H.Set(i, j, hij)
+			
+			qi.ScaleVec(-hij, qi)
+			w.AddVec(w, qi)
+		}
+
+		// Normaliza w e adiciona como próxima coluna de Q
+		norm := mat.Norm(w, 2)
+		if norm < 1e-10 { // Convergência precoce
+			break
+		}
+		H.Set(j+1, j, norm)
+		w.ScaleVec(1.0/norm, w)
+		Q.SetCol(j+1, w.RawVector().Data)
+	}
+
+	return Q
+}
+
+// arnoldiOnResidual aplica Arnoldi apenas na parte residual
+func (skw *SlidingKrylovWindow) arnoldiOnResidual(
+	residual *mat.Dense, 
+	numDirections int,
+) *mat.Dense {
+	// Similar ao fullArnoldi, mas opera apenas no resíduo
+	// Isso evita recalcular direções que já estão no subespaço antigo
+	return skw.fullArnoldi(residual, numDirections)
+}
+
+// applyDecay diminui a importância de vetores antigos no subespaço
+// Simula o "esquecimento" natural da memória humana
+func (skw *SlidingKrylovWindow) applyDecay() {
+	if skw.subspace == nil {
+		return
+	}
+
+	// Quanto tempo passou desde a última atualização?
+	timeSinceUpdate := time.Since(skw.lastUpdate).Hours()
+	
+	// Decaimento exponencial: e^(-λt)
+	decayMultiplier := math.Exp(-skw.config.DecayFactor * timeSinceUpdate)
+	
+	skw.subspace.Scale(decayMultiplier, skw.subspace)
+}
+
+// reorthogonalize garante que os vetores do subespaço permaneçam ortogonais
+// Essencial para manter a estabilidade numérica
+func (skw *SlidingKrylovWindow) reorthogonalize() {
+	if skw.subspace == nil {
+		return
+	}
+
+	n, k := skw.subspace.Dims()
+	Q := mat.NewDense(n, k, nil)
+
+	// QR decomposition via Gram-Schmidt modificado
+	for j := 0; j < k; j++ {
+		// Copia coluna j
+		vj := mat.NewVecDense(n, nil)
+		for i := 0; i < n; i++ {
+			vj.SetVec(i, skw.subspace.At(i, j))
+		}
+
+		// Ortogonaliza contra todas as colunas anteriores
+		for i := 0; i < j; i++ {
+			qi := mat.NewVecDense(n, nil)
+			for row := 0; row < n; row++ {
+				qi.SetVec(row, Q.At(row, i))
+			}
+			
+			dot := mat.Dot(vj, qi)
+			qi.ScaleVec(-dot, qi)
+			vj.AddVec(vj, qi)
+		}
+
+		// Normaliza
+		norm := mat.Norm(vj, 2)
+		if norm > 1e-10 {
+			vj.ScaleVec(1.0/norm, vj)
+		}
+		Q.SetCol(j, vj.RawVector().Data)
+	}
+
+	skw.subspace = Q
+}
+
+// bufferToMatrix converte o buffer de embeddings para matriz Gonum
+func (skw *SlidingKrylovWindow) bufferToMatrix() *mat.Dense {
+	if len(skw.memoryBuffer) == 0 {
+		return nil
+	}
+
+	numMemories := len(skw.memoryBuffer)
+	embeddingDim := len(skw.memoryBuffer[0])
+
+	data := make([]float64, numMemories*embeddingDim)
+	for i, embedding := range skw.memoryBuffer {
+		copy(data[i*embeddingDim:(i+1)*embeddingDim], embedding)
+	}
+
+	return mat.NewDense(numMemories, embeddingDim, data)
+}
+
+// CompressEmbedding projeta um embedding de alta dimensão no subespaço
+// Esta é a função que o FastAPI backend chama via gRPC
+func (skw *SlidingKrylovWindow) CompressEmbedding(embedding []float64) ([]float64, error) {
+	skw.mutex.RLock()
+	defer skw.mutex.RUnlock()
+
+	if skw.subspace == nil {
+		return nil, fmt.Errorf("subespaço ainda não inicializado")
+	}
+
+	// Converte embedding para vetor Gonum
+	vec := mat.NewVecDense(len(embedding), embedding)
+
+	// Projeta no subespaço: compressed = Q^T * embedding
+	_, k := skw.subspace.Dims()
+	compressed := mat.NewVecDense(k, nil)
+	compressed.MulVec(skw.subspace.T(), vec)
+
+	return compressed.RawVector().Data, nil
+}
+
+// GetSubspaceDimension retorna a dimensionalidade atual do subespaço
+func (skw *SlidingKrylovWindow) GetSubspaceDimension() int {
+	skw.mutex.RLock()
+	defer skw.mutex.RUnlock()
+
+	if skw.subspace == nil {
+		return 0
+	}
+	_, k := skw.subspace.Dims()
+	return k
+}
+
+// GetStatistics retorna estatísticas de uso
+func (skw *SlidingKrylovWindow) GetStatistics() map[string]interface{} {
+	skw.mutex.RLock()
+	defer skw.mutex.RUnlock()
+
+	return map[string]interface{}{
+		"total_memories":      skw.totalMemories,
+		"pending_in_buffer":   len(skw.memoryBuffer),
+		"subspace_dimension":  skw.GetSubspaceDimension(),
+		"last_update":         skw.lastUpdate.Format(time.RFC3339),
+		"time_since_update":   time.Since(skw.lastUpdate).String(),
+	}
+}
+
+// Exemplo de uso
+func ExampleUsage() {
+	// Configuração para o EVA-Mind em produção
+	config := WindowConfig{
+		WindowSize:      10000,  // Últimas 10K memórias
+		SubspaceSize:    64,     // Comprime de 1536D para 64D
+		UpdateThreshold: 100,    // Atualiza a cada 100 novas memórias
+		DecayFactor:     0.01,   // Decaimento lento
+	}
+
+	window := NewSlidingKrylovWindow(config)
+
+	// Simula adição contínua de memórias
+	for i := 0; i < 1000; i++ {
+		// Embedding simulado de 1536 dimensões
+		embedding := make([]float64, 1536)
+		for j := range embedding {
+			embedding[j] = float64(i+j) * 0.001
+		}
+
+		// Adiciona memória (thread-safe)
+		err := window.AddMemory(embedding)
+		if err != nil {
+			fmt.Printf("Erro ao adicionar memória: %v\n", err)
+		}
+
+		// A cada 100 memórias, exibe estatísticas
+		if i%100 == 0 {
+			stats := window.GetStatistics()
+			fmt.Printf("Estatísticas após %d memórias: %+v\n", i, stats)
+		}
+	}
+
+	// Comprime um novo embedding
+	testEmbedding := make([]float64, 1536)
+	compressed, err := window.CompressEmbedding(testEmbedding)
+	if err != nil {
+		fmt.Printf("Erro ao comprimir: %v\n", err)
+	} else {
+		fmt.Printf("Embedding comprimido: 1536D → %dD\n", len(compressed))
+	}
+}
+
+// PerformanceBenchmark compara atualização incremental vs completa
+func PerformanceBenchmark() {
+	fmt.Println("=== Benchmark: Sliding Window vs Full Recomputation ===")
+
+	// Dados de teste
+	numMemories := 10000
+	embeddingDim := 1536
+	subspaceSize := 64
+
+	// Gera memórias aleatórias
+	memories := make([][]float64, numMemories)
+	for i := range memories {
+		memories[i] = make([]float64, embeddingDim)
+		for j := range memories[i] {
+			memories[i][j] = float64(i+j) * 0.001
+		}
+	}
+
+	// Teste 1: Atualização Completa (baseline)
+	startFull := time.Now()
+	config := WindowConfig{
+		WindowSize:      numMemories,
+		SubspaceSize:    subspaceSize,
+		UpdateThreshold: numMemories, // Força atualização completa
+		DecayFactor:     0.0,
+	}
+	fullWindow := NewSlidingKrylovWindow(config)
+	for _, mem := range memories {
+		fullWindow.AddMemory(mem)
+	}
+	fullTime := time.Since(startFull)
+
+	// Teste 2: Sliding Window (incremental)
+	startIncremental := time.Now()
+	config.UpdateThreshold = 100 // Atualiza incrementalmente a cada 100
+	slidingWindow := NewSlidingKrylovWindow(config)
+	for _, mem := range memories {
+		slidingWindow.AddMemory(mem)
+	}
+	incrementalTime := time.Since(startIncremental)
+
+	// Resultados
+	speedup := float64(fullTime) / float64(incrementalTime)
+	fmt.Printf("\nResultados:\n")
+	fmt.Printf("Atualização Completa:    %v\n", fullTime)
+	fmt.Printf("Sliding Window (k=100):  %v\n", incrementalTime)
+	fmt.Printf("Speedup:                 %.2fx mais rápido\n", speedup)
+	fmt.Printf("\nMemória economizada:     ~%.1f GB\n", 
+		float64(numMemories*embeddingDim*8)/1e9 * (1.0 - float64(subspaceSize)/float64(embeddingDim)))
+}
