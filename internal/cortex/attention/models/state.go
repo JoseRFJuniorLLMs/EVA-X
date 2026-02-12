@@ -2,6 +2,22 @@ package models
 
 import "time"
 
+// NewExecutiveState - Creates a new executive state
+func NewExecutiveState(conversationID string, turnNumber int) *ExecutiveState {
+	return &ExecutiveState{
+		ConversationID: conversationID,
+		TurnNumber:     turnNumber,
+		Timestamp:      time.Now(),
+		UserState: &UserModel{
+			ActiveCenter: CenterUnknown,
+		},
+		WorkingMemory:   make([]ContextFrame, 0),
+		PatternBuffer:   make([]SemanticHash, 0),
+		AffectiveState:  AffectNeutralClear,
+		ConfidenceScore: 1.0, // Start confident
+	}
+}
+
 // ExecutiveState - Estado metacognitivo completo
 type ExecutiveState struct {
 	// Tripla Atenção

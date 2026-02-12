@@ -94,6 +94,20 @@ func (pi *PatternInterrupt) cosineSimilarity(a, b []float64) float64 {
 }
 
 func generateEmbedding(text string) []float64 {
-	// Placeholder - usar embeddings reais (krylov/qdrant) no futuro
-	return make([]float64, 384)
+	// Deterministic hash for testing/mocking
+	// Real implementation would call OpenAI/Gemini/Vertex
+	h := 0
+	for _, c := range text {
+		h = 31*h + int(c)
+	}
+
+	// Normalize to avoid overflow issues relative to float
+	seed := float64(h)
+
+	vec := make([]float64, 384)
+	for i := range vec {
+		// Create a pattern based on seed and index
+		vec[i] = math.Sin(seed + float64(i))
+	}
+	return vec
 }

@@ -43,6 +43,8 @@ import (
 	"eva-mind/pkg/types"
 
 	"eva-mind/internal/brainstem/push"
+	"eva-mind/internal/cortex/attention"
+	attmodels "eva-mind/internal/cortex/attention/models"
 
 	"github.com/gorilla/websocket"
 )
@@ -82,6 +84,10 @@ type WebSocketSession struct {
 	// ✅ NOVO: O "Insight" pendente do raciocínio em background
 	pendingInsight string
 	insightMutex   sync.Mutex
+
+	// ✅ Executive Decision (Stateful per session)
+	ExecutiveDecision *attention.ExecutiveDecision
+	ExecutiveState    *attmodels.ExecutiveState
 }
 
 // ✅ NOVO MÉTODO: Thread-safe setter para o GraphReasoning usar
@@ -139,6 +145,7 @@ type SignalingServer struct {
 	demandDesireService   *lacan.DemandDesireService           // ✅ Demanda vs Desejo
 	grandAutreService     *lacan.GrandAutreService             // ✅ EVA como Grande Outro
 	fdpnEngine            *lacan.FDPNEngine                    // ✅ Grafo do Desejo
+	executive             *attention.Executive                 // ✅ Executive Attention Layer (PFC)
 
 	// 📚 Zettelkasten (Obsidian-like Knowledge Management)
 	zettelService *zettelkasten.ZettelService // ✅ Memória Externa Viva
@@ -714,6 +721,39 @@ func (s *SignalingServer) handleGeminiResponse(session *WebSocketSession, respon
 				s.saveTranscription(idosoID, "user", userText)
 			})
 
+			// ✅ FASE EXECUTIVA (Gurdjieffian Layer)
+			if s.executive != nil {
+				// Executar síncrono para garantir decisão antes da resposta?
+				// Gemini é rápido, mas o streaming permite raciocínio paralelo.
+				// Vamos tentar rodar aqui mesmo para bloquear logo se necessário.
+
+				// 1. Ensure state exists
+				if session.ExecutiveState == nil {
+					session.ExecutiveState = attmodels.NewExecutiveState(session.ID, 0)
+				}
+
+				// 2. Process input
+				// TODO: Pass context with timeout
+				decision, err := s.executive.Process(context.Background(), userText, session.ExecutiveState)
+				if err != nil {
+					log.Printf("⚠️ [EXECUTIVE] Error: %v", err)
+				} else {
+					// 3. Store decision
+					session.ExecutiveDecision = decision
+					log.Printf("🧠 [EXECUTIVE] Decision: Respond=%v, Center=%s, Strategy=%s",
+						decision.ShouldRespond, decision.ActiveCenter, decision.ResponseStrategy)
+
+					// 4. Act immediately if needed
+					if decision.ResponseStrategy == attention.StrategyPatternInterrupt && decision.InterruptionQuestion != "" {
+						log.Printf("🛑 [EXECUTIVE] Triggering Pattern Interrupt: %s", decision.InterruptionQuestion)
+						// Inject as System Text to steer Gemini immediately
+						if err := session.GeminiClient.SendText("SYSTEM INSTRUCTION: " + decision.InterruptionQuestion); err != nil {
+							log.Printf("⚠️ [EXECUTIVE] Failed to inject interrupt: %v", err)
+						}
+					}
+				}
+			}
+
 			// ✅ NOVO: Salvar em Postgres + Qdrant + Neo4j via BrainService
 			if s.brainService != nil {
 				brainSvc := s.brainService
@@ -1005,6 +1045,15 @@ func (s *SignalingServer) handleGeminiResponse(session *WebSocketSession, respon
 	modelTurn, ok := serverContent["modelTurn"].(map[string]interface{})
 	if !ok {
 		log.Printf("⚠️ [GEMINI] Sem modelTurn na resposta")
+		return
+	}
+
+	// ✅ EXECUTIVE BLOCKING (Silence Mode)
+	if session.ExecutiveDecision != nil && !session.ExecutiveDecision.ShouldRespond {
+		log.Printf("😶 [EXECUTIVE] Silence Mode Active - Blocking audio/text response")
+		// Podemos opcionalmente limpar a decisão para não bloquear para sempre,
+		// mas a decisão é por turno (input).
+		// O próximo input do usuário gerará nova decisão.
 		return
 	}
 
