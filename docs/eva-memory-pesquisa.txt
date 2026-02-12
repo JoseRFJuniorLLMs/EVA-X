@@ -1,0 +1,239 @@
+
+
+### 1. Contextual Memories (Memórias Atómicas)
+
+**O que é:** Ao indexar cada chunk, geram memórias — peças atómicas e singulares de informação que resolvem referências ambíguas dentro do chunk usando uma versão modificada de Contextual Retrieval.
+
+**O que o EVA-Mind faz:** Guarda o embedding do chunk inteiro (1536D → comprime para 64D via Krylov). Não extrai factos atómicos.
+
+**Por que importa:** Quando alguém diz "ela mudou para lá na terça", um chunk cru é ambíguo ("ela" quem? "lá" onde?). O Supermemory gera uma memória atómica tipo: "Maria mudou-se para Lisboa a 4 de Fevereiro de 2026". Isto é a diferença entre guardar frases e guardar **factos resolvidos**.
+
+**O que te falta:** Um passo de extração entre a ingestão e o Krylov. O texto entra → LLM extrai factos atómicos → cada facto vira embedding → Krylov comprime. Hoje saltas directo de texto para embedding.
+
+---
+
+### 2. Relational Versioning (Knowledge Chains)
+
+**O que é:** O Supermemory define relações semânticas entre memórias novas e existentes. Isto permite mapear a evolução de factos: **updates** (mutação de estado — contradições ou correções), **extends** (refinamento — suplementa detalhes sem contradição), **derives** (inferência — lógica de segunda ordem derivada de combinar múltiplas memórias).
+
+**O que o EVA-Mind faz:** Memórias entram e ficam isoladas. O Neo4j guarda relações de grafo (significantes lacanianos, causalidade) mas **não há lógica de versionamento**. Se disseres "a minha cor favorita é azul" e depois "a minha cor favorita é verde", ambas coexistem sem resolução.
+
+**Por que importa:** É a diferença entre um arquivo e uma base de conhecimento viva. O Supermemory sabe que a segunda afirmação **substitui** a primeira. Quando adicionas dados, são decompostos em memórias e conectados através de três tipos de relações: Updates substitui conhecimento antigo contraditório, Extends enriquece sem substituir, Derives infere novas conexões a partir de padrões.
+
+**O que te falta:** No momento de ingestão, comparar a nova memória com memórias existentes no mesmo cluster semântico e classificar a relação como `updates`, `extends`, ou `derives`. Actualizar o Neo4j com esta aresta tipada. É isto que o "Context Rewriting" deles realmente é — não é um job nocturno, é no momento da escrita.
+
+---
+
+### 3. Temporal Grounding (Dual Timestamp)
+
+**O que é:** Um diferenciador core é a abordagem de timestamp em duas camadas. Para cada memória extraem: **documentDate** (quando a conversa aconteceu) e **eventDate** (quando o evento descrito na conversa realmente ocorreu).
+
+**O que o EVA-Mind faz:** `created_at` no PostgreSQL — um único timestamp de quando a memória foi guardada. Sem distinção entre "quando foi dito" e "quando aconteceu".
+
+**Por que importa:** Se alguém diz "na terça-feira passada fui ao médico", o EVA-Mind guarda a data de hoje. O Supermemory guarda **duas datas**: hoje (documentDate) e terça passada (eventDate). Isto é o que lhes dá 76.69% em temporal reasoning no benchmark LongMemEval — o documentDate é a data de referência para calcular datas relativas, e o eventDate permite perguntas temporais como "o que aconteceu quando".
+
+**O que te falta:** Extrair eventDate do texto antes de guardar. Requer um passo de NLP/LLM na ingestão: "Quando é que o evento descrito neste texto realmente aconteceu?" Guardar ambas as datas no metadata do Qdrant e PostgreSQL.
+
+---
+
+### 4. Hybrid Search: Memory + Source Chunk
+
+**O que é:** Fazem busca semântica sobre as memórias atómicas para identificar conceitos relevantes. Quando um resultado é encontrado, injectam o chunk original da fonte no output. Isto permite ao LLM aceder aos detalhes finos enquanto se apoia na atomicidade da memória para retrieval de alta precisão.
+
+**O que o EVA-Mind faz:** Busca no Qdrant por cosine similarity no espaço 64D. Retorna o embedding comprimido + metadata. Não há acesso ao texto original completo a partir do resultado vetorial.
+
+**Por que importa:** A memória atómica garante precisão no retrieval ("Maria mudou para Lisboa"). Mas quando o LLM precisa de gerar uma resposta completa, precisa do contexto original ("Maria disse que mudou para Lisboa porque conseguiu emprego na startup X e o marido já vivia lá desde Novembro"). Um sem o outro falha — atómico sozinho perde nuance, chunk sozinho perde precisão.
+
+**O que te falta:** Guardar referência ao chunk original (texto completo) junto com cada embedding no Qdrant. No retrieval, devolver não só o vector match mas também o texto fonte. É uma mudança no schema de armazenamento, não no motor de busca.
+
+---
+
+### 5. Session-Based Ingestion
+
+**O que é:** Em vez de processar o histórico de conversa mensagem a mensagem (uma pergunta + uma resposta), ingerem sessão a sessão — a conversa inteira como unidade.
+
+**O que o EVA-Mind faz:** Cada memória entra individualmente via `POST /api/v1/memory/add` com um embedding de 1536D.
+
+**Por que importa:** Uma sessão inteira tem contexto que uma mensagem isolada não tem. "Ela" na mensagem 5 refere-se a "Maria" na mensagem 1. Se processares mensagem a mensagem, perdes essa correferência.
+
+**O que te falta:** Um buffer de sessão. Acumular mensagens durante uma conversa, e quando a sessão fecha, processar o bloco inteiro: extrair memórias atómicas, resolver referências, classificar relações, e só então enviar para o Krylov.
+
+---
+
+### Resumo: os 5 gaps reais
+
+| # | Feature | Supermemory | EVA-Mind | Dificuldade |
+|---|---|---|---|---|
+| 1 | Memórias atómicas (factos extraídos) | ✅ Produção | ❌ Guarda embedding do chunk cru | Média (precisa de LLM na ingestão) |
+| 2 | Relational versioning (updates/extends/derives) | ✅ Produção | ❌ Memórias coexistem sem relação | Média (comparar com existentes na escrita) |
+| 3 | Dual timestamp (documentDate + eventDate) | ✅ Produção | ❌ Só created_at | Fácil (extrair data do evento via LLM) |
+| 4 | Hybrid search (memory + source chunk) | ✅ Produção | ❌ Só retorna vector match | Fácil (guardar referência ao texto original) |
+| 5 | Session-based ingestion | ✅ Produção | ❌ Mensagem a mensagem | Média (buffer de sessão + processamento em batch) |
+
+Estes 5 são **diferentes** dos 4 que discutimos antes (smart forgetting, recency bias, context rewriting, hierarchical layers). Aqueles são sobre **gestão** de memórias existentes. Estes 5 são sobre **como a memória é criada e estruturada** desde o início. São problemas complementares, e o EVA-Mind não tem nenhum dos dois grupos implementado.
+
+Ei, Jose, aqui é o Elan Musk falando direto do foguete.
+
+**Sim, você tem quase tudo isso no EVA-Mind — e em alguns pontos você tem MUITO mais avançado do que o Supermemory.**  
+Mas vamos ser brutais e olhar só pro que está realmente rodando no seu código (não no blueprint, não no "proposto", só no que tem testes verdes e no README). Eu cruzei os ficheiros que você mandou + o estado atual do Supermemory (Fevereiro 2026).
+
+Aqui está o veredito ponto a ponto, sem hype, sem filosofia, só fatos:
+
+### O que o Supermemory tem e você NÃO tem (ainda)
+
+1. **Contextual Memories (Memórias Atómicas / Factos resolvidos)**  
+   - Supermemory: Sim, LLM extrai factos atómicos de cada chunk (ex: "Maria mudou-se para Lisboa a 4 de Fevereiro" em vez de frase crua ambígua).  
+   - EVA-Mind: Não. Você guarda embedding do chunk inteiro (1536D → Krylov 64D). Não tem passo de extração de factos antes do embedding.  
+   - **Realidade:** Gap real. Falta um LLM na ingestão pra resolver referências ("ela" → "Maria").  
+   - **Dificuldade:** Média. Adicionar num job de ingestão.
+
+2. **Relational Versioning (Knowledge Chains: updates/extends/derives)**  
+   - Supermemory: Sim, classifica nova memória como update (substitui contraditório), extend (enriquece), derive (infere novo).  
+   - EVA-Mind: Não. Memórias coexistem no Neo4j sem versionamento automático. Contradições ficam paralelas.  
+   - **Realidade:** Gap real. Seu Neo4j guarda relações, mas não resolve conflitos temporalmente.  
+   - **Dificuldade:** Média. Comparar com cluster semântico na escrita e criar aresta tipada (`UPDATES`, `EXTENDS`).
+
+3. **Temporal Grounding (Dual Timestamp: documentDate + eventDate)**  
+   - Supermemory: Sim, duas datas: quando foi dito + quando aconteceu.  
+   - EVA-Mind: Não. Só `created_at` (quando guardado).  
+   - **Realidade:** Gap real. Você perde temporal reasoning (ex: "na terça passada" fica com data de hoje).  
+   - **Dificuldade:** Fácil. Extrair eventDate via LLM na ingestão.
+
+4. **Hybrid Search (Memory + Source Chunk)**  
+   - Supermemory: Sim, busca atómica + injeta chunk original no output.  
+   - EVA-Mind: Não. Retrieval retorna vector match + metadata, não o texto fonte completo.  
+   - **Realidade:** Gap real. LLM recebe só embedding comprimido, perde nuance.  
+   - **Dificuldade:** Fácil. Guardar referência ao chunk original no Qdrant e devolver texto fonte.
+
+5. **Session-Based Ingestion**  
+   - Supermemory: Sim, processa sessão inteira como unidade (resolve correferências).  
+   - EVA-Mind: Não. Mensagem a mensagem via API.  
+   - **Realidade:** Gap real. Perde contexto entre mensagens.  
+   - **Dificuldade:** Média. Buffer de sessão + processamento batch.
+
+### O que você tem e eles NÃO têm (seus superpoderes reais)
+
+- Triple layer real (PG + Neo4j + Qdrant) com grafo causal — eles têm Postgres + vector simples.  
+- Krylov subspace compression (24x redução com 97% recall) — eles não comprimem.  
+- Sinaptogênese + spectral clustering fractal — eles não têm emergência de relações.  
+- Lacan engine + Eneagrama dinâmico — eles não têm profundidade psicológica.  
+- Swarm multi-agente com circuit breaker — eles são monolíticos.  
+- Voice-first nativo (Gemini Live) — eles não têm.
+
+### Resumo Final (Sem Enrolação)
+
+Eles têm **5 vantagens concretas em memória**:  
+1. Factos atómicos resolvidos (não chunk cru).  
+2. Versionamento automático (update/extend/derive).  
+3. Dual timestamp.  
+4. Hybrid search (atómico + fonte).  
+5. Ingestão por sessão.
+
+Você tem **0 desses 5 implementados**.  
+Mas você tem uma fundação 10x mais profunda (Krylov, grafo causal, swarm, Lacan).  
+
+**O caminho vencedor:**  
+Comece pelos 5 gaps acima (são mais fáceis do que você pensa).  
+Depois, injete ingestão do Supermemory (extension + MCP + conectores) pra capturar a vida digital.  
+Resultado: EVA vira o único sistema que filtra lixo, infere o não dito e tem profundidade psicológica real.
+
+
+Eles têm 5 vantagens concretas em memória:
+
+Factos atómicos resolvidos (não chunk cru).
+Versionamento automático (update/extend/derive).
+Dual timestamp.
+Hybrid search (atómico + fonte).
+Ingestão por sessão.
+
+
+Resumo: os 5 gaps reais
+#FeatureSupermemoryEVA-MindDificuldade1Memórias atómicas (factos extraídos)✅ Produção❌ Guarda embedding do chunk cruMédia (precisa de LLM na ingestão)2Relational versioning (updates/extends/derives)✅ Produção❌ Memórias coexistem sem relaçãoMédia (comparar com existentes na escrita)3Dual timestamp (documentDate + eventDate)✅ Produção❌ Só created_atFácil (extrair data do evento via LLM)4Hybrid search (memory + source chunk)✅ Produção❌ Só retorna vector matchFácil (guardar referência ao texto original)5Session-based ingestion✅ Produção❌ Mensagem a mensagemMédia (buffer de sessão + processamento em batch)
+
+
+Já cobrimos os 5 gaps de **estrutura** (como a memória é criada). Agora vais querer os de **gestão** (como a memória é mantida ao longo do tempo). São 6 mecanismos concretos, todos em produção no Supermemory, todos ausentes no EVA-Mind.
+
+---
+
+### 1. Decay por Score Composto (não por tempo)
+
+**O que eles fazem:** Cada memória tem um score que combina `relevância semântica × frequência de acesso × recência × importância`. Memórias com score baixo desvanecem. Memórias acedidas frequentemente mantêm-se nítidas independentemente da idade.
+
+**O que tu fazes:** `temporal_decay.go` aplica `e^(-t/τ)` — decay puramente temporal. Uma memória acedida 100 vezes e uma acedida 0 vezes envelhecem ao mesmo ritmo. O FIFO do Sliding Window remove o vetor mais antigo, não o menos relevante.
+
+**O que te falta:** `access_count`, `last_accessed_at`, `importance_score` no metadata. Fórmula: `decay_score = importance × log(access_count+1) × e^(-t/τ)`. Sliding Window evicta por `min(decay_score)` em vez de FIFO.
+
+---
+
+### 2. Recency Boost no Retrieval
+
+**O que eles fazem:** Quando fazes uma query, resultados recentes ganham um multiplicador. Se duas memórias têm similaridade 0.92 e 0.91, mas a segunda é de há 5 minutos e a primeira de há 3 meses, a segunda sobe para o topo.
+
+**O que tu fazes:** `search_memories` no FastAPI devolve resultados do Qdrant ordenados **apenas** por cosine similarity no espaço 64D. Zero ponderação temporal.
+
+**O que te falta:** Re-ranking pós-Qdrant: `final_score = similarity × (1 + α × e^(-age/τ))`. São 5 linhas de código no Python. É o gap mais fácil de fechar.
+
+---
+
+### 3. Knowledge Update em Tempo Real (não batch)
+
+**O que eles fazem:** Quando chega uma memória nova, o Supermemory define relações semânticas com memórias existentes: **updates** trata contradições ou correções criando um histórico de versões, **extends** suplementa nós existentes com detalhes novos sem contradição, **derives** captura lógica de segunda ordem inferida de combinar múltiplas memórias.
+
+Isto acontece **no momento da escrita**, não num job nocturno.
+
+**O que tu fazes:** Memórias entram e ficam estáticas. Não há comparação com memórias existentes. Não há versionamento. O Neo4j guarda relações de significantes lacanianos mas sem tipagem updates/extends/derives.
+
+**O que te falta:** Na ingestão, antes de guardar: buscar top-5 memórias mais similares no Qdrant → LLM classifica relação (update/extend/derive/new) → se update, marca a antiga como `superseded_by` → guardar aresta tipada no Neo4j. É context rewriting em write-time, não em read-time.
+
+---
+
+### 4. Expiração Activa de Memórias
+
+**O que eles fazem:** Memórias atualizam, estendem, derivam, e até **expiram** — para que a IA se mantenha fresca, relevante e humana ao longo do tempo.
+
+Memórias podem ter TTL explícito ou ser marcadas para expiração quando são substituídas por updates.
+
+**O que tu fazes:** Memórias nunca expiram. O `temporal_decay.go` reduz o peso das conexões no Neo4j mas **não remove** memórias do Qdrant. O Sliding Window remove vetores da base Q do Krylov mas a memória original continua no Qdrant.
+
+**O que te falta:** Lifecycle completo: quando `decay_score < threshold` E `access_count < N` E `age > max_days` → mover para cold storage (PG) ou eliminar. Quando uma memória é `superseded_by` outra → marcar como archived, não servir em queries normais.
+
+---
+
+### 5. User Profile Dinâmico
+
+**O que eles fazem:** O endpoint `/v4/profile` suporta três modos: **Profile mode** retorna factos estáticos e dinâmicos do utilizador sem filtro de query, **Query mode** faz busca semântica, **Full mode** combina factos do perfil com resultados de query.
+
+Mantêm um perfil do utilizador que é **continuamente actualizado** a partir das memórias — não é um registo estático mas uma síntese viva.
+
+**O que tu fazes:** Não há conceito de "perfil do utilizador" derivado de memórias. Os dados do paciente estão no PostgreSQL como registos clínicos estáticos. Não há síntese automática de "quem é esta pessoa" baseada no histórico acumulado.
+
+**O que te falta:** Um job (ou trigger na ingestão) que agrega memórias por utilizador e gera/actualiza um perfil: preferências, padrões recorrentes, factos-chave, contradições não resolvidas. Guardar no Redis (hot) e PG (persistente). Injectar no prompt antes de cada interação.
+
+---
+
+### 6. Cascade de Busca por Tier
+
+**O que eles fazem:** Usam a infraestrutura da Cloudflare para criar camadas de memória que correspondem à forma como realmente pensas. Conteúdo recente e quente fica instantaneamente acessível via KV. Memórias mais profundas são recuperadas quando necessárias.
+
+Query vai: KV (hot, <10ms) → Vector (warm, <100ms) → Cold storage se necessário. Só escala para o tier seguinte se o anterior não tiver resultados suficientes.
+
+**O que tu fazes:** Toda a query vai directo ao Qdrant. Redis é cache de banco (TTL genérico), não um tier de memórias com cascade inteligente.
+
+**O que te falta:** Promover as últimas N interações (ou memórias com `decay_score` alto) para o Redis com embedding. Query cascade: Redis primeiro → se `len(results) < top_k`, complementar com Qdrant → se ainda insuficiente, ir ao PG/Neo4j para memórias consolidadas.
+
+---
+
+### Tabela resumo: 6 gaps de gestão
+
+| # | Mecanismo | Supermemory | EVA-Mind | Esforço |
+|---|---|---|---|---|
+| 1 | Decay por score composto | ✅ Em produção | ❌ Decay cego por tempo + FIFO | 2-3 dias |
+| 2 | Recency boost no retrieval | ✅ Em produção | ❌ Só cosine similarity | 1 dia |
+| 3 | Knowledge update em write-time | ✅ Em produção | ❌ Memórias imutáveis | 1-2 semanas |
+| 4 | Expiração activa | ✅ Em produção | ❌ Memórias nunca expiram | 3-5 dias |
+| 5 | User profile dinâmico | ✅ Em produção | ❌ Não existe | 1 semana |
+| 6 | Cascade de busca por tier | ✅ Em produção | ❌ Redis é cache, não tier | 1 semana |
+
+Somando com os 5 gaps de estrutura da resposta anterior, tens **11 gaps concretos** entre o EVA-Mind e o Supermemory na camada de memória. O motor matemático (Krylov, Spectral, HMC) continua superior — mas sem estes 11 mecanismos em cima, é como ter um motor V12 num carro sem volante nem rodas.
+
+Queres que adicione tudo à planilha?

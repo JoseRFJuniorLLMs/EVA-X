@@ -166,9 +166,9 @@ func (r *REMConsolidator) ConsolidateAll(ctx context.Context) ([]*ConsolidationR
 // getHotEpisodicMemories busca memorias com alto activation score nas ultimas 24h
 func (r *REMConsolidator) getHotEpisodicMemories(ctx context.Context, patientID int64) ([]EpisodicMemory, error) {
 	query := `
-		MATCH (p:Person {id: $patientId})-[:HAS_MEMORY]->(m:Memory)
+		MATCH (p:Person {id: $patientId})-[:EXPERIENCED]->(m:Event)
 		WHERE m.type = 'episodic'
-		  AND m.created_at > datetime() - duration('P1D')
+		  AND m.timestamp > datetime() - duration('P1D')
 		WITH m, COALESCE(m.activation_score, 1.0) AS score
 		ORDER BY score DESC
 		LIMIT 200
@@ -313,13 +313,13 @@ func (r *REMConsolidator) createSemanticNode(ctx context.Context, patientID int6
 			label: $label,
 			member_count: $memberCount,
 			abstraction_level: $abstractionLevel,
-			created_at: datetime(),
+			timestamp: datetime(),
 			source: 'rem_consolidation'
 		})
 		CREATE (p)-[:HAS_SEMANTIC]->(s)
 		WITH s
 		UNWIND $exemplarIds AS eid
-		MATCH (m:Memory) WHERE toString(id(m)) = eid
+		MATCH (m:Event) WHERE toString(id(m)) = eid
 		CREATE (s)-[:ABSTRACTED_FROM]->(m)
 		RETURN toString(id(s)) AS newId
 	`
@@ -350,10 +350,10 @@ func (r *REMConsolidator) pruneRedundantMemories(ctx context.Context, comm []Epi
 
 		// Marcar como consolidada (nao deletar fisicamente, soft-delete)
 		query := `
-			MATCH (m:Memory) WHERE toString(id(m)) = $memId
-			SET m.consolidated = true,
-			    m.consolidated_at = datetime(),
-			    m.type = 'consolidated_episodic'
+		MATCH (m:Event) WHERE toString(id(m)) = $memId
+		SET m.consolidated = true,
+		    m.consolidated_at = datetime(),
+		    m.type = 'consolidated_episodic'
 		`
 		_, err := r.neo4j.ExecuteWrite(ctx, query, map[string]interface{}{
 			"memId": mem.ID,
@@ -369,8 +369,8 @@ func (r *REMConsolidator) pruneRedundantMemories(ctx context.Context, comm []Epi
 // getActivePatientIDs retorna IDs de pacientes com atividade recente
 func (r *REMConsolidator) getActivePatientIDs(ctx context.Context) ([]int64, error) {
 	query := `
-		MATCH (p:Person)-[:HAS_MEMORY]->(m:Memory)
-		WHERE m.created_at > datetime() - duration('P1D')
+		MATCH (p:Person)-[:EXPERIENCED]->(m:Event)
+		WHERE m.timestamp > datetime() - duration('P1D')
 		RETURN DISTINCT p.id AS patientId
 	`
 

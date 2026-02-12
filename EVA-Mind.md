@@ -1,21 +1,32 @@
 # EVA-Mind
 
-**Assistente de Saúde Mental para Idosos com Arquitetura Swarm**
+**Universal Digital Guardian**
 
-Voice-first | Lacanian Psychoanalysis | Gurdjieff Enneagram | Multi-Agent Swarm
+*Deep Mind (Krylov/Lacan) + Digital Memory (Supermemory)*
+
+Voice-first | Lacanian Psychoanalysis | Gurdjieff Enneagram | Multi-Agent Swarm | Universal Memory
 
 ---
 
 ## O que é
 
-EVA-Mind é um sistema de IA conversacional para cuidado de idosos que combina:
+EVA-Mind é um sistema de IA conversacional e guardião digital que evoluiu de um assistente para idosos para um **Sistema Universal** (Crianças, Adultos, Idosos). Ele combina:
 
-- Conversa por voz em tempo real (Gemini 2.5 Flash via WebSocket)
-- Psicoanálise computacional Lacaniana (desejo vs demanda, transferência, significantes)
-- Personalidade adaptativa por Enneagram de Gurdjieff (9 tipos)
-- Avaliações clínicas padronizadas (PHQ-9, GAD-7, C-SSRS)
-- Memória tripla: PostgreSQL (episódica) + Neo4j (causal) + Qdrant (semântica)
-- 104 ferramentas organizadas em 8 Swarm Agents independentes
+- **Deep Mind Cognitiva:**
+    - Conversa por voz em tempo real (Gemini 2.5 Flash via WebSocket)
+    - Psicoanálise computacional Lacaniana (desejo vs demanda, transferência)
+    - Personalidade adaptativa por Enneagram de Gurdjieff
+    - Motor de Memória Krylov (subespaços matemáticos)
+    - Predição de Trajetória HMC
+
+- **Digital Memory Omnipresente (via integração Supermemory):**
+    - Captura de vida digital (Browser Extension, Notion, Drive)
+    - Servidor MCP para integração com IDEs e Agentes
+    - Camada Multi-LLM (Anthropic, OpenAI, Google)
+
+- **Dual Mode:**
+    - **Modo Pessoal:** Gestão de conhecimento, produtividade, captura de dados.
+    - **Modo Clínico:** Avaliações de saúde (PHQ-9, GAD-7), monitoramento ético, alertas de crise.
 
 ---
 

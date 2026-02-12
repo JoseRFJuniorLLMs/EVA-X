@@ -23,24 +23,24 @@ type SynapticPruning struct {
 
 // PruningResult resultado de um ciclo de poda
 type PruningResult struct {
-	CycleTime        time.Time `json:"cycle_time"`
-	TotalEdges       int       `json:"total_edges"`
-	WeakEdges        int       `json:"weak_edges"`
-	PrunedEdges      int       `json:"pruned_edges"`
-	ReinforcedEdges  int       `json:"reinforced_edges"`
-	PruningRate      float64   `json:"pruning_rate_percent"`
-	Duration         string    `json:"duration"`
+	CycleTime       time.Time `json:"cycle_time"`
+	TotalEdges      int       `json:"total_edges"`
+	WeakEdges       int       `json:"weak_edges"`
+	PrunedEdges     int       `json:"pruned_edges"`
+	ReinforcedEdges int       `json:"reinforced_edges"`
+	PruningRate     float64   `json:"pruning_rate_percent"`
+	Duration        string    `json:"duration"`
 }
 
 // EdgeInfo informacao de uma aresta para analise de poda
 type EdgeInfo struct {
-	ElementID      string
-	SourceID       string
-	TargetID       string
-	Weight         float64
+	ElementID       string
+	SourceID        string
+	TargetID        string
+	Weight          float64
 	ActivationCount int
-	LastActivation time.Time
-	AgeDays        int
+	LastActivation  time.Time
+	AgeDays         int
 }
 
 // NewSynapticPruning cria um novo motor de poda sinaptica
@@ -106,7 +106,7 @@ func (s *SynapticPruning) ageUnactivatedEdges(ctx context.Context, patientID int
 	}
 
 	query := `
-		MATCH (p:Person {id: $patientId})-[*1..2]-(n1)-[r:CO_ACTIVATED|RELATES_TO|ASSOCIATED_WITH]-(n2)
+		MATCH (p:Person {id: $patientId})-[:EXPERIENCED|ASSOCIATED_WITH*1..2]-(n1)-[r:CO_ACTIVATED|RELATED_TO|ASSOCIATED_WITH]-(n2)
 		WHERE n1 <> p AND n2 <> p
 		  AND (r.last_activation IS NULL OR r.last_activation < datetime() - duration('P1D'))
 		SET r.age = COALESCE(r.age, 0) + 1
@@ -170,7 +170,7 @@ func (s *SynapticPruning) pruneWeakEdges(ctx context.Context, patientID int64) (
 	}
 
 	query := `
-		MATCH (p:Person {id: $patientId})-[*1..2]-(n1)-[r:CO_ACTIVATED]-(n2)
+		MATCH (p:Person {id: $patientId})-[:EXPERIENCED|ASSOCIATED_WITH*1..2]-(n1)-[r:CO_ACTIVATED]-(n2)
 		WHERE n1 <> p AND n2 <> p
 		  AND COALESCE(r.age, 0) > $maxAge
 		  AND COALESCE(r.activation_count, 0) < $minAct

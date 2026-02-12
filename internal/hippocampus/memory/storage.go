@@ -34,6 +34,8 @@ type Memory struct {
 	Topics        []string  `json:"topics"`
 	SessionID     string    `json:"session_id,omitempty"`
 	CallHistoryID *int64    `json:"call_history_id,omitempty"`
+	EventDate     time.Time `json:"event_date,omitempty"` // Data real do evento
+	IsAtomic      bool      `json:"is_atomic"`            // Flag de atomicidade
 }
 
 // MemoryStore gerencia o armazenamento de memórias
@@ -50,8 +52,8 @@ func NewMemoryStore(db *sql.DB) *MemoryStore {
 func (m *MemoryStore) Store(ctx context.Context, memory *Memory) error {
 	query := `
 		INSERT INTO episodic_memories 
-		(idoso_id, speaker, content, embedding, emotion, importance, topics, session_id, call_history_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		(idoso_id, speaker, content, embedding, emotion, importance, topics, session_id, call_history_id, event_date, is_atomic)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING id, timestamp
 	`
 
@@ -69,6 +71,8 @@ func (m *MemoryStore) Store(ctx context.Context, memory *Memory) error {
 		pqArray(memory.Topics),
 		memory.SessionID,
 		memory.CallHistoryID,
+		memory.EventDate,
+		memory.IsAtomic,
 	).Scan(&memory.ID, &memory.Timestamp)
 
 	return err
@@ -78,7 +82,7 @@ func (m *MemoryStore) Store(ctx context.Context, memory *Memory) error {
 func (m *MemoryStore) GetByID(ctx context.Context, id int64) (*Memory, error) {
 	query := `
 		SELECT id, idoso_id, timestamp, speaker, content, emotion, 
-		       importance, topics, session_id, call_history_id
+		       importance, topics, session_id, call_history_id, event_date, is_atomic
 		FROM episodic_memories
 		WHERE id = $1
 	`
@@ -96,7 +100,7 @@ func (m *MemoryStore) GetByID(ctx context.Context, id int64) (*Memory, error) {
 		&memory.Importance,
 		&topics,
 		&memory.SessionID,
-		&memory.CallHistoryID,
+		&memory.IsAtomic,
 	)
 
 	if err != nil {
@@ -113,7 +117,7 @@ func (m *MemoryStore) GetByID(ctx context.Context, id int64) (*Memory, error) {
 func (m *MemoryStore) GetRecent(ctx context.Context, idosoID int64, limit int) ([]*Memory, error) {
 	query := `
 		SELECT id, idoso_id, timestamp, speaker, content, emotion, 
-		       importance, topics, session_id
+		       importance, topics, session_id, call_history_id, event_date, is_atomic
 		FROM episodic_memories
 		WHERE idoso_id = $1
 		ORDER BY timestamp DESC
@@ -315,10 +319,11 @@ func (m *MemoryStore) scanMemories(rows *sql.Rows) ([]*Memory, error) {
 			&memory.Timestamp,
 			&memory.Speaker,
 			&memory.Content,
-			&memory.Emotion,
-			&memory.Importance,
-			&topics,
+			&memory.Topics,
 			&memory.SessionID,
+			&memory.CallHistoryID,
+			&memory.EventDate,
+			&memory.IsAtomic,
 		)
 
 		if err != nil {

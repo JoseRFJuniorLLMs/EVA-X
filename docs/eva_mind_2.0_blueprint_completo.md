@@ -1,5 +1,9 @@
 # EVA-Mind 2.0: A Planta Digital — Arquitetura Fractal Completa
 
+> [!NOTE]
+> **Status:** Este documento definiu a base teórica ("Blue Sky Vision") para o EVA 2.0.
+> Para o roadmap de implementação atual e unificado (Universal EVA), consulte `eva_universal_roadmap.md` e `EVA-Mind.md`.
+
 **Por: Junior (Criador do Projeto EVA)**  
 **Inspirado por: "The Algorithmic Beauty of Plants" (Lindenmayer) + Neurociência Fractal**
 

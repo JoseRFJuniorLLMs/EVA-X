@@ -181,7 +181,7 @@ func TestCreateSampleData(t *testing.T) {
 		Topics:     []string{"teste", "memoria"},
 	}
 
-	err = store.StoreCausalMemory(context.Background(), testMemory)
+	err = store.AddEpisodicMemory(context.Background(), testMemory)
 	if err != nil {
 		t.Fatalf("Erro ao salvar memória: %v", err)
 	}
