@@ -100,3 +100,9 @@ func (c *Neo4jClient) ExecuteRead(ctx context.Context, cypher string, params map
 	log.Printf("🔍 [NEO4J] Leitura concluída: Query=\"%s\", Records=%d", preview, len(records))
 	return records, nil
 }
+func (c *Neo4jClient) GetDriver() neo4j.DriverWithContext {
+	if c == nil {
+		return nil
+	}
+	return c.driver
+}

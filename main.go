@@ -4,17 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
-	"log"
-	"net/http"
-	"os"
-	"regexp"
-	"strconv"
-	"strings"
-	"sync"
-	"sync/atomic"
-	"time"
-
 	"eva-mind/internal/brainstem/auth"
 	"eva-mind/internal/brainstem/config"
 	"eva-mind/internal/brainstem/database"
@@ -31,6 +20,7 @@ import (
 	"eva-mind/internal/cortex/transnar"
 	"eva-mind/internal/hippocampus/memory"
 	"eva-mind/internal/hippocampus/stories"
+	"eva-mind/internal/memory/ingestion"
 	"eva-mind/internal/motor/calendar"
 	"eva-mind/internal/motor/docs"
 	"eva-mind/internal/motor/drive"
@@ -42,16 +32,26 @@ import (
 	"eva-mind/internal/motor/youtube"
 	"eva-mind/internal/security"
 	"eva-mind/pkg/types"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	// 🧠 Krylov Memory Compression
 	krylovmem "eva-mind/internal/memory"
 
 	// 🧠 Cognitive Engines v2
-	"eva-mind/internal/memory/consolidation"
-	"eva-mind/internal/cortex/spectral"
 	"eva-mind/internal/cortex/attention"
 	"eva-mind/internal/cortex/consciousness"
 	"eva-mind/internal/cortex/learning"
+	"eva-mind/internal/cortex/spectral"
+	"eva-mind/internal/memory/consolidation"
 
 	// 🐝 Swarm Architecture
 	"eva-mind/internal/swarm"
@@ -89,6 +89,7 @@ type SignalingServer struct {
 	retrievalService   *memory.RetrievalService
 	metadataAnalyzer   *memory.MetadataAnalyzer
 	personalityService *personality.PersonalityService
+	ingestionPipeline  *ingestion.IngestionPipeline // NEW: Atomic Fact Extraction
 
 	// FZPN Components
 	neo4jClient       *graph.Neo4jClient
@@ -307,7 +308,8 @@ func NewSignalingServer(
 		storiesRepo:       storiesRepo,
 		zetaRouter:        zetaRouter,
 		// Fix 2
-		qdrantClient: qdrant,
+		qdrantClient:      qdrant,
+		ingestionPipeline: ingestion.NewIngestionPipeline(cfg),
 	}
 
 	// Initialize Unified Retrieval (Lacanian RSI Engine)
@@ -324,6 +326,7 @@ func NewSignalingServer(
 		zetaRouter,
 		pushService,
 		embeddingService,
+		server.ingestionPipeline,
 	)
 
 	// 🧠 Initialize Krylov Memory Compression (1536D -> 64D)
@@ -1203,7 +1206,7 @@ func (s *SignalingServer) setupGeminiSession(client *PCMClient, voiceName string
 				}
 			} else {
 				// Save Assistant Memory
-				go s.brain.SaveEpisodicMemory(client.IdosoID, role, text)
+				go s.brain.SaveEpisodicMemory(client.IdosoID, role, text, time.Now(), false)
 			}
 		},
 	)
@@ -2168,17 +2171,17 @@ func dashboardHandler(w http.ResponseWriter, r *http.Request) {
 			"port":       8091,
 		},
 		"users": map[string]interface{}{
-			"total":         totalUsers,
-			"active_7d":     activeUsers,
-			"active_today":  usersToday,
-			"online_now":    activeClients,
+			"total":        totalUsers,
+			"active_7d":    activeUsers,
+			"active_today": usersToday,
+			"online_now":   activeClients,
 		},
 		"memory": map[string]interface{}{
-			"total_entries":  totalMemories,
-			"episodic":       episodicMemories,
-			"last_24h":       recentMemories,
-			"avg_per_user":   fmt.Sprintf("%.1f", avgPerUser),
-			"signifiers":     totalSignifiers,
+			"total_entries": totalMemories,
+			"episodic":      episodicMemories,
+			"last_24h":      recentMemories,
+			"avg_per_user":  fmt.Sprintf("%.1f", avgPerUser),
+			"signifiers":    totalSignifiers,
 		},
 		"ai": map[string]interface{}{
 			"personas":       totalPersonas,
@@ -2189,21 +2192,21 @@ func dashboardHandler(w http.ResponseWriter, r *http.Request) {
 			"legacy_active":  legacyEnabled,
 		},
 		"engines": map[string]interface{}{
-			"krylov":               "1536D → 64D (97% recall)",
-			"hierarchical_krylov":  "4 levels: 16D/64D/256D/1024D",
-			"adaptive_krylov":      "32D ↔ 256D neuroplasticity",
-			"spectral":             "Graph Laplacian + k-means",
-			"synaptogenesis":       "Fractal auto-organization",
-			"rem_consolidation":    "Nightly episodic → semantic",
-			"synaptic_pruning":     "20% weak edges/cycle",
-			"wavelet_attention":    "4-scale temporal attention",
-			"global_workspace":     "Baars consciousness theory",
-			"meta_learner":         "Adaptive strategy selection",
-			"dynamic_enneagram":    "Probabilistic personality",
-			"cellular_swarm":       "Agent division/retraction",
-			"hmc":                  "88% acceptance rate",
-			"fzpn":                 "L1 Neo4j + L2 Redis + L3 Qdrant",
-			"transnar":             "Desire inference active",
+			"krylov":              "1536D → 64D (97% recall)",
+			"hierarchical_krylov": "4 levels: 16D/64D/256D/1024D",
+			"adaptive_krylov":     "32D ↔ 256D neuroplasticity",
+			"spectral":            "Graph Laplacian + k-means",
+			"synaptogenesis":      "Fractal auto-organization",
+			"rem_consolidation":   "Nightly episodic → semantic",
+			"synaptic_pruning":    "20% weak edges/cycle",
+			"wavelet_attention":   "4-scale temporal attention",
+			"global_workspace":    "Baars consciousness theory",
+			"meta_learner":        "Adaptive strategy selection",
+			"dynamic_enneagram":   "Probabilistic personality",
+			"cellular_swarm":      "Agent division/retraction",
+			"hmc":                 "88% acceptance rate",
+			"fzpn":                "L1 Neo4j + L2 Redis + L3 Qdrant",
+			"transnar":            "Desire inference active",
 		},
 		"timestamp": time.Now().Format(time.RFC3339),
 	}

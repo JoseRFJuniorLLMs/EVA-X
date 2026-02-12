@@ -22,8 +22,8 @@ func NewGraphStore(client *graph.Neo4jClient, cfg *config.Config) *GraphStore {
 	}
 }
 
-// StoreCausalMemory salva uma memória "explodida" em nós
-func (g *GraphStore) StoreCausalMemory(ctx context.Context, memory *Memory) error {
+// AddEpisodicMemory salva uma memória "explodida" em nós com metadados temporais
+func (g *GraphStore) AddEpisodicMemory(ctx context.Context, memory *Memory) error {
 	// 1. Criar nó do Evento Base
 	query := `
 		MERGE (p:Person {id: $idosoId})
@@ -31,29 +31,35 @@ func (g *GraphStore) StoreCausalMemory(ctx context.Context, memory *Memory) erro
 			id: $id,
 			content: $content,
 			timestamp: datetime($timestamp),
+			event_date: datetime($eventDate),
+			is_atomic: $isAtomic,
 			speaker: $speaker,
 			emotion: $emotion,
 			importance: $importance,
-			sessionId: $sessionId
+			sessionId: $sessionId,
+			type: 'episodic',
+			activation_score: 1.0
 		})
 		CREATE (p)-[:EXPERIENCED]->(e)
 	`
 
 	params := map[string]interface{}{
-		"idosoId": memory.IdosoID,
-		"id":      memory.ID, // Assumindo que ID já foi gerado ou usamos UUID? SQL gera ID. Aqui talvez precisemos gerar.
-		// Se memory.ID for 0, precisamos gerar um UUID.
+		"idosoId":    memory.IdosoID,
 		"content":    memory.Content,
 		"timestamp":  memory.Timestamp.Format(time.RFC3339),
+		"eventDate":  memory.EventDate.Format(time.RFC3339),
+		"isAtomic":   memory.IsAtomic,
 		"speaker":    memory.Speaker,
 		"emotion":    memory.Emotion,
 		"importance": memory.Importance,
 		"sessionId":  memory.SessionID,
 	}
 
-	// Se ID for zero (novo), gerar UUID ou usar timestamp
+	// Se memory.ID for zero (novo), gerar UUID ou usar timestamp
 	if memory.ID == 0 {
 		params["id"] = fmt.Sprintf("%d-%d", memory.IdosoID, time.Now().UnixNano())
+	} else {
+		params["id"] = fmt.Sprintf("%d", memory.ID)
 	}
 
 	_, err := g.client.ExecuteWrite(ctx, query, params)

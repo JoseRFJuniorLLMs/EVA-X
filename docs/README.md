@@ -1,19 +1,20 @@
 # EVA-Mind: Documentacao Tecnica
 
-**Stack:** Go (eva-ai) + FastAPI (eva-backend) + Qdrant + PostgreSQL + Neo4j
+**Stack:** Go (eva-ai) + Python (eva-backend/Supermemory) + Qdrant + PostgreSQL + Neo4j + Browser Ext
 **Servidor:** 104.248.219.200
 
 ---
 
 ## Indice
 
-### Arquitetura de Memoria
+### Arquitetura de Memoria & Roadmap
 
 | Documento | Conteudo |
 |-----------|----------|
-| `maldição_dimensionalidade_eva.md` | Evolucao completa da memoria EVA (7 capitulos). De SQL ingenuo ate Subespacos de Krylov. Performance: 10s -> 50us (200.000x speedup). |
-| `rank1_update_mathematics.md` | Fundamentos matematicos: Rank-1 Updates, Gram-Schmidt Modificado, O(nk) vs O(n^3), garantias teoricas, Recall@10 = 97%. |
-| `integration_guide_sliding_window.md` | Guia de integracao Sliding Window Krylov no pipeline EVA. Arquitetura antes/depois, reducao de latencia. |
+| `eva_universal_roadmap.md` | **[NOVO]** Roadmap do EVA Universal. Integração Deep Mind + Digital Memory. |
+| `maldição_dimensionalidade_eva.md` | Evolucao completa da memoria EVA (7 capitulos). De SQL ingenuo ate Subespacos de Krylov. |
+| `rank1_update_mathematics.md` | Fundamentos matematicos: Rank-1 Updates, Gram-Schmidt Modificado. |
+| `integration_guide_sliding_window.md` | Guia de integracao Sliding Window Krylov no pipeline EVA. |
 
 ### Codigo de Referencia
 

@@ -34,13 +34,29 @@ func (s *Service) ProcessUserSpeech(ctx context.Context, idosoID int64, text str
 		go s.unifiedRetrieval.Prime(ctx, idosoID, text)
 	}
 
-	// Save memory (Fire and forget)
-	go s.SaveEpisodicMemory(idosoID, "user", text)
+	// 🧠 ATOMIC INGESTION UPGRADE
+	if s.ingestionPipeline != nil && len(text) > 30 {
+		go func() {
+			facts, err := s.ingestionPipeline.ProcessText(ctx, text)
+			if err != nil {
+				log.Printf("⚠️ [Ingestion] Atomic extraction failed, falling back to raw: %v", err)
+				s.SaveEpisodicMemory(idosoID, "user", text, time.Now(), false)
+				return
+			}
+
+			for _, fact := range facts {
+				s.SaveEpisodicMemory(idosoID, "user", fact.ResolvedText, fact.EventDate, true)
+			}
+		}()
+	} else {
+		// Save memory (Fire and forget) - Raw
+		go s.SaveEpisodicMemory(idosoID, "user", text, time.Now(), false)
+	}
 }
 
 // SaveEpisodicMemory saves memory to Postgres, Qdrant, and Neo4j
 // AUDIT FIX: 2026-01-27 - Agora salva em TODOS os datastores
-func (s *Service) SaveEpisodicMemory(idosoID int64, role, content string) {
+func (s *Service) SaveEpisodicMemory(idosoID int64, role, content string, eventDate time.Time, isAtomic bool) {
 	ctx := context.Background()
 
 	log.Printf("🧠 [MEMORY] Iniciando salvamento - Idoso: %d, Role: %s, Tamanho: %d chars", idosoID, role, len(content))
@@ -170,7 +186,7 @@ func (s *Service) SaveEpisodicMemory(idosoID int64, role, content string) {
 				Topics:     extractKeywords(content),
 			}
 
-			if err := s.graphStore.StoreCausalMemory(neo4jCtx, graphMemory); err != nil {
+			if err := s.graphStore.AddEpisodicMemory(neo4jCtx, graphMemory); err != nil {
 				log.Printf("⚠️ [NEO4J] Erro ao salvar no grafo: %v", err)
 			} else {
 				log.Printf("✅ [NEO4J] Memory %d salva no grafo", memoryID)

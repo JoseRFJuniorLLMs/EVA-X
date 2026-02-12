@@ -10,6 +10,7 @@ import (
 	ps "eva-mind/internal/cortex/personality"
 	"eva-mind/internal/hippocampus/knowledge"
 	"eva-mind/internal/hippocampus/memory"
+	"eva-mind/internal/memory/ingestion"
 	"fmt"
 )
 
@@ -18,8 +19,8 @@ import (
 type Service struct {
 	db                 *sql.DB
 	qdrantClient       *vector.QdrantClient
-	neo4jClient        *graph.Neo4jClient  // AUDIT FIX: Adicionado para salvar no Neo4j
-	graphStore         *memory.GraphStore  // AUDIT FIX: Store para Neo4j
+	neo4jClient        *graph.Neo4jClient // AUDIT FIX: Adicionado para salvar no Neo4j
+	graphStore         *memory.GraphStore // AUDIT FIX: Store para Neo4j
 	fdpnEngine         *lacan.FDPNEngine
 	personalityService *ps.PersonalityService
 	zetaRouter         *ps.ZetaRouter
@@ -28,6 +29,7 @@ type Service struct {
 
 	knowledgeEmbedder *knowledge.EmbeddingService
 	unifiedRetrieval  *lacan.UnifiedRetrieval
+	ingestionPipeline *ingestion.IngestionPipeline
 }
 
 // NewService creates a new Brain service
@@ -41,6 +43,7 @@ func NewService(
 	zeta *ps.ZetaRouter,
 	push *push.FirebaseService,
 	embedder *memory.EmbeddingService,
+	ingestionPipeline *ingestion.IngestionPipeline,
 ) *Service {
 	var graphStore *memory.GraphStore
 	if neo4j != nil {
@@ -50,13 +53,14 @@ func NewService(
 	return &Service{
 		db:                 db,
 		qdrantClient:       qdrant,
-		neo4jClient:        neo4j,       // AUDIT FIX
-		graphStore:         graphStore,  // AUDIT FIX
+		neo4jClient:        neo4j,      // AUDIT FIX
+		graphStore:         graphStore, // AUDIT FIX
 		personalityService: personalitySvc,
 		zetaRouter:         zeta,
 		pushService:        push,
 		embeddingService:   embedder,
 		unifiedRetrieval:   unified,
+		ingestionPipeline:  ingestionPipeline,
 	}
 }
 

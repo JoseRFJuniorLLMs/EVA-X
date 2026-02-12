@@ -20,24 +20,25 @@ import (
 	"eva-mind/internal/brainstem/infrastructure/redis"
 	"eva-mind/internal/brainstem/infrastructure/vector"
 	"eva-mind/internal/brainstem/infrastructure/workerpool"
-	"eva-mind/internal/cortex/gemini"
-	"eva-mind/internal/cortex/personality"
-	"eva-mind/internal/cortex/voice"
 	"eva-mind/internal/cortex/alert"
 	"eva-mind/internal/cortex/brain"
-	"eva-mind/internal/cortex/ethics"
 	"eva-mind/internal/cortex/cognitive"
+	"eva-mind/internal/cortex/ethics"
+	"eva-mind/internal/cortex/gemini"
 	"eva-mind/internal/cortex/lacan"
+	"eva-mind/internal/cortex/personality"
 	"eva-mind/internal/cortex/prediction"
 	"eva-mind/internal/cortex/scales"
-	"eva-mind/internal/persona"
+	"eva-mind/internal/cortex/voice"
 	"eva-mind/internal/hippocampus/knowledge"
 	"eva-mind/internal/hippocampus/memory"
 	"eva-mind/internal/hippocampus/memory/superhuman"
 	"eva-mind/internal/hippocampus/stories"
 	"eva-mind/internal/hippocampus/zettelkasten"
+	"eva-mind/internal/memory/ingestion"
 	"eva-mind/internal/motor/actions"
 	"eva-mind/internal/motor/email"
+	"eva-mind/internal/persona"
 	"eva-mind/internal/tools"
 	"eva-mind/pkg/types"
 
@@ -122,12 +123,12 @@ type SignalingServer struct {
 	zetaRouter         *personality.ZetaRouter
 	storiesRepo        *stories.Repository
 	personalityService *personality.PersonalityService
-	cortex             *gemini.ToolsClient      // ✅ Phase 10 Cortex
-	personaManager     *persona.PersonaManager  // ✅ Multi-Persona System
-	prosodyAnalyzer    *voice.ProsodyAnalyzer   // ✅ Voice Biomarkers
-	escalationService  *alert.EscalationService // ✅ Alert Escalation (SMS/WhatsApp/Call)
+	cortex             *gemini.ToolsClient           // ✅ Phase 10 Cortex
+	personaManager     *persona.PersonaManager       // ✅ Multi-Persona System
+	prosodyAnalyzer    *voice.ProsodyAnalyzer        // ✅ Voice Biomarkers
+	escalationService  *alert.EscalationService      // ✅ Alert Escalation (SMS/WhatsApp/Call)
 	ethicsBoundary     *ethics.EthicalBoundaryEngine // ✅ Ethics Monitoring
-	brainService       *brain.Service           // ✅ Memory Service (Postgres + Qdrant + Neo4j)
+	brainService       *brain.Service                // ✅ Memory Service (Postgres + Qdrant + Neo4j)
 
 	// 🧠 NOVOS: Módulos de Psicologia e Personalidade
 	cognitiveOrchestrator *cognitive.CognitiveLoadOrchestrator // ✅ Carga Cognitiva e Ruminação
@@ -140,7 +141,7 @@ type SignalingServer struct {
 	fdpnEngine            *lacan.FDPNEngine                    // ✅ Grafo do Desejo
 
 	// 📚 Zettelkasten (Obsidian-like Knowledge Management)
-	zettelService         *zettelkasten.ZettelService          // ✅ Memória Externa Viva
+	zettelService *zettelkasten.ZettelService // ✅ Memória Externa Viva
 
 	// Services for Memory Saver
 	qdrantClient     *vector.QdrantClient
@@ -271,7 +272,8 @@ func NewSignalingServer(
 		server.personalityService,
 		server.zetaRouter,
 		server.pushService,
-		nil, // embedding service
+		server.embeddingService,
+		ingestion.NewIngestionPipeline(cfg),
 	)
 	log.Println("🧠 Signaling: BrainService initialized for Memory Storage (PG + Qdrant + Neo4j)")
 
@@ -319,7 +321,7 @@ func NewSignalingServer(
 	// 📚 ZETTELKASTEN (Obsidian-like Knowledge Management)
 	// ============================================================================
 	if neo4jClient != nil {
-		server.zettelService = zettelkasten.NewZettelService(db, neo4jClient)
+		server.zettelService = zettelkasten.NewZettelService(db, neo4jClient.GetDriver())
 		log.Println("📚 Signaling: ZettelService initialized (Memória Externa Viva)")
 	}
 
@@ -573,7 +575,6 @@ func (s *SignalingServer) handleControlMessage(conn *websocket.Conn, message []b
 
 		log.Printf("📞 Chamada manual iniciada para %s (ID: %d)", idoso.Nome, idoso.ID)
 		return session
-
 
 	case "hangup":
 		if currentSession != nil {
@@ -865,7 +866,7 @@ func (s *SignalingServer) handleGeminiResponse(session *WebSocketSession, respon
 
 			// ✅ NOVO: Salvar resposta EVA em Postgres + Qdrant + Neo4j
 			if s.brainService != nil {
-				go s.brainService.SaveEpisodicMemory(session.IdosoID, "assistant", aiText)
+				go s.brainService.SaveEpisodicMemory(session.IdosoID, "assistant", aiText, time.Now(), false)
 			}
 		}
 	}
@@ -1200,7 +1201,7 @@ func (s *SignalingServer) createZettelsFromConversation(idosoID int64, content s
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	zettels, err := s.zettelService.CreateFromConversation(ctx, idosoID, content)
+	zettels, err := s.zettelService.CreateFromConversation(ctx, idosoID, content, "dynamic-session")
 	if err != nil {
 		log.Printf("⚠️ [ZETTEL] Erro ao criar zettels: %v", err)
 		return
@@ -1208,7 +1209,7 @@ func (s *SignalingServer) createZettelsFromConversation(idosoID int64, content s
 
 	if len(zettels) > 0 {
 		for _, z := range zettels {
-			log.Printf("📚 [ZETTEL] Novo zettel criado: %s (tipo=%s, idoso=%d)", z.Title, z.Type, idosoID)
+			log.Printf("📚 [ZETTEL] Novo zettel criado: %s (tipo=%s, idoso=%d)", z.Title, z.ZettelType, idosoID)
 		}
 	}
 }
@@ -2008,16 +2009,16 @@ func extractTopics(text string) []string {
 
 	// Tópicos comuns de idosos
 	topicKeywords := map[string][]string{
-		"familia":    {"filh", "net", "esposa", "marido", "familia"},
-		"saude":      {"dor", "remedio", "medico", "doença", "hospital", "exame"},
-		"saudade":    {"saudade", "falta", "lembr", "morreu", "faleceu"},
-		"solidao":    {"sozinho", "solidão", "ninguem", "abandono"},
-		"medo":       {"medo", "receio", "preocupa", "ansied"},
-		"religiao":   {"deus", "jesus", "oração", "igreja", "fé"},
-		"morte":      {"mort", "partir", "fim", "enterr"},
-		"memoria":    {"lembro", "antigamente", "passado", "juventude"},
+		"familia":     {"filh", "net", "esposa", "marido", "familia"},
+		"saude":       {"dor", "remedio", "medico", "doença", "hospital", "exame"},
+		"saudade":     {"saudade", "falta", "lembr", "morreu", "faleceu"},
+		"solidao":     {"sozinho", "solidão", "ninguem", "abandono"},
+		"medo":        {"medo", "receio", "preocupa", "ansied"},
+		"religiao":    {"deus", "jesus", "oração", "igreja", "fé"},
+		"morte":       {"mort", "partir", "fim", "enterr"},
+		"memoria":     {"lembro", "antigamente", "passado", "juventude"},
 		"alimentacao": {"com", "almoç", "jant", "fome"},
-		"sono":       {"dorm", "sono", "insonia", "cansa"},
+		"sono":        {"dorm", "sono", "insonia", "cansa"},
 	}
 
 	for topic, keywords := range topicKeywords {

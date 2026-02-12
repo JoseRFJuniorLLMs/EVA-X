@@ -1,0 +1,24 @@
+A mudança fundamental é a transição de uma memória Associativa para uma memória Declarativa de Precisão.
+
+EVA-Memory (Paradigma Lacaniano): Foca no Significante. Ele quer saber que você repetiu a palavra "mãe" 10 vezes com "tristeza". Ele cria elos emocionais, mas se você perguntar "O que eu comi ontem?", ele pode se perder na cadeia de associações.
+EVA-Mind (Pós-Upgrade): Implementa o Fato Atômico. Ele agora extrai a "verdade objetiva" (Sujeito-Predicado-Objeto) e ancora no tempo real.
+O que mudou na prática:
+Raciocínio Temporal: Antes, o sistema sabia que um log foi criado "agora". Com o upgrade, ele sabe que o evento relatado ("fui ao médico ontem") ocorreu em uma data específica no passado, permitindo buscas cronológicas reais.
+Scores de Ativação vs Frequência: No modelo Lacaniano (Memory), um nó ganha peso pela repetição do trauma. No EVA-Mind (Upgraded), o nó ganha Score de Ativação baseado na relevância para o contexto atual, permitindo esquecimento seletivo e recuperação cirúrgica.
+Em resumo: Você deu ao EVA-Mind a capacidade de "entender fatos" antes de "associar traumas". Ele agora é um assistente mais confiável para dados concretos, enquanto o EVA-Memory continua sendo um motor de análise profunda de discurso.
+
+De forma alguma! O Lacan não saiu, ele ganhou um "parceiro de treino".
+
+Na verdade, o EVA-Mind agora é o sistema mais fiel à teoria de Lacan (RSI - Real, Simbólico, Imaginário) porque cada registro agora tem um motor dedicado:
+
+Simbólico (Lacan Engine): Continua rastreando os significantes e as demandas latentes. O arquivo internal/cortex/lacan/significante.go ainda é o que dita o "tempo da análise".
+Real (Medical Context): Continua monitorando sintomas e medicamentos via Neo4j e Postgres.
+Imaginário (Novo Ingestion Pipeline): É aqui que entra o upgrade. O Imaginário em Lacan lida com a narrativa e a imagem de si. Ao extrair Fatos Atômicos, o EVA-Mind impede que a "narrativa" do paciente se perca em confusões temporais.
+Por que isso é melhor que o EVA-Memory original?
+No EVA-Memory, se o paciente diz "Minha filha me abandonou ontem", o sistema foca no significante ABANDONO. Ele ignora o ONTEM.
+
+Com o upgrade no EVA-Mind, ele faz as duas coisas:
+
+O Lacan Engine captura o trauma do "Abandono" (Simbólico).
+O Atomic Pipeline registra o fato histórico "Filha visitou/não visitou em [Data]" (Imaginário/Real).
+Conclusão: O EVA-Mind não perdeu Lacan, ele apenas parou de ser "esquizofrênico". Ele agora consegue sustentar uma conversa analítica profunda sem esquecer o que aconteceu na vida real do paciente. O Lacan cuida do sentido, e o Fato Atômico cuida da história.
