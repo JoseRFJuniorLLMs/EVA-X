@@ -1,0 +1,5 @@
+Segurança (TLS, multi-tenancy)
+Gestão (smart forgetting, recency bias)
+Ingestão (fatos atômicos, dual timestamp)
+Conectividade (MCP, extensão)
+Produção (CI/CD, monitoramento, clientes)

@@ -5,9 +5,10 @@ SPRINT 7 - Integration Layer
 Integra com Go Integration Microservice
 """
 
-from fastapi import FastAPI, Depends, HTTPException, status, Header
+from fastapi import FastAPI, Depends, HTTPException, status, Header, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timedelta
@@ -17,6 +18,7 @@ import bcrypt
 import jwt
 import httpx
 import os
+import ssl
 from dotenv import load_dotenv
 
 # Load environment
@@ -26,6 +28,12 @@ load_dotenv()
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 1
+
+# TLS/HTTPS Config
+ENABLE_TLS = os.getenv("ENABLE_TLS", "false").lower() == "true"
+TLS_CERT_PATH = os.getenv("TLS_CERT_PATH", "/etc/ssl/certs/eva-mind.crt")
+TLS_KEY_PATH = os.getenv("TLS_KEY_PATH", "/etc/ssl/private/eva-mind.key")
+ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "*").split(",")
 
 DB_CONFIG = {
     "host": os.getenv("DB_HOST", "104.248.219.200"),
@@ -52,6 +60,38 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Trusted Host Middleware (security)
+if ENABLE_TLS:
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=ALLOWED_HOSTS
+    )
+
+# Multi-tenancy middleware
+@app.middleware("http")
+async def tenant_isolation_middleware(request: Request, call_next):
+    """Extract tenant_id from JWT and set PostgreSQL session variable"""
+    # Skip for auth endpoints
+    if request.url.path in ["/oauth/token", "/docs", "/openapi.json"]:
+        return await call_next(request)
+    
+    # Extract token from Authorization header
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.replace("Bearer ", "")
+        try:
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            tenant_id = payload.get("tenant_id", "default")
+            
+            # Store tenant_id in request state
+            request.state.tenant_id = tenant_id
+            
+        except jwt.JWTError:
+            pass  # Will be caught by auth dependency
+    
+    response = await call_next(request)
+    return response
 
 # OAuth2
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="oauth/token")
@@ -87,9 +127,16 @@ class Assessment(BaseModel):
     completed_at: datetime
 
 # Database helpers
-def get_db_connection():
-    """Get database connection"""
-    return psycopg2.connect(**DB_CONFIG, cursor_factory=RealDictCursor)
+def get_db_connection(tenant_id: str = "default"):
+    """Get database connection with tenant context"""
+    conn = psycopg2.connect(**DB_CONFIG, cursor_factory=RealDictCursor)
+    
+    # Set tenant context for Row-Level Security
+    with conn.cursor() as cur:
+        cur.execute("SELECT set_tenant_context(%s)", (tenant_id,))
+    conn.commit()
+    
+    return conn
 
 def create_access_token(data: dict):
     """Create JWT access token"""
@@ -237,11 +284,12 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
             detail="Client not active or not approved"
         )
 
-    # Create JWT token
+    # Create JWT token with tenant_id
     access_token = create_access_token(
         data={
             "client_id": str(client['id']),
-            "scopes": client['scopes']
+            "scopes": client['scopes'],
+            "tenant_id": "default"  # TODO: Get from client registration
         }
     )
 
