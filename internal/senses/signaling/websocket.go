@@ -88,6 +88,12 @@ type WebSocketSession struct {
 	// ✅ Executive Decision (Stateful per session)
 	ExecutiveDecision *attention.ExecutiveDecision
 	ExecutiveState    *attmodels.ExecutiveState
+
+	// 🚀 IMPROVEMENT 3: Audio analysis context from AudioAnalysisService
+	audioEmotion   string
+	audioUrgency   string
+	audioIntensity int
+	audioContextMu sync.RWMutex
 }
 
 // ✅ NOVO MÉTODO: Thread-safe setter para o GraphReasoning usar
@@ -110,6 +116,38 @@ func (s *WebSocketSession) ConsumePendingInsight() string {
 	insight := s.pendingInsight
 	s.pendingInsight = ""
 	return insight
+}
+
+// 🚀 IMPROVEMENT 3: Set audio context from AudioAnalysis results
+func (s *WebSocketSession) SetAudioContext(emotion, urgency string, intensity int) {
+	s.audioContextMu.Lock()
+	defer s.audioContextMu.Unlock()
+	s.audioEmotion = emotion
+	s.audioUrgency = urgency
+	s.audioIntensity = intensity
+	log.Printf("🎤 [AUDIO CONTEXT] Set for session %s: emotion=%s, urgency=%s, intensity=%d",
+		s.ID, emotion, urgency, intensity)
+}
+
+// 🚀 IMPROVEMENT 3: Get audio context (returns defaults if not set)
+func (s *WebSocketSession) GetAudioContext() (emotion, urgency string, intensity int) {
+	s.audioContextMu.RLock()
+	defer s.audioContextMu.RUnlock()
+
+	// Return stored values or defaults
+	emotion = s.audioEmotion
+	urgency = s.audioUrgency
+	intensity = s.audioIntensity
+
+	// Default to neutral if not set
+	if emotion == "" {
+		emotion = "neutral"
+	}
+	if urgency == "" {
+		urgency = "MEDIA"
+	}
+
+	return emotion, urgency, intensity
 }
 
 type SignalingServer struct {
@@ -758,7 +796,9 @@ func (s *SignalingServer) handleGeminiResponse(session *WebSocketSession, respon
 			if s.brainService != nil {
 				brainSvc := s.brainService
 				workerpool.AnalysisPool.TrySubmit(func() {
-					brainSvc.ProcessUserSpeech(context.Background(), idosoID, userText)
+					// 🚀 IMPROVEMENT 3: Get audio context from session
+					emotion, urgency, intensity := session.GetAudioContext()
+					brainSvc.ProcessUserSpeech(context.Background(), idosoID, userText, emotion, urgency, intensity)
 				})
 			}
 
@@ -906,7 +946,21 @@ func (s *SignalingServer) handleGeminiResponse(session *WebSocketSession, respon
 
 			// ✅ NOVO: Salvar resposta EVA em Postgres + Qdrant + Neo4j
 			if s.brainService != nil {
-				go s.brainService.SaveEpisodicMemory(session.IdosoID, "assistant", aiText, time.Now(), false)
+				// 🚀 IMPROVEMENT 6: Use SaveEpisodicMemoryWithContext instead of old function
+				memCtx := brain.MemoryContext{
+					Emotion:    "neutral", // EVA responses are neutral
+					Urgency:    "MEDIA",
+					Importance: 0.3, // Assistant responses less important than user input
+					Keywords:   extractTopics(aiText),
+				}
+				go s.brainService.SaveEpisodicMemoryWithContext(
+					session.IdosoID,
+					"assistant",
+					aiText,
+					time.Now(),
+					false, // Not atomic (EVA's full response)
+					memCtx,
+				)
 			}
 		}
 	}
@@ -940,6 +994,9 @@ func (s *SignalingServer) handleGeminiResponse(session *WebSocketSession, respon
 
 					if err := json.Unmarshal([]byte(cleanJson), &result); err == nil {
 						log.Printf("🛡️ [SAFETY] Urgency Level: %s | Emotion: %s", result.Urgency, result.Emotion)
+
+						// 🚀 IMPROVEMENT 3: Store audio context in session for memory saving
+						session.SetAudioContext(result.Emotion, result.Urgency, result.Intensity)
 
 						// 🚨 DETECÇÃO DE RISCO CRÍTICO
 						if strings.ToUpper(result.Urgency) == "CRITICA" || strings.ToUpper(result.Urgency) == "ALTA" {
