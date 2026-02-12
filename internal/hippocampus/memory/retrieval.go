@@ -6,6 +6,9 @@ import (
 	"eva-mind/internal/brainstem/infrastructure/vector"
 	"fmt"
 	"log"
+	"math"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/qdrant/go-client/qdrant"
@@ -31,6 +34,7 @@ func NewRetrievalService(db *sql.DB, embedder *EmbeddingService, qdrant *vector.
 type SearchResult struct {
 	Memory     *Memory
 	Similarity float64 // 0.0 (nada similar) a 1.0 (idêntico)
+	Score      float64 // Score composto (Smart Forgetting): similaridade + recência + importância
 }
 
 // Retrieve busca as K memórias mais relevantes para uma query (HÍBRIDO: Postgres + Qdrant)
@@ -219,5 +223,103 @@ func (r *RetrievalService) RetrieveHybrid(ctx context.Context, idosoID int64, qu
 		}
 	}
 
+	// Aplicar Smart Forgetting (recência + importância) sobre os resultados combinados
+	applySmartForgettingRanking(combined)
+
 	return combined, nil
+}
+
+// applySmartForgettingRanking aplica o princípio de Smart Forgetting:
+//  - Memórias muito antigas e pouco importantes perdem peso
+//  - Memórias recentes e/ou importantes ganham prioridade
+//  - Similaridade continua sendo o fator principal
+func applySmartForgettingRanking(results []*SearchResult) {
+	now := time.Now()
+
+	for _, res := range results {
+		// Fallback: se não tiver memória associada, usa apenas similaridade
+		if res == nil || res.Memory == nil {
+			res.Score = res.Similarity
+			continue
+		}
+
+		// 1) Recência: decai exponencialmente com o tempo (janela ~30 dias)
+		ageDays := now.Sub(res.Memory.Timestamp).Hours() / 24
+		if ageDays < 0 {
+			ageDays = 0
+		}
+		// τ = 30 dias → memórias com ~30 dias ainda têm ~37% do peso de recência
+		recencyBoost := math.Exp(-ageDays / 30.0)
+
+		// 2) Importância: normaliza para [0,1] e dá boost adicional
+		imp := res.Memory.Importance
+		if imp < 0 {
+			imp = 0
+		}
+		if imp > 1 {
+			imp = 1
+		}
+		// Base 0.5 + até +0.5 dependendo da importância
+		importanceBoost := 0.5 + 0.5*imp
+
+		// 3) Similaridade continua sendo o peso principal
+		sim := res.Similarity
+		if sim < 0 {
+			sim = 0
+		}
+		if sim > 1 {
+			sim = 1
+		}
+
+		// 4) Score composto (pode ser ajustado depois):
+		//    60% similaridade, 25% recência, 15% importância
+		res.Score = sim*0.60 + recencyBoost*0.25 + importanceBoost*0.15
+	}
+
+	// Ordena em ordem decrescente de Score
+	sort.Slice(results, func(i, j int) bool {
+		// Em caso de empate, usa similaridade como desempate
+		if results[i].Score == results[j].Score {
+			return results[i].Similarity > results[j].Similarity
+		}
+		return results[i].Score > results[j].Score
+	})
+}
+
+// RetrieveWithMode implementa o sistema híbrido:
+//  - modo "fast"/"linear"/"sistema1": busca rápida (linear) usando Retrieve
+//  - modo "slow"/"filotaxica"/"phyllotaxic"/"exploratory"/"sistema2": busca exploratória usando RetrieveHybrid
+//  - modo "auto" (default): roteia com heurística simples baseada no texto da query
+func (r *RetrievalService) RetrieveWithMode(ctx context.Context, idosoID int64, query string, k int, mode string) ([]*SearchResult, error) {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+
+	switch mode {
+	case "fast", "linear", "sistema1":
+		// Sistema 1: busca direta, sem enriquecimento extra
+		return r.Retrieve(ctx, idosoID, query, k)
+
+	case "slow", "filotaxica", "phyllotaxic", "exploratory", "sistema2":
+		// Sistema 2: combina semântica + temporal + Smart Forgetting
+		return r.RetrieveHybrid(ctx, idosoID, query, k)
+
+	case "auto", "":
+		// Heurística simples:
+		// - Se a pergunta parece pedir "histórico", "todas as vezes", "ao longo do tempo" → modo lento
+		// - Caso contrário → modo rápido
+		q := strings.ToLower(query)
+		if strings.Contains(q, "histórico") ||
+			strings.Contains(q, "historico") ||
+			strings.Contains(q, "todas as vezes") ||
+			strings.Contains(q, "ao longo") ||
+			strings.Contains(q, "ao longo do tempo") ||
+			strings.Contains(q, "últimos meses") ||
+			strings.Contains(q, "ultimos meses") {
+			return r.RetrieveHybrid(ctx, idosoID, query, k)
+		}
+		return r.Retrieve(ctx, idosoID, query, k)
+
+	default:
+		// Modo desconhecido → fallback para rápido
+		return r.Retrieve(ctx, idosoID, query, k)
+	}
 }

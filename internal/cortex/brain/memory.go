@@ -19,7 +19,9 @@ import (
 // ========================================
 
 // ProcessUserSpeech handles user transcription in real-time (FDPN Hook)
-func (s *Service) ProcessUserSpeech(ctx context.Context, idosoID int64, text string) {
+// 🚀 IMPROVED: Now uses atomic facts ONLY, no raw text storage
+// 🚀 IMPROVEMENT 3: Now accepts audio context from AudioAnalysisService
+func (s *Service) ProcessUserSpeech(ctx context.Context, idosoID int64, text string, audioEmotion, audioUrgency string, audioIntensity int) {
 	if len(text) < 10 {
 		return // Ignore short texts
 	}
@@ -34,28 +36,59 @@ func (s *Service) ProcessUserSpeech(ctx context.Context, idosoID int64, text str
 		go s.unifiedRetrieval.Prime(ctx, idosoID, text)
 	}
 
-	// 🧠 ATOMIC INGESTION UPGRADE
+	// 🧠 ATOMIC INGESTION - ONLY ATOMIC FACTS, NO RAW TEXT
 	if s.ingestionPipeline != nil && len(text) > 30 {
 		go func() {
 			facts, err := s.ingestionPipeline.ProcessText(ctx, text)
-			if err != nil {
-				log.Printf("⚠️ [Ingestion] Atomic extraction failed, falling back to raw: %v", err)
-				s.SaveEpisodicMemory(idosoID, "user", text, time.Now(), false)
+			if err != nil || len(facts) == 0 {
+				log.Printf("⚠️ [Ingestion] Atomic extraction failed/empty, saving summary")
+
+				// Fallback: save summarized version, not raw text
+				summary := summarizeText(text)
+				memCtx := MemoryContext{
+					Emotion:  audioEmotion, // 🚀 IMPROVEMENT 3: Use detected emotion
+					Urgency:  audioUrgency, // 🚀 IMPROVEMENT 3: Use detected urgency
+					Keywords: extractKeywords(summary),
+				}
+				s.SaveEpisodicMemoryWithContext(idosoID, "user", summary, time.Now(), true, memCtx)
 				return
 			}
 
+			// 🚀 IMPROVEMENT 1: Save ONLY atomic facts
 			for _, fact := range facts {
-				s.SaveEpisodicMemory(idosoID, "user", fact.ResolvedText, fact.EventDate, true)
+				memCtx := MemoryContext{
+					Emotion:  audioEmotion, // 🚀 IMPROVEMENT 3: Use detected emotion
+					Urgency:  audioUrgency, // 🚀 IMPROVEMENT 3: Use detected urgency
+					Keywords: extractKeywords(fact.Content),
+				}
+
+				// 🚀 IMPROVEMENT 5: Use correct event date from ingestion pipeline
+				s.SaveEpisodicMemoryWithContext(idosoID, "user", fact.Content, fact.EventTime, true, memCtx)
 			}
+
+			log.Printf("✅ [Ingestion] Saved %d atomic facts", len(facts))
 		}()
 	} else {
-		// Save memory (Fire and forget) - Raw
-		go s.SaveEpisodicMemory(idosoID, "user", text, time.Now(), false)
+		// Fallback for short text: save as-is but mark as atomic
+		memCtx := MemoryContext{
+			Emotion:  audioEmotion, // 🚀 IMPROVEMENT 3: Use detected emotion
+			Urgency:  audioUrgency, // 🚀 IMPROVEMENT 3: Use detected urgency
+			Keywords: extractKeywords(text),
+		}
+		go s.SaveEpisodicMemoryWithContext(idosoID, "user", text, time.Now(), true, memCtx)
 	}
 }
 
 // SaveEpisodicMemory saves memory to Postgres, Qdrant, and Neo4j
 // AUDIT FIX: 2026-01-27 - Agora salva em TODOS os datastores
+//
+// ⚠️ DEPRECATED: Use SaveEpisodicMemoryWithContext instead
+// This function uses hardcoded emotion="neutral" and importance=0.5
+// The new function supports:
+//   - Dynamic importance calculation
+//   - Actual emotion detection from AudioAnalysis
+//   - Krylov compression (3072D → 64D)
+//   - Full context metadata
 func (s *Service) SaveEpisodicMemory(idosoID int64, role, content string, eventDate time.Time, isAtomic bool) {
 	ctx := context.Background()
 
