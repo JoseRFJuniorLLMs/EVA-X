@@ -48,6 +48,7 @@ import (
 
 	// 🧠 Cognitive Engines v2
 	"eva-mind/internal/cortex/attention"
+	attmodels "eva-mind/internal/cortex/attention/models"
 	"eva-mind/internal/cortex/consciousness"
 	"eva-mind/internal/cortex/learning"
 	"eva-mind/internal/cortex/spectral"
@@ -121,6 +122,8 @@ type SignalingServer struct {
 	synapticPruning    *consolidation.SynapticPruning
 	synaptogenesis     *spectral.SynaptogenesisEngine
 	waveletAttention   *attention.WaveletAttention
+	executive          *attention.Executive
+	selfEvalLoop       *learning.SelfEvaluationLoop
 	globalWorkspace    *consciousness.GlobalWorkspace
 	metaLearner        *learning.MetaLearner
 	dynamicEnneagram   *personality.DynamicEnneagram
@@ -131,22 +134,24 @@ type SignalingServer struct {
 }
 
 type PCMClient struct {
-	Conn         *websocket.Conn
-	CPF          string
-	IdosoID      int64
-	GeminiClient *gemini.Client
-	ToolsClient  *gemini.ToolsClient // ✅ DUAL-MODEL
-	SendCh       chan []byte
-	mu           sync.Mutex
-	active       atomic.Bool // 🔒 Thread-safe atomic boolean
-	ctx          context.Context
-	cancel       context.CancelFunc
-	lastActivity time.Time
-	audioCount   int64
-	mode         string                    // "audio", "video", or ""
-	LatentDesire *transnar.DesireInference // NEW: TransNAR desire context
-	CurrentStory *types.TherapeuticStory   // 📖 Zeta Engine Story
-	Registered   bool                      // ✅ Flag to prevent redundant registrations
+	Conn           *websocket.Conn
+	CPF            string
+	IdosoID        int64
+	GeminiClient   *gemini.Client
+	ToolsClient    *gemini.ToolsClient // ✅ DUAL-MODEL
+	SendCh         chan []byte
+	mu             sync.Mutex
+	active         atomic.Bool // 🔒 Thread-safe atomic boolean
+	ctx            context.Context
+	cancel         context.CancelFunc
+	lastActivity   time.Time
+	audioCount     int64
+	mode           string                    // "audio", "video", or ""
+	LatentDesire   *transnar.DesireInference // NEW: TransNAR desire context
+	CurrentStory   *types.TherapeuticStory   // 📖 Zeta Engine Story
+	Registered     bool                      // ✅ Flag to prevent redundant registrations
+	LastUserQuery  string                    // 📝 Contexto para auditoria
+	ExecutiveState *attmodels.ExecutiveState // 🧠 Memória metacognitiva persistente
 }
 
 var (
@@ -367,6 +372,22 @@ func NewSignalingServer(
 	server.synapticPruning = consolidation.NewSynapticPruning(neo4jClient)
 	server.synaptogenesis = spectral.NewSynaptogenesisEngine(neo4jClient, 3.0)
 	server.waveletAttention = attention.NewWaveletAttention()
+
+	// Configuração Gurdjieffiana conforme Manifesto
+	execConfig := &attention.Config{
+		ConfidenceThreshold:     0.65,
+		LoopSimilarityThreshold: 0.92,
+		MaxResponseTokens:       300,
+		Temperature:             0.3,
+		EmotionalMirroring:      false,
+		CenterMatching:          true,
+		PatternInterruptEnabled: true,
+		WorkingMemorySize:       10,
+		PatternBufferSize:       20,
+	}
+	server.executive = attention.NewExecutive(execConfig)
+
+	server.selfEvalLoop = learning.NewSelfEvaluationLoop()
 	server.globalWorkspace = consciousness.NewGlobalWorkspace()
 	server.metaLearner = learning.NewMetaLearner()
 	server.dynamicEnneagram = personality.NewDynamicEnneagram()
@@ -1096,6 +1117,15 @@ func (s *SignalingServer) registerClient(client *PCMClient, data map[string]inte
 
 	client.CPF = idoso.CPF
 	client.IdosoID = idoso.ID
+	client.LastUserQuery = "" // Initialize LastUserQuery
+	client.ExecutiveState = &attmodels.ExecutiveState{
+		ConversationID: fmt.Sprintf("conv_%d_%d", idoso.ID, time.Now().UnixNano()),
+		TurnNumber:     0,
+		WorkingMemory:  []attmodels.ContextFrame{},
+		PatternBuffer:  []attmodels.SemanticHash{},
+		AffectiveState: attmodels.AffectNeutralClear,
+		Timestamp:      time.Now(),
+	}
 
 	s.mu.Lock()
 	s.clients[idoso.CPF] = client
@@ -1173,6 +1203,40 @@ func (s *SignalingServer) setupGeminiSession(client *PCMClient, voiceName string
 		// 📝 3. Callback de Transcrição (Refactored to Brain)
 		func(role, text string) {
 			if role == "user" {
+				client.LastUserQuery = text // Salvar para auditoria posterior
+
+				// 🧠 Executive modulation (Gurdjieffian Layer)
+				if s.executive != nil && client.ExecutiveState != nil {
+					decision, err := s.executive.Process(client.ctx, text, client.ExecutiveState)
+					if err == nil && s.fdpnEngine != nil {
+						// Modula FDPN baseado na decisão executiva
+						depth := 3
+						threshold := 0.3
+
+						if decision.LoopDetected || decision.ClarificationNeeded {
+							depth = 1 // Reduz exploração em caso de dúvida ou repetição
+							threshold = 0.6
+						} else {
+							// Mapeia estratégias para parâmetros FDPN
+							switch decision.ResponseStrategy {
+							case attention.StrategyAnalytical:
+								depth = 4
+								threshold = 0.2
+							case attention.StrategyActionable:
+								depth = 1
+								threshold = 0.5
+							case attention.StrategyEmotionalContainment:
+								depth = 2
+								threshold = 0.4
+							}
+						}
+
+						s.fdpnEngine.SetModulation(depth, threshold)
+						log.Printf("[EXECUTIVE] Strategy: %s, Center: %s, Confidence: %.2f",
+							decision.ResponseStrategy, decision.ActiveCenter, decision.Confidence)
+					}
+				}
+
 				// Process User Speech (FDPN + Memory + TransNAR Hooks)
 				// Note: TransNAR and Lacan hooks still live here separately for now,
 				// or should be moved to Brain too?
@@ -1207,6 +1271,11 @@ func (s *SignalingServer) setupGeminiSession(client *PCMClient, voiceName string
 			} else {
 				// Save Assistant Memory
 				go s.brain.SaveEpisodicMemory(client.IdosoID, role, text, time.Now(), false)
+
+				// 🔍 Self-Evaluation Audit
+				if s.selfEvalLoop != nil {
+					go s.selfEvalLoop.PostResponseAudit(client.ctx, client.LastUserQuery, text, nil)
+				}
 			}
 		},
 	)

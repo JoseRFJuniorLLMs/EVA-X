@@ -52,6 +52,16 @@ func NewFDPNEngine(neo4j *graph.Neo4jClient, redis *cache.RedisClient, qdrant *v
 	}
 }
 
+// SetModulation permite que o ExecutiveController ajuste parametros dinamicamente
+func (e *FDPNEngine) SetModulation(depth int, threshold float64) {
+	if depth >= 0 {
+		e.maxDepth = depth
+	}
+	if threshold > 0 {
+		e.threshold = threshold
+	}
+}
+
 // StreamingPrime activates subgraphs during transcription
 func (e *FDPNEngine) StreamingPrime(ctx context.Context, userID string, partialText string) error {
 	startTime := time.Now()

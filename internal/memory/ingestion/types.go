@@ -12,5 +12,7 @@ type AtomicFact struct {
 	EventDate    time.Time `json:"event_date"`    // When the event actually occurred
 	DocumentDate time.Time `json:"document_date"` // When the fact was recorded
 	Confidence   float64   `json:"confidence"`    // Extraction confidence (0.0 to 1.0)
+	Source       string    `json:"source"`        // Onde o fato foi aprendido (usuário, inferência, etc)
+	Revisable    bool      `json:"revisable"`     // Se o fato pode ser revisado ou é imutável
 	IsAtomic     bool      `json:"is_atomic"`     // Flag to distinguish from raw chunks
 }

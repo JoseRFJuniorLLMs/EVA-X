@@ -44,7 +44,9 @@ func (p *IngestionPipeline) ProcessText(ctx context.Context, text string) ([]Ato
 			"predicate": "Ação/Verbo",
 			"object": "Objeto da ação",
 			"event_date": "ISO8601 string",
-			"confidence": 0.95
+			"confidence": 0.95,
+			"source": "usuário|inferido|deduzido",
+			"revisable": true
 		}
 
 		TEXTO:
@@ -79,7 +81,7 @@ func (p *IngestionPipeline) ProcessText(ctx context.Context, text string) ([]Ato
 
 func (p *IngestionPipeline) cleanJSON(input string) string {
 	// Simple check for markdown code blocks
-	if start := fmt.Sprint("```json\n"); len(input) > len(start) && input[:len(start)] == start {
+	if start := "```json\n"; len(input) > len(start) && input[:len(start)] == start {
 		input = input[len(start):]
 		if end := "```"; input[len(input)-len(end):] == end {
 			input = input[:len(input)-len(end)]
