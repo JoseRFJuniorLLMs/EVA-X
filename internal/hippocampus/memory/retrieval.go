@@ -15,18 +15,21 @@ import (
 )
 
 // RetrievalService busca memórias por similaridade semântica
+// RetrievalService busca memórias por similaridade semântica
 type RetrievalService struct {
-	db       *sql.DB
-	embedder *EmbeddingService
-	qdrant   *vector.QdrantClient
+	db         *sql.DB
+	embedder   *EmbeddingService
+	qdrant     *vector.QdrantClient
+	graphStore *GraphStore // Para busca recursiva via Neo4j
 }
 
 // NewRetrievalService cria um novo serviço de busca
-func NewRetrievalService(db *sql.DB, embedder *EmbeddingService, qdrant *vector.QdrantClient) *RetrievalService {
+func NewRetrievalService(db *sql.DB, embedder *EmbeddingService, qdrant *vector.QdrantClient, graphStore *GraphStore) *RetrievalService {
 	return &RetrievalService{
-		db:       db,
-		embedder: embedder,
-		qdrant:   qdrant,
+		db:         db,
+		embedder:   embedder,
+		qdrant:     qdrant,
+		graphStore: graphStore, // ✅ Injetando GraphStore para busca recursiva
 	}
 }
 
@@ -37,7 +40,7 @@ type SearchResult struct {
 	Score      float64 // Score composto (Smart Forgetting): similaridade + recência + importância
 }
 
-// Retrieve busca as K memórias mais relevantes para uma query (HÍBRIDO: Postgres + Qdrant)
+// Retrieve busca as K memórias mais relevantes para uma query (APENAS Qdrant)
 func (r *RetrievalService) Retrieve(ctx context.Context, idosoID int64, query string, k int) ([]*SearchResult, error) {
 	// 1. Gerar embedding da query
 	queryEmbedding, err := r.embedder.GenerateEmbedding(ctx, query)
@@ -45,87 +48,122 @@ func (r *RetrievalService) Retrieve(ctx context.Context, idosoID int64, query st
 		return nil, fmt.Errorf("erro ao gerar embedding: %w", err)
 	}
 
+	if r.qdrant == nil {
+		return nil, fmt.Errorf("qdrant client not initialized")
+	}
+
+	log.Printf("🔍 [MEMORY] Qdrant Search: Query=\"%s\"", query)
+
+	// 2. BUSCA NO QDRANT
+	qResults, err := r.qdrant.Search(ctx, "memories", queryEmbedding, uint64(k), nil)
+	if err != nil {
+		return nil, fmt.Errorf("erro busca Qdrant: %w", err)
+	}
+
 	var allResults []*SearchResult
-	seenIDs := make(map[int64]bool)
+	var memoryIDs []int64
+	resultsMap := make(map[int64]float64)
+	var topSemanticIDs []int64
 
-	// 2. BUSCA NO POSTGRES (pgvector)
-	sqlQuery := `
-		SELECT id, content, speaker, memory_timestamp, emotion, importance, topics, similarity 
-		FROM search_similar_memories(
-			$1,  -- idoso_id
-			$2,  -- query_embedding
-			$3,  -- limit
-			$4   -- min_similarity
-		)
-	`
-	rows, err := r.db.QueryContext(ctx, sqlQuery, idosoID, vectorToPostgres(queryEmbedding), k, 0.5)
-	if err == nil {
-		defer rows.Close()
-		log.Printf("🔍 [MEMORY] Postgres Search: Query=\"%s\"", query)
-		for rows.Next() {
-			var (
-				memoryID               int64
-				content, speaker       string
-				ts                     time.Time
-				topics                 string
-				importance, similarity float64
-				emotion                sql.NullString
-			)
-			// Nota: a função search_similar_memories deve retornar colunas compatíveis
-			err := rows.Scan(&memoryID, &content, &speaker, &ts, &emotion, &importance, &topics, &similarity)
-			if err == nil {
-				mem := &Memory{
-					ID:         memoryID,
-					IdosoID:    idosoID,
-					Timestamp:  ts,
-					Speaker:    speaker,
-					Content:    content,
-					Emotion:    emotion.String,
-					Importance: importance,
-					Topics:     parsePostgresArray(topics),
-				}
-				allResults = append(allResults, &SearchResult{Memory: mem, Similarity: similarity})
-				seenIDs[memoryID] = true
-			} else {
-				log.Printf("⚠️ [MEMORY] Erro ao escanear linha Postgres: %v", err)
-			}
-		}
-	} else {
-		log.Printf("⚠️ [MEMORY] Erro busca Postgres: %v", err)
-	}
+	// 3. Coletar IDs do Qdrant
+	for i, qr := range qResults {
+		// Extrair ID do payload
+		p := qr.Payload
+		var memID int64
 
-	// 3. BUSCA NO QDRANT (Se disponível)
-	if r.qdrant != nil {
-		log.Printf("🔍 [MEMORY] Qdrant Search: Query=\"%s\"", query)
-		qResults, err := r.qdrant.Search(ctx, "memories", queryEmbedding, uint64(k), nil)
-		if err == nil {
-			for _, qr := range qResults {
-				// Mapear payload do Qdrant para Memory
-				p := qr.Payload
-
-				// Nil checks para evitar panic
-				var contentStr, speakerStr string
-				if contentVal, ok := p["content"].GetKind().(*qdrant.Value_StringValue); ok && contentVal != nil {
-					contentStr = contentVal.StringValue
-				}
-				if speakerVal, ok := p["speaker"].GetKind().(*qdrant.Value_StringValue); ok && speakerVal != nil {
-					speakerStr = speakerVal.StringValue
-				}
-
-				// Evitar duplicados se já veio do Postgres
-				// Nota: Qdrant ID pode não bater com Postgres ID se não sincronizado
-				allResults = append(allResults, &SearchResult{
-					Memory: &Memory{
-						Content: contentStr,
-						Speaker: speakerStr,
-					},
-					Similarity: float64(qr.Score),
-				})
-			}
+		if idVal, ok := p["id"].GetKind().(*qdrant.Value_IntegerValue); ok {
+			memID = idVal.IntegerValue
+		} else if idVal, ok := p["id"].GetKind().(*qdrant.Value_DoubleValue); ok {
+			memID = int64(idVal.DoubleValue)
 		} else {
-			log.Printf("⚠️ [MEMORY] Erro busca Qdrant: %v", err)
+			// Fallback: tentar converter ID do ponto (se for uint64)
+			continue
+		}
+
+		memoryIDs = append(memoryIDs, memID)
+		resultsMap[memID] = float64(qr.Score)
+
+		// Guardar os top 3 para expansão recursiva
+		if i < 3 {
+			topSemanticIDs = append(topSemanticIDs, memID)
 		}
 	}
+
+	// 4. BUSCA RECURSIVA VIA GRAFO (Neo4j A1/A5)
+	if r.graphStore != nil && len(topSemanticIDs) > 0 {
+		log.Printf("🕸️ [MEMORY] Iniciando Busca Recursiva para %d sementes", len(topSemanticIDs))
+
+		for _, seedID := range topSemanticIDs {
+			// Buscar relacionados (depth 2 hops = ~4 relations)
+			relatedIDs, err := r.graphStore.GetRelatedMemoriesRecursive(ctx, seedID, 5)
+			if err != nil {
+				log.Printf("⚠️ [MEMORY] Erro busca recursiva: %v", err)
+				continue
+			}
+
+			for _, relatedID := range relatedIDs {
+				if _, exists := resultsMap[relatedID]; !exists {
+					memoryIDs = append(memoryIDs, relatedID)
+					resultsMap[relatedID] = 0.85 // Score "Associação Forte"
+				}
+			}
+		}
+	}
+
+	if len(memoryIDs) == 0 {
+		return []*SearchResult{}, nil
+	}
+
+	// 5. HIDRATAR COM DADOS DO POSTGRES
+	queryIDs := make([]string, len(memoryIDs))
+	args := make([]interface{}, len(memoryIDs))
+	for i, id := range memoryIDs {
+		queryIDs[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = id
+	}
+
+	sqlQuery := fmt.Sprintf(`
+		SELECT id, idoso_id, timestamp, speaker, content, emotion, 
+		       importance, topics, session_id, event_date, is_atomic
+		FROM episodic_memories
+		WHERE id IN (%s)
+	`, strings.Join(queryIDs, ","))
+
+	rows, err := r.db.QueryContext(ctx, sqlQuery, args...)
+	if err != nil {
+		return nil, fmt.Errorf("erro ao hidratar memórias do postgres: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		mem := &Memory{}
+		var topics string
+
+		err := rows.Scan(
+			&mem.ID, &mem.IdosoID, &mem.Timestamp, &mem.Speaker, &mem.Content,
+			&mem.Emotion, &mem.Importance, &topics, &mem.SessionID,
+			&mem.EventDate, &mem.IsAtomic,
+		)
+		if err != nil {
+			log.Printf("⚠️ [MEMORY] Erro scan hidratação: %v", err)
+			continue
+		}
+
+		mem.Topics = parsePostgresArray(topics)
+
+		// Recuperar score de similaridade do map
+		similarity := resultsMap[mem.ID]
+
+		allResults = append(allResults, &SearchResult{
+			Memory:     mem,
+			Similarity: similarity,
+		})
+	}
+
+	// Reordenar baseado no score (Qdrant/Recursivo)
+	sort.Slice(allResults, func(i, j int) bool {
+		return allResults[i].Similarity > allResults[j].Similarity
+	})
 
 	return allResults, nil
 }
@@ -230,9 +268,9 @@ func (r *RetrievalService) RetrieveHybrid(ctx context.Context, idosoID int64, qu
 }
 
 // applySmartForgettingRanking aplica o princípio de Smart Forgetting:
-//  - Memórias muito antigas e pouco importantes perdem peso
-//  - Memórias recentes e/ou importantes ganham prioridade
-//  - Similaridade continua sendo o fator principal
+//   - Memórias muito antigas e pouco importantes perdem peso
+//   - Memórias recentes e/ou importantes ganham prioridade
+//   - Similaridade continua sendo o fator principal
 func applySmartForgettingRanking(results []*SearchResult) {
 	now := time.Now()
 
@@ -287,9 +325,9 @@ func applySmartForgettingRanking(results []*SearchResult) {
 }
 
 // RetrieveWithMode implementa o sistema híbrido:
-//  - modo "fast"/"linear"/"sistema1": busca rápida (linear) usando Retrieve
-//  - modo "slow"/"filotaxica"/"phyllotaxic"/"exploratory"/"sistema2": busca exploratória usando RetrieveHybrid
-//  - modo "auto" (default): roteia com heurística simples baseada no texto da query
+//   - modo "fast"/"linear"/"sistema1": busca rápida (linear) usando Retrieve
+//   - modo "slow"/"filotaxica"/"phyllotaxic"/"exploratory"/"sistema2": busca exploratória usando RetrieveHybrid
+//   - modo "auto" (default): roteia com heurística simples baseada no texto da query
 func (r *RetrievalService) RetrieveWithMode(ctx context.Context, idosoID int64, query string, k int, mode string) ([]*SearchResult, error) {
 	mode = strings.ToLower(strings.TrimSpace(mode))
 

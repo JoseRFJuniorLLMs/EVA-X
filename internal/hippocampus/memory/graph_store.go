@@ -135,3 +135,54 @@ func (g *GraphStore) AddEpisodicMemory(ctx context.Context, memory *Memory) erro
 
 	return nil
 }
+
+// GetRelatedMemoriesRecursive busca memórias relacionadas recursivamente via grafo
+// Usa caminhos de comprimento variável para encontrar conexões indiretas (Topic -> Event -> Topic -> Event)
+func (g *GraphStore) GetRelatedMemoriesRecursive(ctx context.Context, memoryID int64, limit int) ([]int64, error) {
+	// Query para buscar eventos conectados por até 2 "saltos" de tópicos (Event->Topic->Event->Topic->Event)
+	// Isso corresponde a 4 relacionamentos :RELATED_TO
+	query := `
+		MATCH (start:Event {id: $id})
+		MATCH path = (start)-[:RELATED_TO*1..4]-(related:Event)
+		WHERE related.id <> start.id
+		// Evitar loops e voltar pro mesmo
+		
+		RETURN DISTINCT related.id as id, length(path) as hops, related.importance as importance
+		ORDER BY hops ASC, importance DESC
+		LIMIT $limit
+	`
+
+	params := map[string]interface{}{
+		"id":    fmt.Sprintf("%d", memoryID),
+		"limit": limit,
+	}
+
+	result, err := g.client.ExecuteRead(ctx, query, params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query recursive relations: %w", err)
+	}
+
+	var relatedIDs []int64
+	for _, record := range result {
+		// O ID no Neo4j é string/string formatada, mas precisamos retornar int64 para o sistema
+		val, ok := record.Get("id")
+		if !ok {
+			continue
+		}
+
+		idStr, ok := val.(string)
+		if !ok {
+			continue
+		}
+
+		// Parse int64
+		var id int64
+		_, err := fmt.Sscanf(idStr, "%d", &id)
+		if err == nil {
+			relatedIDs = append(relatedIDs, id)
+		}
+	}
+
+	log.Printf("🕸️ [GRAPH] Busca Recursiva (ID %d): Encontrados %d eventos relacionados", memoryID, len(relatedIDs))
+	return relatedIDs, nil
+}

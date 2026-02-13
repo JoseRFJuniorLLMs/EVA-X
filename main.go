@@ -183,7 +183,8 @@ func NewSignalingServer(
 	graphStore := memory.NewGraphStore(neo4jClient, cfg)
 
 	// ✅ CORREÇÃO P5: Passar graphStore para memoryStore
-	memoryStore := memory.NewMemoryStore(db.GetConnection(), graphStore)
+	// ✅ CORREÇÃO QDRANT: Passar qdrantClient para salvar vetores
+	memoryStore := memory.NewMemoryStore(db.GetConnection(), graphStore, qdrant)
 	metadataAnalyzer := memory.NewMetadataAnalyzer(cfg.GoogleAPIKey)
 
 	// Inicializar serviço de personalidade
@@ -198,10 +199,10 @@ func NewSignalingServer(
 		log.Printf("⚠️ Redis error: %v. FDPN will run in degraded mode (no L2 cache).", err)
 	}
 
-	// Qdrant Vector Database (Injected)
 	qdrantClient := qdrant // Alias for local usage if needed, or use directly
 
-	retrievalService := memory.NewRetrievalService(db.GetConnection(), embeddingService, qdrant)
+	// ✅ CORREÇÃO BUSCA RECURSIVA: Injectar graphStore para RetrievalService
+	retrievalService := memory.NewRetrievalService(db.GetConnection(), embeddingService, qdrant, graphStore)
 
 	// Initialize FDPN Engine (Fractal Dynamic Priming Network)
 	fdpnEngine := memory.NewFDPNEngine(neo4jClient, redisClient, qdrant)
