@@ -9,6 +9,7 @@ import (
 	"eva-mind/internal/brainstem/infrastructure/vector"
 	"eva-mind/internal/hippocampus/memory"
 	"eva-mind/internal/memory/consolidation"
+	"eva-mind/internal/memory/krylov"
 
 	"github.com/rs/zerolog/log"
 )
@@ -22,7 +23,7 @@ type MemoryOrchestrator struct {
 
 	// Pipeline components
 	fdpnEngine      *memory.FDPNEngine
-	krylovManager   *KrylovMemoryManager
+	krylovManager   *krylov.KrylovMemoryManager
 	remConsolidator *consolidation.REMConsolidator
 }
 
@@ -32,15 +33,15 @@ func NewMemoryOrchestrator(
 	neo4j *graph.Neo4jClient,
 	qdrant *vector.QdrantClient,
 	fdpn *memory.FDPNEngine,
-	krylov *KrylovMemoryManager,
+	krylovMgr *krylov.KrylovMemoryManager,
 ) *MemoryOrchestrator {
 	return &MemoryOrchestrator{
 		db:              db,
 		neo4j:           neo4j,
 		qdrant:          qdrant,
 		fdpnEngine:      fdpn,
-		krylovManager:   krylov,
-		remConsolidator: consolidation.NewREMConsolidator(neo4j, krylov),
+		krylovManager:   krylovMgr,
+		remConsolidator: consolidation.NewREMConsolidator(neo4j, krylovMgr),
 	}
 }
 
@@ -117,7 +118,7 @@ func (o *MemoryOrchestrator) RunNightlyConsolidation(ctx context.Context) error 
 
 	for _, result := range results {
 		totalProcessed += result.EpisodicProcessed
-		totalClusters += result.ClustersFormed
+		totalClusters += result.CommunitiesFormed
 		totalPruned += result.MemoriesPruned
 	}
 

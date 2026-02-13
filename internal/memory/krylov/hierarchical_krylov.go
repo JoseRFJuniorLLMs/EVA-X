@@ -1,4 +1,4 @@
-package memory
+package krylov
 
 import (
 	"fmt"
@@ -20,12 +20,12 @@ type HierarchicalKrylov struct {
 
 // KrylovLevel um nivel da hierarquia cortical
 type KrylovLevel struct {
-	Name       string     // "features", "concepts", "themes", "schemas"
-	Dimension  int        // 16, 64, 256, 1024
-	Basis      *mat.Dense // Matriz de base ortogonal Q (n x k)
-	TimeConst  float64    // Constante temporal em minutos (5, 60, 1440, 10080)
-	Updates    int64
-	mu         sync.RWMutex
+	Name      string     // "features", "concepts", "themes", "schemas"
+	Dimension int        // 16, 64, 256, 1024
+	Basis     *mat.Dense // Matriz de base ortogonal Q (n x k)
+	TimeConst float64    // Constante temporal em minutos (5, 60, 1440, 10080)
+	Updates   int64
+	mu        sync.RWMutex
 }
 
 // MultiScaleResult resultado de compressao multi-escala
@@ -260,11 +260,11 @@ func (hk *HierarchicalKrylov) GetStatistics() map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"engine":          "hierarchical_krylov",
-		"original_dim":    hk.dimension,
-		"num_levels":      len(hk.levels),
-		"levels":          levels,
-		"status":          "active",
+		"engine":       "hierarchical_krylov",
+		"original_dim": hk.dimension,
+		"num_levels":   len(hk.levels),
+		"levels":       levels,
+		"status":       "active",
 	}
 }
 

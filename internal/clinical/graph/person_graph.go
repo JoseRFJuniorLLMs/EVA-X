@@ -246,7 +246,7 @@ func (pg *PersonGraph) updatePerson(ctx context.Context, person *Person, newName
 		params["newName"] = newName
 	}
 
-	records, err := pg.neo4j.ExecuteWrite(ctx, query, params)
+	records, err := pg.neo4j.ExecuteWriteAndReturn(ctx, query, params)
 	if err != nil {
 		return nil, err
 	}

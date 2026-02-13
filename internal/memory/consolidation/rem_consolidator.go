@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"eva-mind/internal/brainstem/infrastructure/graph"
-	krylovmem "eva-mind/internal/memory"
+	krylovmem "eva-mind/internal/memory/krylov"
 
 	"gonum.org/v1/gonum/mat"
 )
@@ -18,11 +18,11 @@ import (
 // Pipeline: Episodicas quentes -> Spectral clustering -> Centroide Krylov -> Nó semantico Neo4j -> Prune redundancias
 // Ciencia: Rasch & Born (2013) - "About sleep's role in memory" (Physiological Reviews)
 type REMConsolidator struct {
-	neo4j   *graph.Neo4jClient
-	krylov  *krylovmem.KrylovMemoryManager
-	tau     float64 // Constante de decay temporal em dias
-	minHot  int     // Minimo de memorias quentes para consolidar
-	mu      sync.Mutex
+	neo4j  *graph.Neo4jClient
+	krylov *krylovmem.KrylovMemoryManager
+	tau    float64 // Constante de decay temporal em dias
+	minHot int     // Minimo de memorias quentes para consolidar
+	mu     sync.Mutex
 }
 
 // ConsolidationResult resultado de um ciclo de consolidacao

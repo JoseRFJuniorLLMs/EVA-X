@@ -68,10 +68,9 @@ func (p *IngestionPipeline) ProcessText(ctx context.Context, text string) ([]Ato
 
 	// Set metadata
 	for i := range facts {
-		facts[i].DocumentDate = now
-		facts[i].IsAtomic = true
-		if facts[i].EventDate.IsZero() {
-			facts[i].EventDate = now // Default to now if not extracted
+		facts[i].IngestionTime = now
+		if facts[i].EventTime.IsZero() {
+			facts[i].EventTime = now // Default to now if not extracted
 		}
 	}
 

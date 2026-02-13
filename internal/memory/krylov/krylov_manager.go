@@ -1,4 +1,4 @@
-package memory
+package krylov
 
 import (
 	"bytes"
@@ -21,7 +21,7 @@ type KrylovMemoryManager struct {
 	K         int        // Dimensao do subespaco de Krylov (ex: 64)
 
 	// Sliding Window (FIFO)
-	windowSize  int
+	WindowSize  int
 	memoryQueue [][]float64
 	queueHead   int
 	queueSize   int
@@ -46,7 +46,7 @@ func NewKrylovMemoryManager(dimension, k, windowSize int) *KrylovMemoryManager {
 		Basis:       mat.NewDense(dimension, k, nil),
 		Dimension:   dimension,
 		K:           k,
-		windowSize:  windowSize,
+		WindowSize:  windowSize,
 		memoryQueue: make([][]float64, windowSize),
 		updateTimes: make([]time.Duration, 0, 100),
 		lastUpdate:  time.Now(),
@@ -113,9 +113,9 @@ func (kmm *KrylovMemoryManager) UpdateSubspace(newVector []float64) error {
 // shiftAndInsert implementa Sliding Window FIFO
 func (kmm *KrylovMemoryManager) shiftAndInsert(v *mat.VecDense) {
 	kmm.memoryQueue[kmm.queueHead] = v.RawVector().Data
-	kmm.queueHead = (kmm.queueHead + 1) % kmm.windowSize
+	kmm.queueHead = (kmm.queueHead + 1) % kmm.WindowSize
 
-	if kmm.queueSize < kmm.windowSize {
+	if kmm.queueSize < kmm.WindowSize {
 		kmm.queueSize++
 	}
 
@@ -238,7 +238,7 @@ func (kmm *KrylovMemoryManager) calculateReconstructionErrorUnsafe() float64 {
 	validSamples := 0
 
 	for i := 0; i < numSamples; i++ {
-		idx := (kmm.queueHead + i) % kmm.windowSize
+		idx := (kmm.queueHead + i) % kmm.WindowSize
 		if kmm.memoryQueue[idx] == nil {
 			continue
 		}
@@ -300,8 +300,8 @@ func (kmm *KrylovMemoryManager) SaveCheckpoint(filepath string) error {
 		BasisData:   basisData,
 		Dimension:   kmm.Dimension,
 		K:           kmm.K,
-		WindowSize:  kmm.windowSize,
-		MemoryQueue: make([][]float64, kmm.windowSize),
+		WindowSize:  kmm.WindowSize,
+		MemoryQueue: make([][]float64, kmm.WindowSize),
 		QueueHead:   kmm.queueHead,
 		QueueSize:   kmm.queueSize,
 		TotalUpd:    kmm.totalUpdates,
@@ -343,7 +343,7 @@ func (kmm *KrylovMemoryManager) LoadCheckpoint(filepath string) error {
 
 	kmm.Dimension = cp.Dimension
 	kmm.K = cp.K
-	kmm.windowSize = cp.WindowSize
+	kmm.WindowSize = cp.WindowSize
 	kmm.Basis = mat.NewDense(cp.Dimension, cp.K, cp.BasisData)
 	kmm.memoryQueue = cp.MemoryQueue
 	kmm.queueHead = cp.QueueHead
@@ -375,7 +375,7 @@ func (kmm *KrylovMemoryManager) GetStatistics() map[string]interface{} {
 	return map[string]interface{}{
 		"dimension":            kmm.Dimension,
 		"subspace_size":        kmm.K,
-		"window_size":          kmm.windowSize,
+		"window_size":          kmm.WindowSize,
 		"queue_fill":           kmm.queueSize,
 		"total_updates":        kmm.totalUpdates,
 		"last_update":          kmm.lastUpdate.Format(time.RFC3339),
@@ -396,7 +396,7 @@ func (kmm *KrylovMemoryManager) getHealthStatusUnsafe() string {
 	if kmm.queueSize == 0 {
 		return "initializing"
 	}
-	if kmm.queueSize < kmm.windowSize/2 {
+	if kmm.queueSize < kmm.WindowSize/2 {
 		return "warming_up"
 	}
 	return "healthy"
