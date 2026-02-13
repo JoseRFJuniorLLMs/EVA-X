@@ -60,6 +60,11 @@ func (db *DB) GetCallContext(ctx context.Context, agendamentoID int) (*models.Ca
 		callCtx.Medicamento = med
 	}
 
+	// Extrai Persona do JSON dados_tarefa (se houver)
+	if persona, ok := dadosTarefa["persona"].(string); ok {
+		callCtx.Persona = persona
+	}
+
 	if sessionHandle != nil {
 		callCtx.SessionHandle = *sessionHandle
 	}

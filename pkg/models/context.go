@@ -36,6 +36,7 @@ type CallContext struct {
 	RetryInterval       int    `json:"retry_interval"`
 	Idade               int    `json:"idade"`
 	Timezone            string `json:"timezone"`
+	Persona             string `json:"persona"` // ✅ NEW: Active persona name
 	FamiliarNome        string `json:"familiar_nome"`
 	FamiliarTelefone    string `json:"familiar_telefone"`
 }

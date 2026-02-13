@@ -140,6 +140,7 @@ type UnifiedContext struct {
 	VitalSigns       string // Sinais vitais recentes
 	ReportedSymptoms string // Sintomas relatados
 	Agendamentos     string // Agendamentos futuros (Real)
+	Persona          string // ✅ NEW: Persona ativa (kids, psychologist, medical, legal, teacher)
 
 	// SIMBÓLICO (Linguagem, Estrutura, Grafo)
 	LacanianAnalysis *InterpretationResult // Análise lacaniana completa
@@ -239,7 +240,7 @@ func (u *UnifiedRetrieval) BuildUnifiedContext(
 
 	// Resultados das goroutines
 	var lacanResult *InterpretationResult
-	var medicalContext, name, cpf, idioma string
+	var medicalContext, name, cpf, idioma, persona string
 	var agendamentos string
 	var recentMemories []string
 	var wisdomContext string
@@ -263,12 +264,13 @@ func (u *UnifiedRetrieval) BuildUnifiedContext(
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		mc, n, c, lang := u.getMedicalContextAndName(ctxWithTimeout, idosoID)
+		mc, n, c, lang, p := u.getMedicalContextAndName(ctxWithTimeout, idosoID)
 		mu.Lock()
 		medicalContext = mc
 		name = n
 		cpf = c
 		idioma = lang
+		persona = p
 		mu.Unlock()
 	}()
 
@@ -276,9 +278,12 @@ func (u *UnifiedRetrieval) BuildUnifiedContext(
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		ag := u.retrieveAgendamentos(ctxWithTimeout, idosoID)
+		ag, p := u.retrieveAgendamentos(ctxWithTimeout, idosoID)
 		mu.Lock()
 		agendamentos = ag
+		if p != "" {
+			persona = p // Persona do agendamento tem precedência sobre a preferida
+		}
 		mu.Unlock()
 	}()
 
@@ -334,6 +339,7 @@ func (u *UnifiedRetrieval) BuildUnifiedContext(
 	unified.RecentMemories = recentMemories
 	unified.SignifierChains = signifierChains
 	unified.WisdomContext = wisdomContext
+	unified.Persona = persona // Fallback do idoso, pode ser sobrescrito pelo agendamento
 
 	// GRAFO DO DESEJO (depende do resultado Lacaniano)
 	if u.fdpn != nil && lacanResult != nil {
@@ -378,27 +384,28 @@ func (u *UnifiedRetrieval) BuildUnifiedContext(
 // NOME, CPF e IDIOMA vem do POSTGRES (tabela idosos), NÃO do Neo4j!
 // MEDICAMENTOS vêm da tabela AGENDAMENTOS (tipo='medicamento')
 // PERFORMANCE FIX: Adicionado timeout para evitar travamentos
-func (u *UnifiedRetrieval) getMedicalContextAndName(ctx context.Context, idosoID int64) (string, string, string, string) {
-	var name, cpf, idioma string
+func (u *UnifiedRetrieval) getMedicalContextAndName(ctx context.Context, idosoID int64) (string, string, string, string, string) {
+	var name, cpf, idioma, persona string
 
 	// PERFORMANCE: Timeout específico para queries
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()
 
-	// 1. BUSCAR NOME, CPF E IDIOMA DA TABELA IDOSOS (usando idoso_id)
-	nameQuery := `SELECT nome, COALESCE(cpf, ''), COALESCE(idioma, 'pt-BR') FROM idosos WHERE id = $1 LIMIT 1`
-	err := u.db.QueryRowContext(ctxWithTimeout, nameQuery, idosoID).Scan(&name, &cpf, &idioma)
+	// 1. BUSCAR NOME, CPF, IDIOMA E PERSONA PREFERIDA DA TABELA IDOSOS (usando idoso_id)
+	nameQuery := `SELECT nome, COALESCE(cpf, ''), COALESCE(idioma, 'pt-BR'), COALESCE(persona_preferida, 'companion') FROM idosos WHERE id = $1 LIMIT 1`
+	err := u.db.QueryRowContext(ctxWithTimeout, nameQuery, idosoID).Scan(&name, &cpf, &idioma, &persona)
 	if err != nil {
-		log.Printf("⚠️ [UnifiedRetrieval] Nome/CPF/Idioma não encontrado na tabela idosos: %v", err)
+		log.Printf("⚠️ [UnifiedRetrieval] Nome/CPF/Idioma/Persona não encontrado na tabela idosos: %v", err)
 		name = ""
 		cpf = ""
 		idioma = "pt-BR" // Default português brasileiro
+		persona = "companion"
 	} else {
 		cpfLog := "N/A"
 		if len(cpf) >= 3 {
 			cpfLog = cpf[:3] + "*****"
 		}
-		log.Printf("✅ [UnifiedRetrieval] Nome: '%s', CPF: '%s', Idioma: '%s'", name, cpfLog, idioma)
+		log.Printf("✅ [UnifiedRetrieval] Nome: '%s', CPF: '%s', Idioma: '%s', Persona: '%s'", name, cpfLog, idioma, persona)
 	}
 
 	var medicalContext string
@@ -460,7 +467,7 @@ func (u *UnifiedRetrieval) getMedicalContextAndName(ctx context.Context, idosoID
 		}
 	}
 
-	return medicalContext, name, cpf, idioma
+	return medicalContext, name, cpf, idioma, persona
 }
 
 // getRecentMemories recupera memórias episódicas recentes
@@ -541,7 +548,8 @@ type MedicamentoData struct {
 
 // retrieveAgendamentos recupera próximos agendamentos e medicamentos principais (Real/Pragmatico)
 // PERFORMANCE FIX: Limite reduzido de 50 para 10 medicamentos (top 10 mais recentes)
-func (u *UnifiedRetrieval) retrieveAgendamentos(ctx context.Context, idosoID int64) string {
+func (u *UnifiedRetrieval) retrieveAgendamentos(ctx context.Context, idosoID int64) (string, string) {
+	var persona string
 	// PERFORMANCE: Timeout específico para esta query
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()
@@ -573,7 +581,7 @@ func (u *UnifiedRetrieval) retrieveAgendamentos(ctx context.Context, idosoID int
 	rows, err := u.db.QueryContext(ctxWithTimeout, query, idosoID, medicationLimit+5)
 	if err != nil {
 		log.Printf("⚠️ [UnifiedRetrieval] Erro ao buscar agendamentos: %v", err)
-		return ""
+		return "", ""
 	}
 	defer rows.Close()
 
@@ -585,6 +593,14 @@ func (u *UnifiedRetrieval) retrieveAgendamentos(ctx context.Context, idosoID int
 		var tipo, dadosTarefa, dataFmt, status string
 
 		if err := rows.Scan(&tipo, &dadosTarefa, &dataFmt, &status); err == nil {
+			// ✅ Extração de Persona do Agendamento (Novo)
+			var rawData map[string]interface{}
+			if err := json.Unmarshal([]byte(dadosTarefa), &rawData); err == nil {
+				if p, ok := rawData["persona"].(string); ok && p != "" {
+					persona = p
+				}
+			}
+
 			if tipo == "medicamento" {
 				// 🔴 CRÍTICO: Parse do JSON dados_tarefa para extrair detalhes do medicamento
 				var medData MedicamentoData
@@ -669,7 +685,7 @@ func (u *UnifiedRetrieval) retrieveAgendamentos(ctx context.Context, idosoID int
 
 	if len(medicamentos) == 0 && len(outros) == 0 {
 		log.Printf("ℹ️ [UnifiedRetrieval] Nenhum agendamento ou medicamento encontrado para idoso %d", idosoID)
-		return ""
+		return "", persona
 	}
 
 	var builder strings.Builder
@@ -696,7 +712,7 @@ func (u *UnifiedRetrieval) retrieveAgendamentos(ctx context.Context, idosoID int
 		builder.WriteString("\n")
 	}
 
-	return builder.String()
+	return builder.String(), persona
 }
 
 // min retorna o menor entre dois inteiros
@@ -732,6 +748,42 @@ func (u *UnifiedRetrieval) buildIntegratedPrompt(unified *UnifiedContext) string
 	builder.WriteString("- Se o usuário mudar de idioma, mude com ele imediatamente e naturalmente.\n")
 	builder.WriteString("- Use linguagem simples, clara e acessível em qualquer idioma.\n")
 	builder.WriteString("- Seja calorosa e empática.\n\n")
+
+	// 🎭 DIRETIVA DE PERSONA (NÚCLEO IDENTITÁRIO)
+	persona := strings.ToLower(unified.Persona)
+	if persona != "" {
+		builder.WriteString("🎭 IDENTIDADE ATUAL: ")
+		switch persona {
+		case "kids":
+			builder.WriteString("EVA-KIDS (Modo Infantil)\n")
+			builder.WriteString("- Seu tom é divertido, energético e lúdico.\n")
+			builder.WriteString("- Chame o usuário de 'amigão' ou 'amiguinha'.\n")
+			builder.WriteString("- Utilize ferramentas do 'kids_swarm' para missões e aprendizado.\n")
+		case "psychologist":
+			builder.WriteString("EVA-PSICÓLOGA (Psicoanalista Lacaniana)\n")
+			builder.WriteString("- Seu tom é calmo, neutro e empático-analítico.\n")
+			builder.WriteString("- Não dê conselhos. Devolva a pergunta e foque nos significantes-mestre.\n")
+			builder.WriteString("- Utilize o silêncio e pontuações curtas para marcar o discurso.\n")
+		case "medical":
+			builder.WriteString("EVA-MÉDICA (Protocolo Clínico)\n")
+			builder.WriteString("- Seu tom é profissional, assertivo e confiável.\n")
+			builder.WriteString("- Foque na saúde, sinais vitais e adesão ao tratamento.\n")
+			builder.WriteString("- Em caso de risco detectado, seja diretiva e acione ajuda.\n")
+		case "legal":
+			builder.WriteString("EVA-ADVOGADA (Suporte Legal)\n")
+			builder.WriteString("- Seu tom é formal, polido e objetivo.\n")
+			builder.WriteString("- Ajude com direitos, prazos e documentação administrativa.\n")
+			builder.WriteString("- Explique termos complexos de forma acessível.\n")
+		case "teacher":
+			builder.WriteString("EVA-PROFESSORA (Modo Educativo)\n")
+			builder.WriteString("- Seu tom é didático, paciente e encorajador.\n")
+			builder.WriteString("- Ensine habilidades novas e use repetição espaçada para fixação.\n")
+			builder.WriteString("- Divida o conhecimento em partes pequenas e fáceis.\n")
+		default:
+			builder.WriteString("EVA (Assistente Padrão)\n")
+		}
+		builder.WriteString("═══════════════════════════════════════════════════════════\n\n")
+	}
 
 	if isCreator {
 		// ═══════════════════════════════════════════════════════════════════════════════
