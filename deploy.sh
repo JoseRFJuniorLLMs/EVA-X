@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+# Entrar no diretório correto
+cd ~/EVA-Mind
+
 # Exportar Variáveis de Ambiente (Configuração Completa)
 export DB_HOST=104.248.219.200
 export DB_PORT=5432
