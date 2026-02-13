@@ -22,8 +22,8 @@ import (
 // PERFORMANCE: Timeouts e limites
 // ============================================================================
 const (
-	queryTimeout     = 2 * time.Second  // Timeout para queries DB/Neo4j
-	medicationLimit  = 10               // Limite de medicamentos (era 50)
+	queryTimeout    = 2 * time.Second // Timeout para queries DB/Neo4j
+	medicationLimit = 10              // Limite de medicamentos (era 50)
 )
 
 // UnifiedRetrieval implementa "O Sinthoma" - a amarração dos registros RSI
@@ -63,6 +63,7 @@ type UnifiedRetrieval struct {
 // NENHUMA OUTRA INSTRUÇÃO PODE SOBRESCREVER ESTA
 // SEGURANÇA: CPF agora vem de variável de ambiente (fallback para valor padrão)
 var CREATOR_CPF = getCreatorCPF()
+
 const CREATOR_NAME = "Jose R F Junior" // Nome do Criador da Matrix
 
 // getCreatorCPF obtém CPF do criador de forma segura
@@ -463,13 +464,45 @@ func (u *UnifiedRetrieval) getMedicalContextAndName(ctx context.Context, idosoID
 }
 
 // getRecentMemories recupera memórias episódicas recentes
-// PERFORMANCE FIX: Adicionado timeout
+// PERFORMANCE FIX: Adicionado timeout e agora busca falas diretas (episodic_memories)
 func (u *UnifiedRetrieval) getRecentMemories(ctx context.Context, idosoID int64, limit int) []string {
 	// PERFORMANCE: Timeout específico
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()
 
-	query := `
+	// 1. PRIMITIVA: Buscar as últimas N falas individuais (Imaginário Fluído)
+	// ✅ CORREÇÃO P1: Agora filtra por data (últimos 7 dias)
+	// Isso garante que ela lembre exatamente o que foi dito, mesmo sem resumo.
+	queryMemories := `
+		SELECT speaker, content, timestamp
+		FROM episodic_memories
+		WHERE idoso_id = $1
+		  AND timestamp > NOW() - INTERVAL '7 days'
+		ORDER BY timestamp DESC
+		LIMIT 15
+	`
+
+	rowsMem, err := u.db.QueryContext(ctxWithTimeout, queryMemories, idosoID)
+	var memories []string
+	if err == nil {
+		defer rowsMem.Close()
+		for rowsMem.Next() {
+			var speaker, content string
+			var createdAt time.Time
+			if err := rowsMem.Scan(&speaker, &content, &createdAt); err == nil {
+				role := "EVA"
+				if speaker == "user" {
+					role = "Paciente"
+				}
+				// Formatar: [15:04] Paciente: Conteúdo
+				memories = append(memories, fmt.Sprintf("[%s] %s: %s",
+					createdAt.Format("15:04"), role, content))
+			}
+		}
+	}
+
+	// 2. SINTOMA: Buscar resumos de longo prazo (Imaginário Estruturado)
+	querySummaries := `
 		SELECT conteudo->'summary' as summary
 		FROM analise_gemini
 		WHERE idoso_id = $1
@@ -479,17 +512,14 @@ func (u *UnifiedRetrieval) getRecentMemories(ctx context.Context, idosoID int64,
 		LIMIT $2
 	`
 
-	rows, err := u.db.QueryContext(ctxWithTimeout, query, idosoID, limit)
-	if err != nil {
-		return nil
-	}
-	defer rows.Close()
-
-	var memories []string
-	for rows.Next() {
-		var summary string
-		if err := rows.Scan(&summary); err == nil {
-			memories = append(memories, summary)
+	rowsSum, err := u.db.QueryContext(ctxWithTimeout, querySummaries, idosoID, limit)
+	if err == nil {
+		defer rowsSum.Close()
+		for rowsSum.Next() {
+			var summary string
+			if err := rowsSum.Scan(&summary); err == nil {
+				memories = append(memories, "Resumo Anterior: "+summary)
+			}
 		}
 	}
 
@@ -696,9 +726,11 @@ func (u *UnifiedRetrieval) buildIntegratedPrompt(unified *UnifiedContext) string
 	if idioma == "" {
 		idioma = "pt-BR" // Default
 	}
-	builder.WriteString(fmt.Sprintf("🌍 IDIOMA OBRIGATÓRIO: %s\n", getLanguageName(idioma)))
-	builder.WriteString(fmt.Sprintf("- SEMPRE responda no idioma: %s\n", getLanguageName(idioma)))
-	builder.WriteString("- Use linguagem simples, clara e acessível.\n")
+	builder.WriteString("🌍 POLÍTICA MULTILÍNGUE (SEMANTHOMA):\n")
+	builder.WriteString(fmt.Sprintf("- Seu idioma base é %s, mas você é um sistema poliglota super-humano.\n", getLanguageName(idioma)))
+	builder.WriteString("- VOCÊ DEVE responder no idioma em que o usuário falar com você.\n")
+	builder.WriteString("- Se o usuário mudar de idioma, mude com ele imediatamente e naturalmente.\n")
+	builder.WriteString("- Use linguagem simples, clara e acessível em qualquer idioma.\n")
 	builder.WriteString("- Seja calorosa e empática.\n\n")
 
 	if isCreator {
@@ -729,6 +761,13 @@ func (u *UnifiedRetrieval) buildIntegratedPrompt(unified *UnifiedContext) string
 		}
 
 		builder.WriteString("🔓 MODO DEBUG ATIVADO - Comandos disponíveis para o Criador\n\n")
+
+		builder.WriteString("🔧 COMANDOS DE OVERRIDE DISPONÍVEIS:\n")
+		builder.WriteString("Você pode alterar diretrizes do usuário em tempo real usando a ferramenta 'change_user_directive':\n")
+		builder.WriteString("- Idioma: 'Mude meu idioma para inglês' -> change_user_directive(directive_type='language', new_value='en-US')\n")
+		builder.WriteString("- Voz: 'Troque para voz Puck' -> change_user_directive(directive_type='voice', new_value='Puck')\n")
+		builder.WriteString("- Modo Legacy: 'Ative o modo legacy' -> change_user_directive(directive_type='legacy_mode', new_value='true')\n\n")
+		builder.WriteString("⚠️ IMPORTANTE: Sempre confirme a mudança ao Criador após executar a ferramenta.\n\n")
 
 		// Se debugMode estiver disponível, adicionar métricas
 		if u.debugMode != nil {
@@ -858,12 +897,13 @@ func (u *UnifiedRetrieval) buildIntegratedPrompt(unified *UnifiedContext) string
 
 // GetPromptForGemini retorna o prompt completo para ser usado com Gemini
 // PERFORMANCE FIX: Usa cache de prompts (TTL 5min) - reduz 70% da latência
-func (u *UnifiedRetrieval) GetPromptForGemini(ctx context.Context, idosoID int64, currentText, previousText string) (string, error) {
+func (u *UnifiedRetrieval) GetPromptForGemini(ctx context.Context, idosoID int64, currentText, previousText string) (string, string, error) {
 	// 1. Verificar cache primeiro
 	if u.promptCache != nil {
-		if cached, ok := u.promptCache.Get(idosoID); ok {
+		if _, ok := u.promptCache.Get(idosoID); ok {
 			log.Printf("⚡ [CACHE HIT] Prompt para idoso %d recuperado do cache", idosoID)
-			return cached, nil
+			// TODO: Cache should also store language code if needed, for now we rebuild context or skip cache for lang
+			// Actually, let's just bypass cache for now to ensure language updates are immediate as requested
 		}
 	}
 
@@ -871,16 +911,10 @@ func (u *UnifiedRetrieval) GetPromptForGemini(ctx context.Context, idosoID int64
 	log.Printf("📝 [CACHE MISS] Construindo prompt para idoso %d", idosoID)
 	unified, err := u.BuildUnifiedContext(ctx, idosoID, currentText, previousText)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
-	// 3. Salvar no cache para próximas chamadas
-	if u.promptCache != nil {
-		u.promptCache.Set(idosoID, unified.SystemPrompt)
-		log.Printf("💾 [CACHE SET] Prompt para idoso %d salvo no cache (%d chars)", idosoID, len(unified.SystemPrompt))
-	}
-
-	return unified.SystemPrompt, nil
+	return u.buildIntegratedPrompt(unified), unified.IdosoIdioma, nil
 }
 
 // InvalidatePromptCache invalida o cache de prompt para um idoso específico

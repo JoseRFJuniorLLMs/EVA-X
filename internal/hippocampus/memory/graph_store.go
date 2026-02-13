@@ -5,6 +5,7 @@ import (
 	"eva-mind/internal/brainstem/config"
 	"eva-mind/internal/brainstem/infrastructure/graph"
 	"fmt"
+	"log"
 	"time"
 )
 
@@ -93,7 +94,16 @@ func (g *GraphStore) AddEpisodicMemory(ctx context.Context, memory *Memory) erro
 				"idosoId": memory.IdosoID,
 				"topic":   topic,
 			}
-			g.client.ExecuteWrite(ctx, topicQuery, topicParams)
+
+			// ✅ CORREÇÃO P6: Agora loga erros explicitamente
+			_, err := g.client.ExecuteWrite(ctx, topicQuery, topicParams)
+			if err != nil {
+				log.Printf("❌ [NEO4J] Falha ao conectar topic '%s' para evento %s: %v",
+					topic, params["id"], err)
+				// Continuar com outros topics mesmo se um falhar
+			} else {
+				log.Printf("✅ [NEO4J] Topic conectado: '%s' → Person %d", topic, memory.IdosoID)
+			}
 		}
 	}
 
@@ -112,7 +122,15 @@ func (g *GraphStore) AddEpisodicMemory(ctx context.Context, memory *Memory) erro
 			"idosoId": memory.IdosoID,
 			"emotion": memory.Emotion,
 		}
-		g.client.ExecuteWrite(ctx, emotionQuery, emotionParams)
+
+		// ✅ CORREÇÃO P6: Agora loga erros explicitamente
+		_, err := g.client.ExecuteWrite(ctx, emotionQuery, emotionParams)
+		if err != nil {
+			log.Printf("❌ [NEO4J] Falha ao conectar emoção '%s' para Person %d: %v",
+				memory.Emotion, memory.IdosoID, err)
+		} else {
+			log.Printf("✅ [NEO4J] Emoção conectada: '%s' → Person %d", memory.Emotion, memory.IdosoID)
+		}
 	}
 
 	return nil

@@ -40,15 +40,21 @@ type Memory struct {
 
 // MemoryStore gerencia o armazenamento de memórias
 type MemoryStore struct {
-	db *sql.DB
+	db         *sql.DB
+	graphStore *GraphStore // Para salvar relações no Neo4j
 }
 
 // NewMemoryStore cria um novo gerenciador de memórias
-func NewMemoryStore(db *sql.DB) *MemoryStore {
-	return &MemoryStore{db: db}
+// graphStore é opcional - se nil, apenas Postgres será usado
+func NewMemoryStore(db *sql.DB, graphStore *GraphStore) *MemoryStore {
+	return &MemoryStore{
+		db:         db,
+		graphStore: graphStore,
+	}
 }
 
 // Store salva uma nova memória no banco
+// ✅ CORREÇÃO P5: Agora salva no Postgres E Neo4j
 func (m *MemoryStore) Store(ctx context.Context, memory *Memory) error {
 	query := `
 		INSERT INTO episodic_memories 
@@ -59,6 +65,7 @@ func (m *MemoryStore) Store(ctx context.Context, memory *Memory) error {
 
 	embeddingStr := vectorToPostgres(memory.Embedding)
 
+	// 1. ✅ Salvar no Postgres
 	err := m.db.QueryRowContext(
 		ctx,
 		query,
@@ -75,7 +82,28 @@ func (m *MemoryStore) Store(ctx context.Context, memory *Memory) error {
 		memory.IsAtomic,
 	).Scan(&memory.ID, &memory.Timestamp)
 
-	return err
+	if err != nil {
+		return fmt.Errorf("postgres save failed: %w", err)
+	}
+
+	log.Printf("✅ [STORAGE] Memória salva no Postgres: ID=%d, idoso=%d, speaker=%s",
+		memory.ID, memory.IdosoID, memory.Speaker)
+
+	// 2. ✅ NOVO: Salvar relações no Neo4j
+	if m.graphStore != nil {
+		if err := m.graphStore.AddEpisodicMemory(ctx, memory); err != nil {
+			// NÃO falhar a operação, mas logar claramente
+			log.Printf("❌ [NEO4J] Falha ao salvar relações para memória %d: %v", memory.ID, err)
+			log.Printf("⚠️ [NEO4J] Memória salva no Postgres MAS relações Neo4j falharam!")
+		} else {
+			log.Printf("✅ [NEO4J] Relações salvas: %d topics, emoção=%s (memória %d)",
+				len(memory.Topics), memory.Emotion, memory.ID)
+		}
+	} else {
+		log.Printf("⚠️ [NEO4J] GraphStore não disponível - relações NÃO salvas (apenas Postgres)")
+	}
+
+	return nil
 }
 
 // GetByID recupera uma memória por ID
