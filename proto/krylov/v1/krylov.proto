@@ -1,0 +1,110 @@
+syntax = "proto3";
+
+package krylov.v1;
+
+option go_package = "eva-mind/proto/krylov/v1;krylovpb";
+
+// KrylovService expoe o KrylovMemoryManager via gRPC
+// FastAPI (porta 8000) --gRPC--> Go KrylovService (porta 50051)
+service KrylovService {
+  // CompressVector projeta um embedding de alta dimensao no subespaco de Krylov
+  // 1536D -> 64D
+  rpc CompressVector(CompressRequest) returns (CompressResponse);
+
+  // ReconstructVector reconstroi um embedding comprimido
+  // 64D -> ~1536D (aproximado)
+  rpc ReconstructVector(ReconstructRequest) returns (ReconstructResponse);
+
+  // UpdateSubspace adiciona um novo embedding ao subespaco
+  rpc UpdateSubspace(UpdateRequest) returns (UpdateResponse);
+
+  // BatchCompress comprime multiplos vetores de uma vez
+  rpc BatchCompress(BatchCompressRequest) returns (BatchCompressResponse);
+
+  // GetStatistics retorna metricas do sistema Krylov
+  rpc GetStatistics(StatisticsRequest) returns (StatisticsResponse);
+
+  // SaveCheckpoint salva estado em disco
+  rpc SaveCheckpoint(CheckpointRequest) returns (CheckpointResponse);
+
+  // LoadCheckpoint carrega estado de disco
+  rpc LoadCheckpoint(CheckpointRequest) returns (CheckpointResponse);
+
+  // HealthCheck verifica saude do servico
+  rpc HealthCheck(HealthRequest) returns (HealthResponse);
+}
+
+message CompressRequest {
+  repeated double vector = 1; // Embedding original (1536D)
+}
+
+message CompressResponse {
+  repeated double compressed = 1; // Embedding comprimido (64D)
+  double compression_time_us = 2; // Tempo em microsegundos
+}
+
+message ReconstructRequest {
+  repeated double compressed = 1; // Embedding comprimido (64D)
+}
+
+message ReconstructResponse {
+  repeated double reconstructed = 1; // Embedding reconstruido (~1536D)
+  double reconstruction_error = 2;   // Erro de reconstrucao (L2 norm)
+}
+
+message UpdateRequest {
+  repeated double vector = 1; // Novo embedding para treinar subespaco
+}
+
+message UpdateResponse {
+  bool accepted = 1;          // Se o vetor foi aceito (nao redundante)
+  int64 total_updates = 2;    // Total de updates ate agora
+  double orthogonality_error = 3;
+}
+
+message BatchCompressRequest {
+  repeated Vector vectors = 1;
+}
+
+message Vector {
+  repeated double values = 1;
+}
+
+message BatchCompressResponse {
+  repeated Vector compressed = 1;
+  double total_time_us = 2;
+}
+
+message StatisticsRequest {}
+
+message StatisticsResponse {
+  int32 dimension = 1;
+  int32 subspace_size = 2;
+  int32 window_size = 3;
+  int32 queue_fill = 4;
+  int64 total_updates = 5;
+  double orthogonality_error = 6;
+  double reconstruction_error = 7;
+  double compression_ratio = 8;
+  double memory_reduction_pct = 9;
+  string status = 10;
+  string last_update = 11;
+  int64 avg_update_time_us = 12;
+}
+
+message CheckpointRequest {
+  string filepath = 1;
+}
+
+message CheckpointResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  string status = 1; // "healthy", "warming_up", "degraded", "initializing"
+  int64 total_updates = 2;
+  double orthogonality_error = 3;
+}
