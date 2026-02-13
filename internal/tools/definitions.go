@@ -254,6 +254,29 @@ func SubmitCSSRSResponseDefinition() FunctionDeclaration {
 	}
 }
 
+// ChangeUserDirectiveDefinition returns the schema for the architect override tool
+func ChangeUserDirectiveDefinition() FunctionDeclaration {
+	return FunctionDeclaration{
+		Name:        "change_user_directive",
+		Description: "APENAS PARA O ARQUITETO: Altera diretrizes do usuário (idioma, voz, modo legado) no banco de dados em tempo real.",
+		Parameters: &FunctionParameters{
+			Type: "OBJECT",
+			Properties: map[string]*Property{
+				"directive_type": {
+					Type:        "STRING",
+					Description: "Tipo de diretiva a alterar: 'language', 'voice', 'legacy_mode'",
+					Enum:        []string{"language", "voice", "legacy_mode"},
+				},
+				"new_value": {
+					Type:        "STRING",
+					Description: "Novo valor para a diretiva (ex: 'en-US', 'Puck', 'true')",
+				},
+			},
+			Required: []string{"directive_type", "new_value"},
+		},
+	}
+}
+
 // GetToolDefinitions returns all available tool definitions
 func GetToolDefinitions() []FunctionDeclaration {
 	return []FunctionDeclaration{
@@ -267,5 +290,6 @@ func GetToolDefinitions() []FunctionDeclaration {
 		SubmitPHQ9ResponseDefinition(),
 		SubmitGAD7ResponseDefinition(),
 		SubmitCSSRSResponseDefinition(),
+		ChangeUserDirectiveDefinition(),
 	}
 }

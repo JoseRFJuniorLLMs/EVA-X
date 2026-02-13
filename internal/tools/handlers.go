@@ -548,6 +548,18 @@ func (h *ToolsHandler) ExecuteTool(name string, args map[string]interface{}, ido
 	case "weekly_review":
 		return h.handleWeeklyReview(idosoID, args)
 
+	case "change_user_directive":
+		directiveType, _ := args["directive_type"].(string)
+		newValue, _ := args["new_value"].(string)
+		err := h.UpdateUserDirective(idosoID, directiveType, newValue)
+		if err != nil {
+			return map[string]interface{}{"error": err.Error()}, nil
+		}
+		return map[string]interface{}{
+			"status":  "sucesso",
+			"message": fmt.Sprintf("Diretiva '%s' alterada para '%s'", directiveType, newValue),
+		}, nil
+
 	default:
 		return nil, fmt.Errorf("ferramenta desconhecida: %s", name)
 	}
@@ -658,11 +670,11 @@ func (h *ToolsHandler) handleScanMedicationVisual(idosoID int64, reason string, 
 
 		// Sinalizar mobile para abrir scanner
 		h.NotifyFunc(idosoID, "open_medication_scanner", map[string]interface{}{
-			"session_id":             sessionID,
-			"candidate_medications":  candidateList,
-			"instructions":           "Aponte a câmera para os frascos de medicamento",
-			"timeout":                60,
-			"reason":                 reason,
+			"session_id":            sessionID,
+			"candidate_medications": candidateList,
+			"instructions":          "Aponte a câmera para os frascos de medicamento",
+			"timeout":               60,
+			"reason":                reason,
 		})
 
 		log.Printf("✅ [MEDICATION SCANNER] Scanner iniciado. Session ID: %s, Candidatos: %d", sessionID, len(candidateList))
@@ -686,10 +698,10 @@ func (h *ToolsHandler) handleAnalyzeVoiceProsody(idosoID int64, analysisType str
 		sessionID := fmt.Sprintf("voice-prosody-%d-%d", idosoID, time.Now().Unix())
 
 		h.NotifyFunc(idosoID, "start_voice_recording", map[string]interface{}{
-			"session_id":      sessionID,
-			"analysis_type":   analysisType,
-			"duration":        audioSegment,
-			"instructions":    "Vou analisar sua voz. Por favor, continue conversando naturalmente.",
+			"session_id":    sessionID,
+			"analysis_type": analysisType,
+			"duration":      audioSegment,
+			"instructions":  "Vou analisar sua voz. Por favor, continue conversando naturalmente.",
 		})
 
 		log.Printf("✅ [VOICE PROSODY] Captura de áudio iniciada. Session ID: %s", sessionID)
@@ -736,12 +748,12 @@ func (h *ToolsHandler) handleApplyPHQ9(idosoID int64, startAssessment bool) (map
 
 	// Retornar primeira pergunta
 	return map[string]interface{}{
-		"status":        "assessment_started",
-		"session_id":    sessionID,
-		"assessment_id": assessmentID,
-		"scale":         "PHQ-9",
+		"status":          "assessment_started",
+		"session_id":      sessionID,
+		"assessment_id":   assessmentID,
+		"scale":           "PHQ-9",
 		"total_questions": 9,
-		"message": "Vou fazer algumas perguntas para entender melhor como você tem se sentido nas últimas 2 semanas. Não há respostas certas ou erradas.",
+		"message":         "Vou fazer algumas perguntas para entender melhor como você tem se sentido nas últimas 2 semanas. Não há respostas certas ou erradas.",
 		"first_question": map[string]interface{}{
 			"number": 1,
 			"text":   "Pouco interesse ou prazer em fazer as coisas?",
@@ -785,12 +797,12 @@ func (h *ToolsHandler) handleApplyGAD7(idosoID int64, startAssessment bool) (map
 
 	// Retornar primeira pergunta
 	return map[string]interface{}{
-		"status":        "assessment_started",
-		"session_id":    sessionID,
-		"assessment_id": assessmentID,
-		"scale":         "GAD-7",
+		"status":          "assessment_started",
+		"session_id":      sessionID,
+		"assessment_id":   assessmentID,
+		"scale":           "GAD-7",
 		"total_questions": 7,
-		"message": "Vou fazer algumas perguntas sobre ansiedade e nervosismo nas últimas 2 semanas.",
+		"message":         "Vou fazer algumas perguntas sobre ansiedade e nervosismo nas últimas 2 semanas.",
 		"first_question": map[string]interface{}{
 			"number": 1,
 			"text":   "Sentir-se nervoso(a), ansioso(a) ou muito tenso(a)?",
@@ -849,13 +861,13 @@ func (h *ToolsHandler) handleApplyCSSRS(idosoID int64, triggerPhrase string, sta
 
 	// Retornar primeira pergunta com extremo cuidado
 	return map[string]interface{}{
-		"status":        "assessment_started",
-		"session_id":    sessionID,
-		"assessment_id": assessmentID,
-		"scale":         "C-SSRS",
+		"status":          "assessment_started",
+		"session_id":      sessionID,
+		"assessment_id":   assessmentID,
+		"scale":           "C-SSRS",
 		"total_questions": 6,
-		"priority":      "CRITICAL",
-		"message": "Entendo que você está passando por um momento difícil. Vou fazer algumas perguntas importantes para entender melhor como posso ajudar.",
+		"priority":        "CRITICAL",
+		"message":         "Entendo que você está passando por um momento difícil. Vou fazer algumas perguntas importantes para entender melhor como posso ajudar.",
 		"first_question": map[string]interface{}{
 			"number": 1,
 			"text":   "Você desejou estar morto(a) ou desejou poder dormir e não acordar mais?",
@@ -1105,15 +1117,15 @@ func parseJSONArray(jsonStr string) []string {
 
 // GTDTask representa uma tarefa capturada pelo sistema GTD
 type GTDTask struct {
-	ID          int64     `json:"id"`
-	RawInput    string    `json:"raw_input"`    // O que o idoso disse
-	NextAction  string    `json:"next_action"`  // Ação física concreta
-	Context     string    `json:"context"`      // @saúde, @família, @casa, etc
-	Project     string    `json:"project"`      // Projeto maior (opcional)
-	DueDate     *string   `json:"due_date"`     // Data limite (opcional)
-	Status      string    `json:"status"`       // inbox, next, waiting, someday, done
-	Priority    int       `json:"priority"`     // 1=alta, 2=média, 3=baixa
-	CreatedAt   time.Time `json:"created_at"`
+	ID          int64      `json:"id"`
+	RawInput    string     `json:"raw_input"`   // O que o idoso disse
+	NextAction  string     `json:"next_action"` // Ação física concreta
+	Context     string     `json:"context"`     // @saúde, @família, @casa, etc
+	Project     string     `json:"project"`     // Projeto maior (opcional)
+	DueDate     *string    `json:"due_date"`    // Data limite (opcional)
+	Status      string     `json:"status"`      // inbox, next, waiting, someday, done
+	Priority    int        `json:"priority"`    // 1=alta, 2=média, 3=baixa
+	CreatedAt   time.Time  `json:"created_at"`
 	CompletedAt *time.Time `json:"completed_at"`
 }
 
@@ -1599,13 +1611,13 @@ func (h *ToolsHandler) handleReviewMemory(idosoID int64, args map[string]interfa
 	}
 
 	return map[string]interface{}{
-		"status":       "registrado",
-		"item_id":      item.ID,
-		"remembered":   remembered,
-		"next_review":  item.NextReview.Format("02/01 15:04"),
+		"status":        "registrado",
+		"item_id":       item.ID,
+		"remembered":    remembered,
+		"next_review":   item.NextReview.Format("02/01 15:04"),
 		"interval_days": item.IntervalDays,
-		"status_item":  item.Status,
-		"message":      message,
+		"status_item":   item.Status,
+		"message":       message,
 	}, nil
 }
 
@@ -1775,9 +1787,9 @@ func (h *ToolsHandler) handleLogHabit(idosoID int64, args map[string]interface{}
 	// Notificar app
 	if h.NotifyFunc != nil {
 		h.NotifyFunc(idosoID, "habit_logged", map[string]interface{}{
-			"log_id":     logEntry.ID,
-			"habit":      habitName,
-			"success":    success,
+			"log_id":  logEntry.ID,
+			"habit":   habitName,
+			"success": success,
 		})
 	}
 
@@ -1967,9 +1979,9 @@ func (h *ToolsHandler) handleGetDirections(idosoID int64, args map[string]interf
 	}
 
 	modeNames := map[string]string{
-		"walking":  "a pé",
-		"driving":  "de carro",
-		"transit":  "de transporte público",
+		"walking":   "a pé",
+		"driving":   "de carro",
+		"transit":   "de transporte público",
 		"bicycling": "de bicicleta",
 	}
 
@@ -2034,28 +2046,28 @@ func (h *ToolsHandler) handleOpenApp(idosoID int64, args map[string]interface{})
 		pkg     string
 		display string
 	}{
-		"whatsapp":  {"com.whatsapp", "WhatsApp"},
-		"agenda":    {"com.google.android.calendar", "Agenda"},
-		"calendario": {"com.google.android.calendar", "Calendário"},
-		"relogio":   {"com.google.android.deskclock", "Relógio"},
-		"alarme":    {"com.google.android.deskclock", "Alarme"},
-		"camera":    {"com.android.camera", "Câmera"},
-		"galeria":   {"com.google.android.apps.photos", "Galeria"},
-		"fotos":     {"com.google.android.apps.photos", "Fotos"},
-		"telefone":  {"com.android.dialer", "Telefone"},
-		"mensagens": {"com.google.android.apps.messaging", "Mensagens"},
-		"sms":       {"com.google.android.apps.messaging", "SMS"},
-		"spotify":   {"com.spotify.music", "Spotify"},
-		"youtube":   {"com.google.android.youtube", "YouTube"},
-		"maps":      {"com.google.android.apps.maps", "Google Maps"},
-		"mapa":      {"com.google.android.apps.maps", "Mapa"},
-		"gmail":     {"com.google.android.gm", "Gmail"},
-		"email":     {"com.google.android.gm", "E-mail"},
-		"chrome":    {"com.android.chrome", "Chrome"},
-		"navegador": {"com.android.chrome", "Navegador"},
-		"calculadora": {"com.google.android.calculator", "Calculadora"},
+		"whatsapp":      {"com.whatsapp", "WhatsApp"},
+		"agenda":        {"com.google.android.calendar", "Agenda"},
+		"calendario":    {"com.google.android.calendar", "Calendário"},
+		"relogio":       {"com.google.android.deskclock", "Relógio"},
+		"alarme":        {"com.google.android.deskclock", "Alarme"},
+		"camera":        {"com.android.camera", "Câmera"},
+		"galeria":       {"com.google.android.apps.photos", "Galeria"},
+		"fotos":         {"com.google.android.apps.photos", "Fotos"},
+		"telefone":      {"com.android.dialer", "Telefone"},
+		"mensagens":     {"com.google.android.apps.messaging", "Mensagens"},
+		"sms":           {"com.google.android.apps.messaging", "SMS"},
+		"spotify":       {"com.spotify.music", "Spotify"},
+		"youtube":       {"com.google.android.youtube", "YouTube"},
+		"maps":          {"com.google.android.apps.maps", "Google Maps"},
+		"mapa":          {"com.google.android.apps.maps", "Mapa"},
+		"gmail":         {"com.google.android.gm", "Gmail"},
+		"email":         {"com.google.android.gm", "E-mail"},
+		"chrome":        {"com.android.chrome", "Chrome"},
+		"navegador":     {"com.android.chrome", "Navegador"},
+		"calculadora":   {"com.google.android.calculator", "Calculadora"},
 		"configuracoes": {"com.android.settings", "Configurações"},
-		"ajustes":   {"com.android.settings", "Ajustes"},
+		"ajustes":       {"com.android.settings", "Ajustes"},
 	}
 
 	appKey := strings.ToLower(strings.ReplaceAll(appName, " ", ""))
@@ -2077,9 +2089,9 @@ func (h *ToolsHandler) handleOpenApp(idosoID int64, args map[string]interface{})
 	}
 
 	return map[string]interface{}{
-		"status":       "abrindo",
-		"app":          appInfo.display,
-		"package":      appInfo.pkg,
-		"message":      fmt.Sprintf("Abrindo %s...", appInfo.display),
+		"status":  "abrindo",
+		"app":     appInfo.display,
+		"package": appInfo.pkg,
+		"message": fmt.Sprintf("Abrindo %s...", appInfo.display),
 	}, nil
 }
