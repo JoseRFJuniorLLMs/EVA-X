@@ -178,15 +178,19 @@ func NewSignalingServer(
 
 	// Inicializar serviços de memória
 	embeddingService := memory.NewEmbeddingService(cfg.GoogleAPIKey)
-	memoryStore := memory.NewMemoryStore(db.GetConnection())
+
+	// FZPN Components (graphStore precisa ser criado ANTES de memoryStore)
+	graphStore := memory.NewGraphStore(neo4jClient, cfg)
+
+	// ✅ CORREÇÃO P5: Passar graphStore para memoryStore
+	memoryStore := memory.NewMemoryStore(db.GetConnection(), graphStore)
 	metadataAnalyzer := memory.NewMetadataAnalyzer(cfg.GoogleAPIKey)
 
 	// Inicializar serviço de personalidade
 	personalityService := personality.NewPersonalityService(db.GetConnection())
 	personalityRouter := personality.NewPersonalityRouter()
 
-	// FZPN Components
-	graphStore := memory.NewGraphStore(neo4jClient, cfg)
+	// Redis & FDPN (graphStore já criado acima)
 
 	// Redis & FDPN
 	redisClient, err := cache.NewRedisClient(cfg)
@@ -1273,8 +1277,33 @@ func (s *SignalingServer) setupGeminiSession(client *PCMClient, voiceName string
 					}()
 				}
 			} else {
-				// Save Assistant Memory
-				go s.brain.SaveEpisodicMemory(client.IdosoID, role, text, time.Now(), false)
+				// ✅ CORREÇÃO P8: Substituir SaveEpisodicMemory deprecated
+				// ✅ CORREÇÃO P3: Invalidar cache após salvar
+				go func() {
+					// Save Assistant Memory
+					mem := &memory.Memory{
+						IdosoID:       client.IdosoID,
+						Speaker:       role,
+						Content:       text,
+						Timestamp:     time.Now(),
+						EventDate:     time.Now(),
+						IsAtomic:      false,
+						Emotion:       "neutral", // TODO: Detectar emoção real
+						Importance:    0.5,       // TODO: Calcular dinâmicamente
+						Topics:        []string{},
+						SessionID:     "",
+						CallHistoryID: nil,
+					}
+
+					if err := s.memoryStore.Store(client.ctx, mem); err != nil {
+						log.Printf("❌ [MEMORY] Falha ao salvar memória do assistente: %v", err)
+					} else {
+						log.Printf("✅ [MEMORY] Memória do assistente salva: %d", mem.ID)
+
+						// ✅ CORREÇÃO P3: Invalidar cache
+						s.brain.InvalidatePromptCache(client.IdosoID)
+					}
+				}()
 
 				// 🔍 Self-Evaluation Audit
 				if s.selfEvalLoop != nil {
@@ -1350,7 +1379,7 @@ func (s *SignalingServer) setupGeminiSession(client *PCMClient, voiceName string
 
 	// ⚡ BUILD FINAL PROMPT usando UnifiedRetrieval (RSI - Real, Simbólico, Imaginário)
 	promptStart := time.Now()
-	instructions, err := s.brain.GetSystemPrompt(client.ctx, client.IdosoID)
+	instructions, languageCode, err := s.brain.GetSystemPrompt(client.ctx, client.IdosoID)
 	promptDuration := time.Since(promptStart)
 	if err != nil {
 		log.Printf("❌ Prompt fallback para idoso %d: %v", client.IdosoID, err)
@@ -1361,7 +1390,7 @@ func (s *SignalingServer) setupGeminiSession(client *PCMClient, voiceName string
 
 	log.Printf("🚀 Iniciando sessão Gemini (Co-Intelligence Mode)...")
 	// Passamos nil em memories e instructions antiga porque tudo agora está no System Prompt unificado
-	err = client.GeminiClient.StartSession(instructions, nil, nil, voiceName)
+	err = client.GeminiClient.StartSession(instructions, nil, nil, voiceName, languageCode)
 	if err != nil {
 		return err
 	}
@@ -1499,92 +1528,52 @@ func (s *SignalingServer) handleToolCallLegacy(client *PCMClient, name string, a
 
 		log.Printf("🔧 [OVERRIDE] Processando: %s → %s", directiveType, newValue)
 
-		// Validar tipo de diretiva
+		// Executar mudança via ToolsHandler (que já lida com o Banco)
+		// Mas aqui no SignalingServer mantemos o log e a auditoria extra se necessário,
+		// ou apenas chamamos o handler direto.
+		// Para manter compatibilidade com o que já tem em ToolsHandler.UpdateUserDirective:
+
 		var query string
 		var queryArgs []interface{}
 
 		switch directiveType {
 		case "language":
-			// Validar idioma
-			validLanguages := []string{
-				"pt-BR", "en-US", "en-GB", "es-ES", "es-US",
-				"fr-FR", "de-DE", "it-IT", "ja-JP", "ko-KR",
-				"cmn-CN", "hi-IN", "ar-XA", "ru-RU", "tr-TR",
-			}
-			valid := false
-			for _, lang := range validLanguages {
-				if newValue == lang {
-					valid = true
-					break
-				}
-			}
-			if !valid {
-				return map[string]interface{}{
-					"error": fmt.Sprintf("Idioma '%s' não suportado", newValue),
-				}, true
-			}
-
 			query = "UPDATE idosos SET idioma = $1, atualizado_em = NOW() WHERE id = $2"
 			queryArgs = []interface{}{newValue, client.IdosoID}
-
+		case "voice":
+			query = "UPDATE idosos SET preferred_voice = $1, atualizado_em = NOW() WHERE id = $2"
+			queryArgs = []interface{}{newValue, client.IdosoID}
 		case "legacy_mode":
 			boolValue := strings.ToLower(newValue) == "true"
 			query = "UPDATE idosos SET legacy_mode = $1, atualizado_em = NOW() WHERE id = $2"
 			queryArgs = []interface{}{boolValue, client.IdosoID}
-
 		default:
-			return map[string]interface{}{
-				"error": fmt.Sprintf("Tipo de diretiva desconhecido: %s", directiveType),
-			}, true
+			return map[string]interface{}{"error": "Diretiva desconhecida"}, true
 		}
 
-		// Executar mudança no banco
-		result, err := s.db.GetConnection().Exec(query, queryArgs...)
+		_, err := s.db.GetConnection().Exec(query, queryArgs...)
 		if err != nil {
-			log.Printf("❌ [OVERRIDE] Erro ao atualizar banco: %v", err)
-			return map[string]interface{}{
-				"error": fmt.Sprintf("Erro ao atualizar banco: %v", err),
-			}, true
+			return map[string]interface{}{"error": err.Error()}, true
 		}
 
-		rowsAffected, _ := result.RowsAffected()
-		if rowsAffected == 0 {
-			return map[string]interface{}{
-				"error": fmt.Sprintf("Idoso %d não encontrado", client.IdosoID),
-			}, true
+		// Invalidar cache de prompt para aplicar mudança IMEDIATAMENTE
+		if s.brain != nil {
+			s.brain.InvalidatePromptCache(client.IdosoID)
+			log.Printf("🗑️ [OVERRIDE] Cache de prompt invalidado")
+		}
+
+		// Se for mudança de voz, recriar sessão Gemini
+		if directiveType == "voice" {
+			log.Printf("🎙️ [OVERRIDE] Recriando sessão Gemini com nova voz: %s", newValue)
+			if err := s.setupGeminiSession(client, newValue); err != nil {
+				log.Printf("⚠️ [OVERRIDE] Erro ao trocar voz: %v", err)
+			}
 		}
 
 		// Registrar auditoria
-		auditQuery := `
-			INSERT INTO audit_log (
-				idoso_id,
-				action_type,
-				action_data,
-				performed_by,
-				created_at
-			) VALUES ($1, $2, $3, $4, NOW())
-		`
-
-		auditData := fmt.Sprintf(`{
-			"directive_type": "%s",
-			"old_value": "unknown",
-			"new_value": "%s",
-			"source": "architect_override"
-		}`, directiveType, newValue)
-
-		_, err = s.db.GetConnection().Exec(auditQuery,
-			client.IdosoID,
-			"DIRECTIVE_CHANGE",
-			auditData,
-			client.CPF,
-		)
-
-		if err != nil {
-			log.Printf("⚠️ [OVERRIDE] Falha ao registrar auditoria: %v", err)
-		}
-
-		log.Printf("✅ [OVERRIDE] Diretiva '%s' alterada para '%s' (idoso %d)",
-			directiveType, newValue, client.IdosoID)
+		auditData := fmt.Sprintf(`{"directive_type": "%s", "new_value": "%s", "source": "architect_override"}`, directiveType, newValue)
+		s.db.GetConnection().Exec("INSERT INTO audit_log (idoso_id, action_type, action_data, performed_by, created_at) VALUES ($1, $2, $3, $4, NOW())",
+			client.IdosoID, "DIRECTIVE_CHANGE", auditData, client.CPF)
 
 		return map[string]interface{}{
 			"success":             true,
