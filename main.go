@@ -541,7 +541,7 @@ func (s *SignalingServer) runNightlyConsolidation() {
 	defer cancel()
 
 	// Buscar pacientes ativos
-	query := `SELECT DISTINCT idoso_id FROM conversas WHERE timestamp > NOW() - INTERVAL '7 days'`
+	query := `SELECT DISTINCT idoso_id FROM episodic_memories WHERE timestamp > NOW() - INTERVAL '7 days'`
 	rows, err := s.db.GetConnection().QueryContext(ctx, query)
 	if err != nil {
 		log.Printf("⚠️ [NIGHTLY] Query error: %v", err)
@@ -2290,19 +2290,19 @@ func dashboardHandler(w http.ResponseWriter, r *http.Request) {
 	// --- Users ---
 	var totalUsers, activeUsers, usersToday int
 	conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM idosos").Scan(&totalUsers)
-	conn.QueryRowContext(ctx, "SELECT COUNT(DISTINCT idoso_id) FROM conversas WHERE timestamp > NOW() - INTERVAL '7 days'").Scan(&activeUsers)
-	conn.QueryRowContext(ctx, "SELECT COUNT(DISTINCT idoso_id) FROM conversas WHERE timestamp > NOW() - INTERVAL '24 hours'").Scan(&usersToday)
+	conn.QueryRowContext(ctx, "SELECT COUNT(DISTINCT idoso_id) FROM episodic_memories WHERE timestamp > NOW() - INTERVAL '7 days'").Scan(&activeUsers)
+	conn.QueryRowContext(ctx, "SELECT COUNT(DISTINCT idoso_id) FROM episodic_memories WHERE timestamp > NOW() - INTERVAL '24 hours'").Scan(&usersToday)
 
 	// --- Memories ---
 	var totalMemories, episodicMemories, recentMemories int
-	conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM conversas").Scan(&totalMemories)
-	conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM conversas WHERE tipo = 'episodica' OR tipo IS NULL").Scan(&episodicMemories)
-	conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM conversas WHERE timestamp > NOW() - INTERVAL '24 hours'").Scan(&recentMemories)
+	conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM episodic_memories").Scan(&totalMemories)
+	conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM episodic_memories").Scan(&episodicMemories)
+	conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM episodic_memories WHERE timestamp > NOW() - INTERVAL '24 hours'").Scan(&recentMemories)
 
 	// --- Conversations ---
 	var totalConversations int
 	var avgPerUser float64
-	conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM conversas").Scan(&totalConversations)
+	conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM episodic_memories").Scan(&totalConversations)
 	if totalUsers > 0 {
 		avgPerUser = float64(totalConversations) / float64(totalUsers)
 	}
