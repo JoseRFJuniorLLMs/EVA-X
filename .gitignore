@@ -1,10 +1,14 @@
 # Binaries
+<<<<<<< HEAD
 bin/
+=======
+>>>>>>> master
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
+<<<<<<< HEAD
 
 # Test
 *.test
@@ -16,16 +20,52 @@ vendor/
 go.work
 
 # IDEs
+=======
+bin/
+eva-mind
+
+# Go
+vendor/
+*.test
+coverage/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Environment
+.env
+*.env.local
+serviceAccountKey.json
+
+# IDE
+>>>>>>> master
 .idea/
 .vscode/
 *.swp
 *.swo
+<<<<<<< HEAD
 *~
 
 # Env
 .env
 .env.local
+=======
+>>>>>>> master
 
 # OS
 .DS_Store
 Thumbs.db
+<<<<<<< HEAD
+=======
+
+# Logs
+*.log
+nohup.out
+
+# Data
+data/*.db
+>>>>>>> master
