@@ -1,33 +1,21 @@
 # Binaries
-<<<<<<< HEAD
 bin/
-=======
->>>>>>> master
+eva-mind
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
-<<<<<<< HEAD
 
 # Test
 *.test
 *.out
+coverage/
 coverage.html
 
 # Go
 vendor/
 go.work
-
-# IDEs
-=======
-bin/
-eva-mind
-
-# Go
-vendor/
-*.test
-coverage/
 
 # Python
 __pycache__/
@@ -38,29 +26,26 @@ venv/
 
 # Environment
 .env
+*.env
 *.env.local
+vm.env
 serviceAccountKey.json
 
-# IDE
->>>>>>> master
+# Scripts to ignore
+deploy.sh
+setup_env.sh
+eva-mind.sh
+
+# IDEs
 .idea/
 .vscode/
 *.swp
 *.swo
-<<<<<<< HEAD
 *~
-
-# Env
-.env
-.env.local
-=======
->>>>>>> master
 
 # OS
 .DS_Store
 Thumbs.db
-<<<<<<< HEAD
-=======
 
 # Logs
 *.log
@@ -68,4 +53,3 @@ nohup.out
 
 # Data
 data/*.db
->>>>>>> master

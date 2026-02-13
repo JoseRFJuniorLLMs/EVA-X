@@ -57,11 +57,13 @@ import (
 	// 🐝 Swarm Architecture
 	"eva-mind/internal/swarm"
 	swarmClinical "eva-mind/internal/swarm/clinical"
+	swarmEducator "eva-mind/internal/swarm/educator"
 	swarmEmergency "eva-mind/internal/swarm/emergency"
 	swarmEntertainment "eva-mind/internal/swarm/entertainment"
 	swarmExternal "eva-mind/internal/swarm/external"
 	swarmGoogle "eva-mind/internal/swarm/google"
 	swarmKids "eva-mind/internal/swarm/kids"
+	swarmLegal "eva-mind/internal/swarm/legal"
 	swarmProductivity "eva-mind/internal/swarm/productivity"
 	swarmWellness "eva-mind/internal/swarm/wellness"
 
@@ -366,6 +368,8 @@ func NewSignalingServer(
 		swarmEntertainment.New(),
 		swarmExternal.New(),
 		swarmKids.New(),
+		swarmLegal.New(),
+		swarmEducator.New(),
 	); err != nil {
 		log.Printf("❌ Swarm initialization error: %v", err)
 	}
