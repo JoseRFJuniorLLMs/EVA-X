@@ -573,6 +573,26 @@ func GetDefaultTools() []interface{} {
 						"required": []string{"voice_name"},
 					},
 				},
+				// 🔧 ARCHITECT OVERRIDE: Change User Directive
+				map[string]interface{}{
+					"name":        "change_user_directive",
+					"description": "🔧 APENAS PARA O ARQUITETO: Altera diretrizes do usuário em tempo real durante a conversa (idioma, modo legacy). Use quando o arquiteto solicitar mudanças de configuração.",
+					"parameters": map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"directive_type": map[string]interface{}{
+								"type":        "string",
+								"enum":        []string{"language", "legacy_mode"},
+								"description": "Tipo de diretiva: 'language' (idioma), 'legacy_mode' (modo legado)",
+							},
+							"new_value": map[string]interface{}{
+								"type":        "string",
+								"description": "Novo valor. Exemplos: 'en-US', 'pt-BR', 'true', 'false'",
+							},
+						},
+						"required": []string{"directive_type", "new_value"},
+					},
+				},
 			},
 		},
 	}

@@ -6,18 +6,20 @@ import (
 	"log"
 	"net/http"
 	"time"
+
+	"eva-mind/internal/memory/krylov"
 )
 
 // KrylovHTTPBridge expoe o KrylovMemoryManager via HTTP/JSON
 // Bridge temporario ate protoc compilar os stubs gRPC
 // Porta: 50052 (HTTP) - complementa a porta 50051 (gRPC)
 type KrylovHTTPBridge struct {
-	kmm  *KrylovMemoryManager
+	kmm  *krylov.KrylovMemoryManager
 	port int
 }
 
 // NewKrylovHTTPBridge cria novo bridge HTTP
-func NewKrylovHTTPBridge(kmm *KrylovMemoryManager, port int) *KrylovHTTPBridge {
+func NewKrylovHTTPBridge(kmm *krylov.KrylovMemoryManager, port int) *KrylovHTTPBridge {
 	return &KrylovHTTPBridge{kmm: kmm, port: port}
 }
 
@@ -60,9 +62,9 @@ type updateReq struct {
 
 // updateResp response body para update
 type updateResp struct {
-	Accepted          bool    `json:"accepted"`
-	TotalUpdates      int64   `json:"total_updates"`
-	OrthogonalityErr  float64 `json:"orthogonality_error"`
+	Accepted         bool    `json:"accepted"`
+	TotalUpdates     int64   `json:"total_updates"`
+	OrthogonalityErr float64 `json:"orthogonality_error"`
 }
 
 // checkpointReq request body para checkpoint
@@ -211,8 +213,8 @@ func (b *KrylovHTTPBridge) handleHealth(w http.ResponseWriter, r *http.Request) 
 	}
 
 	writeJSON(w, map[string]interface{}{
-		"status":             b.kmm.GetStatistics()["status"],
-		"total_updates":      b.kmm.TotalUpdates(),
+		"status":              b.kmm.GetStatistics()["status"],
+		"total_updates":       b.kmm.TotalUpdates(),
 		"orthogonality_error": b.kmm.OrthogonalityError(),
 	})
 }

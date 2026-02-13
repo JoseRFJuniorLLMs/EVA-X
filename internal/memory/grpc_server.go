@@ -7,6 +7,8 @@ import (
 	"net"
 	"time"
 
+	"eva-mind/internal/memory/krylov"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health"
@@ -18,7 +20,7 @@ import (
 // KrylovGRPCServer expoe o KrylovMemoryManager via gRPC na porta 50051
 // Arquitetura: FastAPI (porta 8000) --gRPC--> Go KrylovService (porta 50051)
 type KrylovGRPCServer struct {
-	kmm        *KrylovMemoryManager
+	kmm        *krylov.KrylovMemoryManager
 	grpcServer *grpc.Server
 	port       int
 }
@@ -52,9 +54,9 @@ type UpdateSubspaceRequest struct {
 
 // UpdateSubspaceResponse resposta de update
 type UpdateSubspaceResponse struct {
-	Accepted          bool
-	TotalUpdates      int64
-	OrthogonalityErr  float64
+	Accepted         bool
+	TotalUpdates     int64
+	OrthogonalityErr float64
 }
 
 // BatchCompressRequest pedido de compressao em lote
@@ -85,7 +87,7 @@ type KrylovStats struct {
 }
 
 // NewKrylovGRPCServer cria novo servidor gRPC
-func NewKrylovGRPCServer(kmm *KrylovMemoryManager, port int) *KrylovGRPCServer {
+func NewKrylovGRPCServer(kmm *krylov.KrylovMemoryManager, port int) *KrylovGRPCServer {
 	return &KrylovGRPCServer{
 		kmm:  kmm,
 		port: port,
@@ -214,7 +216,7 @@ func (s *KrylovGRPCServer) Start() error {
 
 	log.Printf("[gRPC] KrylovService escutando na porta %d", s.port)
 	log.Printf("[gRPC] Dimension=%d, SubspaceSize=%d, WindowSize=%d",
-		s.kmm.Dimension, s.kmm.K, s.kmm.windowSize)
+		s.kmm.Dimension, s.kmm.K, s.kmm.WindowSize)
 
 	return s.grpcServer.Serve(lis)
 }

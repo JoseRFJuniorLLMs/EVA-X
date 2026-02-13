@@ -44,7 +44,7 @@ import (
 	"time"
 
 	// 🧠 Krylov Memory Compression
-	krylovmem "eva-mind/internal/memory"
+	krylovmem "eva-mind/internal/memory/krylov"
 
 	// 🧠 Cognitive Engines v2
 	"eva-mind/internal/cortex/attention"
@@ -1245,7 +1245,11 @@ func (s *SignalingServer) setupGeminiSession(client *PCMClient, voiceName string
 				go s.analyzeForTools(client, text)
 
 				// Brain: FDPN + Save User Memory
-				go s.brain.ProcessUserSpeech(client.ctx, client.IdosoID, text)
+				// TODO: Get actual audio emotion/urgency from AudioAnalysisService
+				audioEmotion := "neutral"
+				audioUrgency := "medium"
+				audioIntensity := 5
+				go s.brain.ProcessUserSpeech(client.ctx, client.IdosoID, text, audioEmotion, audioUrgency, audioIntensity)
 
 				// TransNAR: Desire Inference (NEW)
 				if s.transnarEngine != nil {
@@ -1479,6 +1483,113 @@ func (s *SignalingServer) handleToolCallLegacy(client *PCMClient, name string, a
 		return map[string]interface{}{
 			"success": true,
 			"message": fmt.Sprintf("Voz alterada para %s", voiceName),
+		}, true
+
+	case "change_user_directive":
+		// 🔒 VALIDAÇÃO DE SEGURANÇA - Apenas arquiteto
+		if !lacan.IsCreator(client.CPF) {
+			log.Printf("❌ [OVERRIDE] Tentativa de acesso negado: %s", client.CPF)
+			return map[string]interface{}{
+				"error": "Acesso negado: apenas o arquiteto pode alterar diretrizes",
+			}, true
+		}
+
+		directiveType, _ := args["directive_type"].(string)
+		newValue, _ := args["new_value"].(string)
+
+		log.Printf("🔧 [OVERRIDE] Processando: %s → %s", directiveType, newValue)
+
+		// Validar tipo de diretiva
+		var query string
+		var queryArgs []interface{}
+
+		switch directiveType {
+		case "language":
+			// Validar idioma
+			validLanguages := []string{
+				"pt-BR", "en-US", "en-GB", "es-ES", "es-US",
+				"fr-FR", "de-DE", "it-IT", "ja-JP", "ko-KR",
+				"cmn-CN", "hi-IN", "ar-XA", "ru-RU", "tr-TR",
+			}
+			valid := false
+			for _, lang := range validLanguages {
+				if newValue == lang {
+					valid = true
+					break
+				}
+			}
+			if !valid {
+				return map[string]interface{}{
+					"error": fmt.Sprintf("Idioma '%s' não suportado", newValue),
+				}, true
+			}
+
+			query = "UPDATE idosos SET idioma = $1, atualizado_em = NOW() WHERE id = $2"
+			queryArgs = []interface{}{newValue, client.IdosoID}
+
+		case "legacy_mode":
+			boolValue := strings.ToLower(newValue) == "true"
+			query = "UPDATE idosos SET legacy_mode = $1, atualizado_em = NOW() WHERE id = $2"
+			queryArgs = []interface{}{boolValue, client.IdosoID}
+
+		default:
+			return map[string]interface{}{
+				"error": fmt.Sprintf("Tipo de diretiva desconhecido: %s", directiveType),
+			}, true
+		}
+
+		// Executar mudança no banco
+		result, err := s.db.GetConnection().Exec(query, queryArgs...)
+		if err != nil {
+			log.Printf("❌ [OVERRIDE] Erro ao atualizar banco: %v", err)
+			return map[string]interface{}{
+				"error": fmt.Sprintf("Erro ao atualizar banco: %v", err),
+			}, true
+		}
+
+		rowsAffected, _ := result.RowsAffected()
+		if rowsAffected == 0 {
+			return map[string]interface{}{
+				"error": fmt.Sprintf("Idoso %d não encontrado", client.IdosoID),
+			}, true
+		}
+
+		// Registrar auditoria
+		auditQuery := `
+			INSERT INTO audit_log (
+				idoso_id,
+				action_type,
+				action_data,
+				performed_by,
+				created_at
+			) VALUES ($1, $2, $3, $4, NOW())
+		`
+
+		auditData := fmt.Sprintf(`{
+			"directive_type": "%s",
+			"old_value": "unknown",
+			"new_value": "%s",
+			"source": "architect_override"
+		}`, directiveType, newValue)
+
+		_, err = s.db.GetConnection().Exec(auditQuery,
+			client.IdosoID,
+			"DIRECTIVE_CHANGE",
+			auditData,
+			client.CPF,
+		)
+
+		if err != nil {
+			log.Printf("⚠️ [OVERRIDE] Falha ao registrar auditoria: %v", err)
+		}
+
+		log.Printf("✅ [OVERRIDE] Diretiva '%s' alterada para '%s' (idoso %d)",
+			directiveType, newValue, client.IdosoID)
+
+		return map[string]interface{}{
+			"success":             true,
+			"message":             fmt.Sprintf("Diretiva '%s' alterada para '%s' com sucesso", directiveType, newValue),
+			"applied_immediately": true,
 		}, true
 
 	// --- CATEGORIA ENTRETENIMENTO ---

@@ -184,7 +184,7 @@ func (s *Service) SaveEpisodicMemory(idosoID int64, role, content string, eventD
 					continue
 				}
 
-				log.Printf("✅ [QDRANT] Memory %d indexed", memoryID)
+				log.Printf("✅ [QDRANT] Memory %d indexed successfully", memoryID)
 
 				// 4. Update Personality State (Async)
 				if role == "user" && s.personalityService != nil {
@@ -220,16 +220,16 @@ func (s *Service) SaveEpisodicMemory(idosoID int64, role, content string, eventD
 			}
 
 			if err := s.graphStore.AddEpisodicMemory(neo4jCtx, graphMemory); err != nil {
-				log.Printf("⚠️ [NEO4J] Erro ao salvar no grafo: %v", err)
+				log.Printf("❌ [NEO4J] Erro ao salvar no grafo: %v", err)
 			} else {
-				log.Printf("✅ [NEO4J] Memory %d salva no grafo", memoryID)
+				log.Printf("✅ [NEO4J] Memory %d salva no grafo com sucesso", memoryID)
 			}
 		}()
 	} else {
-		log.Printf("⚠️ [NEO4J] GraphStore não disponível, pulando salvamento no grafo")
+		log.Printf("❌ [NEO4J] GraphStore é NIL - memória NÃO será salva no Neo4j!")
 	}
 
-	log.Printf("🧠 [MEMORY] Salvamento completo para idoso %d", idosoID)
+	log.Printf("🧠 [MEMORY] Salvamento completo para idoso %d - ID: %d", idosoID, memoryID)
 }
 
 // Helper to extract keywords

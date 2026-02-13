@@ -72,6 +72,35 @@ func (c *Neo4jClient) ExecuteWrite(ctx context.Context, cypher string, params ma
 	return result, err
 }
 
+func (c *Neo4jClient) ExecuteWriteAndReturn(ctx context.Context, cypher string, params map[string]interface{}) ([]*neo4j.Record, error) {
+	if c == nil || c.driver == nil {
+		return nil, fmt.Errorf("neo4j client not initialized or disconnected")
+	}
+
+	session := c.driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeWrite})
+	defer session.Close(ctx)
+
+	result, err := session.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
+		result, err := tx.Run(ctx, cypher, params)
+		if err != nil {
+			return nil, err
+		}
+		return result.Collect(ctx)
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	records := result.([]*neo4j.Record)
+	preview := cypher
+	if len(preview) > 100 {
+		preview = preview[:100] + "..."
+	}
+	log.Printf("📥 [NEO4J] Escrita com retorno concluída: Query=\"%s\", Records=%d", preview, len(records))
+	return records, nil
+}
+
 func (c *Neo4jClient) ExecuteRead(ctx context.Context, cypher string, params map[string]interface{}) ([]*neo4j.Record, error) {
 	if c == nil || c.driver == nil {
 		return nil, fmt.Errorf("neo4j client not initialized or disconnected")

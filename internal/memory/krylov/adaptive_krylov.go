@@ -1,4 +1,4 @@
-package memory
+package krylov
 
 import (
 	"fmt"
@@ -24,10 +24,10 @@ type AdaptiveKrylov struct {
 	adaptationCount int
 
 	// Configuracao
-	expandThreshold  float64 // Pressao > este valor = expandir
-	contractThreshold float64 // Pressao < este valor = contrair
-	adaptInterval    time.Duration // Intervalo minimo entre adaptacoes
-	mu               sync.Mutex
+	expandThreshold   float64       // Pressao > este valor = expandir
+	contractThreshold float64       // Pressao < este valor = contrair
+	adaptInterval     time.Duration // Intervalo minimo entre adaptacoes
+	mu                sync.Mutex
 }
 
 // AdaptationEvent evento de adaptacao registrado
@@ -213,7 +213,7 @@ func (ak *AdaptiveKrylov) expandTo(newK int) {
 	}
 
 	// Criar novo manager com dimensao expandida
-	newManager := NewKrylovMemoryManager(ak.krylov.Dimension, newK, ak.krylov.windowSize)
+	newManager := NewKrylovMemoryManager(ak.krylov.Dimension, newK, ak.krylov.WindowSize)
 
 	// Copiar dados existentes da base
 	ak.krylov.mu.RLock()
@@ -227,7 +227,7 @@ func (ak *AdaptiveKrylov) expandTo(newK int) {
 
 	// Copiar queue
 	for i := 0; i < ak.krylov.queueSize; i++ {
-		idx := (ak.krylov.queueHead + i) % ak.krylov.windowSize
+		idx := (ak.krylov.queueHead + i) % ak.krylov.WindowSize
 		if ak.krylov.memoryQueue[idx] != nil {
 			copiedVec := make([]float64, len(ak.krylov.memoryQueue[idx]))
 			copy(copiedVec, ak.krylov.memoryQueue[idx])
@@ -247,7 +247,7 @@ func (ak *AdaptiveKrylov) contractTo(newK int) {
 		return
 	}
 
-	newManager := NewKrylovMemoryManager(ak.krylov.Dimension, newK, ak.krylov.windowSize)
+	newManager := NewKrylovMemoryManager(ak.krylov.Dimension, newK, ak.krylov.WindowSize)
 
 	// Copiar apenas as primeiras newK colunas (mais importantes)
 	ak.krylov.mu.RLock()
@@ -260,7 +260,7 @@ func (ak *AdaptiveKrylov) contractTo(newK int) {
 	}
 
 	for i := 0; i < ak.krylov.queueSize; i++ {
-		idx := (ak.krylov.queueHead + i) % ak.krylov.windowSize
+		idx := (ak.krylov.queueHead + i) % ak.krylov.WindowSize
 		if ak.krylov.memoryQueue[idx] != nil {
 			copiedVec := make([]float64, len(ak.krylov.memoryQueue[idx]))
 			copy(copiedVec, ak.krylov.memoryQueue[idx])
