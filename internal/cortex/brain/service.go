@@ -65,11 +65,18 @@ func NewService(
 }
 
 // GetSystemPrompt gera o prompt inicial unificado (RSI)
-func (s *Service) GetSystemPrompt(ctx context.Context, idosoID int64) (string, error) {
+func (s *Service) GetSystemPrompt(ctx context.Context, idosoID int64) (string, string, error) {
 	if s.unifiedRetrieval == nil {
-		return "", fmt.Errorf("unified retrieval not initialized")
+		return "", "", fmt.Errorf("unified retrieval not initialized")
 	}
 	return s.unifiedRetrieval.GetPromptForGemini(ctx, idosoID, "", "")
+}
+
+// InvalidatePromptCache limpa o cache de prompt para um idoso
+func (s *Service) InvalidatePromptCache(idosoID int64) {
+	if s.unifiedRetrieval != nil {
+		s.unifiedRetrieval.InvalidatePromptCache(idosoID)
+	}
 }
 
 // ProcessUserSpeech handles user transcription in real-time (FDPN Hook)

@@ -10,7 +10,7 @@ import (
 func (s *Service) BuildSystemPrompt(idosoID int64) string {
 	// Delegar para o UnifiedRetrieval (Lacanian + Cognitive Engine)
 	// Passamos strings vazias para texto atual/anterior pois é o setup inicial
-	prompt, err := s.unifiedRetrieval.GetPromptForGemini(context.Background(), idosoID, "", "")
+	prompt, _, err := s.unifiedRetrieval.GetPromptForGemini(context.Background(), idosoID, "", "")
 	if err != nil {
 		log.Printf("⚠️ [Brain] Failed to build unified prompt: %v. Using fallback.", err)
 		return "VOCÊ É A EVA. Ocorreu um erro ao carregar sua memória completa. Apenas converse naturalmente."

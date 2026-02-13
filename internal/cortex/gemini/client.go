@@ -111,6 +111,7 @@ func (c *Client) SendSetup(instructions string, voiceSettings map[string]interfa
 							"voice_name": voiceSettings["voiceName"],
 						},
 					},
+					"language_code": voiceSettings["languageCode"],
 				},
 
 				"temperature": 0.6,
@@ -164,8 +165,14 @@ func (c *Client) SendSetup(instructions string, voiceSettings map[string]interfa
 }
 
 // StartSession é alias depreciado
-func (c *Client) StartSession(instructions string, tools []interface{}, memories []string, voiceName string) error {
-	return c.SendSetup(instructions, map[string]interface{}{"voiceName": voiceName}, memories, "", nil)
+func (c *Client) StartSession(instructions string, tools []interface{}, memories []string, voiceName string, languageCode string) error {
+	if languageCode == "" {
+		languageCode = "pt-BR"
+	}
+	return c.SendSetup(instructions, map[string]interface{}{
+		"voiceName":    voiceName,
+		"languageCode": languageCode,
+	}, memories, "", nil)
 }
 
 // SendAudio envia áudio PCM
