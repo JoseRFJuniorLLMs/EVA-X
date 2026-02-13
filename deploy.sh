@@ -32,7 +32,7 @@ export APP_URL=https://eva-ia.org
 # Execução
 git pull origin main
 go mod tidy
-go build -o eva-mind main.go
+go build -o eva-mind .
 
 if systemctl list-units --full -all | grep -Fq "eva-mind.service"; then
     systemctl restart eva-mind
