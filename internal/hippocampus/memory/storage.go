@@ -4,10 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"eva-mind/internal/brainstem/infrastructure/vector"
 	"fmt"
 	"log"
 	"strings"
 	"time"
+
+	pb "github.com/qdrant/go-client/qdrant"
 )
 
 // =============================================================================
@@ -41,15 +44,17 @@ type Memory struct {
 // MemoryStore gerencia o armazenamento de memórias
 type MemoryStore struct {
 	db         *sql.DB
-	graphStore *GraphStore // Para salvar relações no Neo4j
+	graphStore *GraphStore          // Para salvar relações no Neo4j
+	qdrant     *vector.QdrantClient // Para salvar vetores no Qdrant
 }
 
 // NewMemoryStore cria um novo gerenciador de memórias
 // graphStore é opcional - se nil, apenas Postgres será usado
-func NewMemoryStore(db *sql.DB, graphStore *GraphStore) *MemoryStore {
+func NewMemoryStore(db *sql.DB, graphStore *GraphStore, qdrant *vector.QdrantClient) *MemoryStore {
 	return &MemoryStore{
 		db:         db,
 		graphStore: graphStore,
+		qdrant:     qdrant,
 	}
 }
 
@@ -58,21 +63,18 @@ func NewMemoryStore(db *sql.DB, graphStore *GraphStore) *MemoryStore {
 func (m *MemoryStore) Store(ctx context.Context, memory *Memory) error {
 	query := `
 		INSERT INTO episodic_memories 
-		(idoso_id, speaker, content, embedding, emotion, importance, topics, session_id, call_history_id, event_date, is_atomic)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		(idoso_id, speaker, content, emotion, importance, topics, session_id, call_history_id, event_date, is_atomic)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING id, timestamp
 	`
 
-	embeddingStr := vectorToPostgres(memory.Embedding)
-
-	// 1. ✅ Salvar no Postgres
+	// 1. ✅ Salvar no Postgres (Sem vetor)
 	err := m.db.QueryRowContext(
 		ctx,
 		query,
 		memory.IdosoID,
 		memory.Speaker,
 		memory.Content,
-		embeddingStr,
 		memory.Emotion,
 		memory.Importance,
 		pqArray(memory.Topics),
@@ -89,7 +91,7 @@ func (m *MemoryStore) Store(ctx context.Context, memory *Memory) error {
 	log.Printf("✅ [STORAGE] Memória salva no Postgres: ID=%d, idoso=%d, speaker=%s",
 		memory.ID, memory.IdosoID, memory.Speaker)
 
-	// 2. ✅ NOVO: Salvar relações no Neo4j
+	// 2. ✅ Salvar relações no Neo4j
 	if m.graphStore != nil {
 		if err := m.graphStore.AddEpisodicMemory(ctx, memory); err != nil {
 			// NÃO falhar a operação, mas logar claramente
@@ -98,6 +100,69 @@ func (m *MemoryStore) Store(ctx context.Context, memory *Memory) error {
 		} else {
 			log.Printf("✅ [NEO4J] Relações salvas: %d topics, emoção=%s (memória %d)",
 				len(memory.Topics), memory.Emotion, memory.ID)
+		}
+	}
+
+	// 3. ✅ NOVO: Salvar vetor no Qdrant (Substituindo pgvector)
+	if m.qdrant != nil && len(memory.Embedding) > 0 {
+		// Converter map[string]interface{} para payload do Qdrant
+		payload := map[string]interface{}{
+			"id":              memory.ID,
+			"idoso_id":        memory.IdosoID,
+			"content":         memory.Content,
+			"speaker":         memory.Speaker,
+			"emotion":         memory.Emotion,
+			"importance":      memory.Importance,
+			"topics":          memory.Topics, // Qdrant aceita arrays
+			"timestamp":       memory.Timestamp.Format(time.RFC3339),
+			"event_date":      memory.EventDate.Format(time.RFC3339),
+			"is_atomic":       memory.IsAtomic,
+			"session_id":      memory.SessionID,
+			"call_history_id": memory.CallHistoryID,
+		}
+
+		// Converter payload para formato Qdrant (protobuf)
+		qPayload := make(map[string]*pb.Value)
+		for k, v := range payload {
+			switch val := v.(type) {
+			case string:
+				qPayload[k] = &pb.Value{Kind: &pb.Value_StringValue{StringValue: val}}
+			case int:
+				qPayload[k] = &pb.Value{Kind: &pb.Value_IntegerValue{IntegerValue: int64(val)}}
+			case int64:
+				qPayload[k] = &pb.Value{Kind: &pb.Value_IntegerValue{IntegerValue: val}}
+			case float64:
+				qPayload[k] = &pb.Value{Kind: &pb.Value_DoubleValue{DoubleValue: val}}
+			case bool:
+				qPayload[k] = &pb.Value{Kind: &pb.Value_BoolValue{BoolValue: val}}
+			case []string:
+				list := make([]*pb.Value, len(val))
+				for i, s := range val {
+					list[i] = &pb.Value{Kind: &pb.Value_StringValue{StringValue: s}}
+				}
+				qPayload[k] = &pb.Value{Kind: &pb.Value_ListValue{ListValue: &pb.ListValue{Values: list}}}
+			}
+		}
+
+		// Construir PointStruct
+		point := &pb.PointStruct{
+			Id: &pb.PointId{
+				PointIdOptions: &pb.PointId_Num{Num: uint64(memory.ID)},
+			},
+			Vectors: &pb.Vectors{
+				VectorsOptions: &pb.Vectors_Vector{
+					Vector: &pb.Vector{Data: memory.Embedding},
+				},
+			},
+			Payload: qPayload,
+		}
+
+		// Upsert no Qdrant
+		err := m.qdrant.Upsert(ctx, "memories", []*pb.PointStruct{point})
+		if err != nil {
+			log.Printf("❌ [QDRANT] Falha ao salvar vetor para memória %d: %v", memory.ID, err)
+		} else {
+			log.Printf("✅ [QDRANT] Vetor salvo com sucesso: %d", memory.ID)
 		}
 	} else {
 		log.Printf("⚠️ [NEO4J] GraphStore não disponível - relações NÃO salvas (apenas Postgres)")
