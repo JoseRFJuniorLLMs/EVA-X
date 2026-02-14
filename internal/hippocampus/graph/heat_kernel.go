@@ -1,14 +1,15 @@
-package graph
+package diffusor
 
 import (
 	"context"
+	"eva-mind/internal/brainstem/infrastructure/graph"
 	"math"
 )
 
 // HeatKernelDiffusion implements heat kernel-based graph navigation
 // Simulates "heat" diffusing through the knowledge graph to discover implicit relations
 type HeatKernelDiffusion struct {
-	neo4jClient *Neo4jClient
+	neo4jClient *graph.Neo4jClient
 	timeParam   float64 // t parameter for diffusion (controls spread)
 }
 
@@ -38,7 +39,7 @@ type Insight struct {
 }
 
 // NewHeatKernelDiffusion creates a new heat kernel diffusion engine
-func NewHeatKernelDiffusion(neo4jClient *Neo4jClient, timeParam float64) *HeatKernelDiffusion {
+func NewHeatKernelDiffusion(neo4jClient *graph.Neo4jClient, timeParam float64) *HeatKernelDiffusion {
 	return &HeatKernelDiffusion{
 		neo4jClient: neo4jClient,
 		timeParam:   timeParam,
@@ -185,7 +186,7 @@ func (hk *HeatKernelDiffusion) getNeighbors(ctx context.Context, nodeID string) 
 		RETURN id(neighbor) as neighborID
 	`
 
-	result, err := hk.neo4jClient.ExecuteQuery(ctx, query, map[string]interface{}{
+	result, err := hk.neo4jClient.ExecuteRead(ctx, query, map[string]interface{}{
 		"nodeID": nodeID,
 	})
 
@@ -195,8 +196,10 @@ func (hk *HeatKernelDiffusion) getNeighbors(ctx context.Context, nodeID string) 
 
 	neighbors := []string{}
 	for _, record := range result {
-		if neighborID, ok := record["neighborID"].(string); ok {
-			neighbors = append(neighbors, neighborID)
+		if val, exists := record.Get("neighborID"); exists {
+			if neighborID, ok := val.(string); ok {
+				neighbors = append(neighbors, neighborID)
+			}
 		}
 	}
 
@@ -211,7 +214,7 @@ func (hk *HeatKernelDiffusion) findShortestPath(ctx context.Context, startID, en
 		RETURN path
 	`
 
-	result, err := hk.neo4jClient.ExecuteQuery(ctx, query, map[string]interface{}{
+	result, err := hk.neo4jClient.ExecuteRead(ctx, query, map[string]interface{}{
 		"startID": startID,
 		"endID":   endID,
 	})

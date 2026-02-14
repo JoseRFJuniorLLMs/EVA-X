@@ -59,7 +59,6 @@ func ShouldAdmitUncertainty(trait string, sessionCount int) bool {
 // GetUncertaintyMessage generates a message admitting uncertainty
 func GetUncertaintyMessage(trait string, sessionCount int) string {
 	visibility := GetTraitVisibility(trait)
-	confidence := AdjustConfidenceByTrait(trait, sessionCount)
 
 	if visibility > 0.80 {
 		return "Ainda não tenho dados suficientes para julgar isso com certeza."
