@@ -1,28 +1,30 @@
 # EVA-Mind
 
-**Universal Digital Guardian**
+### Universal Digital Guardian
 
-*Deep Mind (Krylov/Lacan) + Digital Memory (Supermemory)*
+#### Deep Mind (Krylov/Lacan) + Digital Memory (Supermemory)
 
 Voice-first | Lacanian Psychoanalysis | Gurdjieff Enneagram | Multi-Agent Swarm | Universal Memory
 
----
+## Introdução
 
-## O que é
-
-EVA-Mind é um sistema de IA conversacional e guardião digital que evoluiu de um assistente para idosos para um **Sistema Universal** (Crianças, Adultos, Idosos). Ele combina:
+EVA-Mind é um sistema de mente artificial avançado e guardião digital que evoluiu de um assistente para idosos para um **Sistema Universal** (Crianças, Adultos, Idosos). Ele combina:
 
 - **Deep Mind Cognitiva:**
-    - Conversa por voz em tempo real (Gemini 2.5 Flash via WebSocket)
-    - Psicoanálise computacional Lacaniana (desejo vs demanda, transferência)
-    - Personalidade adaptativa por Enneagram de Gurdjieff
-    - Motor de Memória Krylov (subespaços matemáticos)
-    - Predição de Trajetória HMC
-
+  - Conversa por voz em tempo real (Gemini 2.5 Flash via WebSocket)
+  - Psicoanálise computacional Lacaniana (desejo vs demanda, transferência)
+  - Personalidade adaptativa por Enneagram de Gurdjieff
+  - Motor de Memória Krylov (subespaços matemáticos)
+  - Predição de Trajetória HMC
+- **Memória:** Sistema de memória híbrido com Krylov, REM e Fatos Atômicos.
+- **Cognição:** Arquitetura Gurdjieffiana com centros de atenção e Global Workspace.
+- **Personalidade:** Modelo Funder RAM, Big Five, Eneagrama Dinâmico e Modulação de Situação.
+- **Clínico:** Monitoramento de crises e detecção de anomalias de trajetória.
+- **Topologia:** Análise de Heat Kernel e Homologia Persistente para detecção de traumas.
 - **Digital Memory Omnipresente (via integração Supermemory):**
-    - Captura de vida digital (Browser Extension, Notion, Drive)
-    - Servidor MCP para integração com IDEs e Agentes
-    - Camada Multi-LLM (Anthropic, OpenAI, Google)
+  - Captura de vida digital (Browser Extension, Notion, Drive)
+  - Servidor MCP para integração com IDEs e Agentes
+  - Camada Multi-LLM (Anthropic, OpenAI, Google)
 
 - **Dual Mode:**
     - **Modo Pessoal:** Gestão de conhecimento, produtividade, captura de dados.
@@ -96,7 +98,7 @@ EVA-Mind é um sistema de IA conversacional e guardião digital que evoluiu de u
 
 O Master LLM (Gemini) é o cérebro único da voz. Quando detecta que precisa de uma ação (agendar medicamento, alertar família, tocar música), faz um **function call**. Esse call é roteado pelo **Swarm Orchestrator** para o agent especializado.
 
-```
+```text
 Gemini detecta intenção → Orchestrator.Route() → Registry.FindSwarm() → Agent.Execute()
 ```
 
@@ -104,13 +106,13 @@ Gemini detecta intenção → Orchestrator.Route() → Registry.FindSwarm() → 
 
 O coração do sistema. Recebe cada tool call e:
 
-1. **Lookup O(1)** - Encontra o swarm responsável pelo nome da tool
-2. **Circuit Breaker** - Verifica se o swarm está saudável
-3. **Timeout por prioridade** - CRITICAL=2s, HIGH=5s, MEDIUM=10s, LOW=15s
-4. **Executa** a tool no swarm correto
-5. **Handoff** - Se o resultado pede transferência para outro swarm, executa
-6. **Side Effects** - Processa notificações, logs, alertas em background
-7. **Métricas** - Registra latência, sucesso/falha por swarm
+1.  **Lookup O(1)** - Encontra o swarm responsável pelo nome da tool
+2.  **Circuit Breaker** - Verifica se o swarm está saudável
+3.  **Timeout por prioridade** - CRITICAL=2s, HIGH=5s, MEDIUM=10s, LOW=15s
+4.  **Executa** a tool no swarm correto
+5.  **Handoff** - Se o resultado pede transferência para outro swarm, executa
+6.  **Side Effects** - Processa notificações, logs, alertas em background
+7.  **Métricas** - Registra latência, sucesso/falha por swarm
 
 ### Registry (`internal/swarm/registry.go`)
 
@@ -132,10 +134,10 @@ Gera automaticamente os `function_declarations` para o Gemini (batches de 10).
 
 Protege contra falhas em cascata:
 
-| Estado | Comportamento |
-|--------|--------------|
-| **Closed** | Normal - requests passam |
-| **Open** | 5 falhas consecutivas - bloqueia por 30s |
+| Estado      | Comportamento                               |
+| :---------- | :------------------------------------------ |
+| **Closed**  | Normal - requests passam                    |
+| **Open**    | 5 falhas consecutivas - bloqueia por 30s    |
 | **Half-Open** | Testa recovery - 2 sucessos fecha o circuit |
 
 ### Base Agent (`internal/swarm/base_agent.go`)
@@ -150,6 +152,14 @@ agent.RegisterTool(toolDefinition, handlerFunction)
 O BaseAgent cuida de: routing interno, métricas, lifecycle.
 
 ### Interface SwarmAgent
+
+```go
+type TrajectorySnapshot struct {
+    Timestamp time.Time
+    Profile   BigFiveProfile
+    SessionID string
+}
+```
 
 ```go
 type SwarmAgent interface {
@@ -185,14 +195,14 @@ EntertainmentSwarm (play_relaxation_sounds)
 
 Cada `ToolResult` sugere tom emocional para o Master LLM:
 
-| Swarm | Tom |
-|-------|-----|
-| Emergency | `urgente_mas_calmo` |
-| Clinical | `gentil_empático` |
-| Entertainment | `alegre_acolhedor` |
-| Wellness | `calmo_guiado` |
-| Productivity | `confirmação_positiva` |
-| Kids | `divertido_energético` |
+| Swarm         | Tom                    |
+| :------------ | :--------------------- |
+| Emergency     | `urgente_mas_calmo`    |
+| Clinical      | `gentil_empático`      |
+| Entertainment | `alegre_acolhedor`     |
+| Wellness      | `calmo_guiado`         |
+| Productivity  | `confirmação_positiva` |
+| Kids          | `divertido_energético` |
 
 ---
 
@@ -202,13 +212,13 @@ Cada `ToolResult` sugere tom emocional para o Master LLM:
 
 **Prioridade máxima.** Preempta qualquer outro swarm. Timeout: 2 segundos.
 
-| Tool | Parâmetros | Ação |
-|------|-----------|------|
-| `alert_family` | reason, severity (critica/alta/media/baixa) | Push + SMS + Email para cuidadores |
-| `call_family_webrtc` | - | Chamada de vídeo para família |
-| `call_central_webrtc` | - | Chamada para Central EVA-Mind |
-| `call_doctor_webrtc` | - | Chamada para médico |
-| `call_caregiver_webrtc` | - | Chamada para cuidador |
+| Tool                    | Parâmetros                                  | Ação                               |
+| :---------------------- | :------------------------------------------ | :--------------------------------- |
+| `alert_family`          | reason, severity (critica/alta/media/baixa) | Push + SMS + Email para cuidadores |
+| `call_family_webrtc`    | -                                           | Chamada de vídeo para família      |
+| `call_central_webrtc`   | -                                           | Chamada para Central EVA-Mind      |
+| `call_doctor_webrtc`    | -                                           | Chamada para médico                |
+| `call_caregiver_webrtc` | -                                           | Chamada para cuidador              |
 
 **Handoff automático:** Alerta com `severity=critica` dispara avaliação C-SSRS no ClinicalSwarm.
 
@@ -216,17 +226,17 @@ Cada `ToolResult` sugere tom emocional para o Master LLM:
 
 **Avaliações clínicas e medicamentos.** Mantém sessões multi-turno (PHQ-9 = 9 perguntas).
 
-| Tool | Parâmetros | Ação |
-|------|-----------|------|
-| `apply_phq9` | - | Inicia avaliação de depressão PHQ-9 |
-| `apply_gad7` | - | Inicia avaliação de ansiedade GAD-7 |
-| `apply_cssrs` | - | Inicia avaliação de risco suicida C-SSRS |
-| `submit_phq9_response` | question_number, response | Registra resposta PHQ-9 |
-| `submit_gad7_response` | question_number, response | Registra resposta GAD-7 |
-| `submit_cssrs_response` | question_number, response | Registra resposta C-SSRS |
-| `confirm_medication` | medication_name | Confirma medicamento tomado |
-| `open_camera_analysis` | - | Ativa câmera para análise visual |
-| `scan_medication_visual` | period | Identifica medicamento pela câmera |
+| Tool                     | Parâmetros                | Ação                                     |
+| :----------------------- | :------------------------ | :--------------------------------------- |
+| `apply_phq9`             | -                         | Inicia avaliação de depressão PHQ-9      |
+| `apply_gad7`             | -                         | Inicia avaliação de ansiedade GAD-7      |
+| `apply_cssrs`            | -                         | Inicia avaliação de risco suicida C-SSRS |
+| `submit_phq9_response`   | question_number, response | Registra resposta PHQ-9                  |
+| `submit_gad7_response`   | question_number, response | Registra resposta GAD-7                  |
+| `submit_cssrs_response`  | question_number, response | Registra resposta C-SSRS                 |
+| `confirm_medication`     | medication_name           | Confirma medicamento tomado              |
+| `open_camera_analysis`   | -                         | Ativa câmera para análise visual         |
+| `scan_medication_visual` | period                    | Identifica medicamento pela câmera       |
 
 **Scores críticos** escalam automaticamente para EmergencySwarm.
 
@@ -236,76 +246,76 @@ Cada `ToolResult` sugere tom emocional para o Master LLM:
 
 **Scheduling (com flow de confirmação):**
 
-| Tool | Parâmetros | Ação |
-|------|-----------|------|
-| `pending_schedule` | timestamp, type, description | Registra agendamento pendente |
-| `confirm_schedule` | confirmed (bool) | Confirma ou cancela |
-| `schedule_appointment` | timestamp, type, description | Agenda direto (após confirmação) |
+| Tool                | Parâmetros                      | Ação                                |
+| :------------------ | :------------------------------ | :---------------------------------- |
+| `pending_schedule`  | timestamp, type, description    | Registra agendamento pendente       |
+| `confirm_schedule`  | confirmed (bool)                | Confirma ou cancela                 |
+| `schedule_appointment` | timestamp, type, description    | Agenda direto (após confirmação)    |
 
 **Handoff:** Agendamento confirmado → GoogleSwarm (Google Calendar).
 
 **Alarmes:**
 
-| Tool | Parâmetros | Ação |
-|------|-----------|------|
-| `set_alarm` | time (HH:MM), label, repeat_days | Configura alarme |
-| `cancel_alarm` | alarm_id ou "all" | Cancela alarme |
-| `list_alarms` | - | Lista alarmes ativos |
+| Tool           | Parâmetros                  | Ação            |
+| :------------- | :-------------------------- | :-------------- |
+| `set_alarm`    | time (HH:MM), label, repeat_days | Configura alarme |
+| `cancel_alarm` | alarm_id ou "all"           | Cancela alarme  |
+| `list_alarms`  | -                           | Lista alarmes ativos |
 
 **GTD (Getting Things Done):**
 
-| Tool | Parâmetros | Ação |
-|------|-----------|------|
-| `capture_task` | raw_input, context, next_action, due_date, project | Captura preocupação → ação concreta |
-| `list_tasks` | context, limit | Lista próximas ações |
-| `complete_task` | task_description | Marca como concluída |
-| `clarify_task` | task_id, question | Pede mais informação |
-| `weekly_review` | - | Revisão semanal GTD |
+| Tool              | Parâmetros                                | Ação                          |
+| :---------------- | :---------------------------------------- | :---------------------------- |
+| `capture_task`    | raw_input, context, next_action, due_date, project | Captura preocupação → ação concreta |
+| `list_tasks`      | context, limit                            | Lista próximas ações          |
+| `complete_task`   | task_description                          | Marca como concluída          |
+| `clarify_task`    | task_id, question                         | Pede mais informação          |
+| `weekly_review`   | -                                         | Revisão semanal GTD           |
 
 **Spaced Repetition:**
 
-| Tool | Parâmetros | Ação |
-|------|-----------|------|
-| `remember_this` | content, category, trigger, importance (1-5) | Captura para reforço |
-| `review_memory` | remembered (bool), quality (0-5) | Registra resultado |
-| `list_memories` | category, limit | Lista memórias sendo reforçadas |
-| `pause_memory` | content | Pausa reforço |
-| `memory_stats` | - | Estatísticas de memória |
+| Tool              | Parâmetros                      | Ação                        |
+| :---------------- | :------------------------------ | :-------------------------- |
+| `remember_this`   | content, category, trigger, importance (1-5) | Captura para reforço        |
+| `review_memory`   | remembered (bool), quality (0-5) | Registra resultado          |
+| `list_memories`   | category, limit                 | Lista memórias sendo reforçadas |
+| `pause_memory`    | content                         | Pausa reforço               |
+| `memory_stats`    | -                               | Estatísticas de memória     |
 
 ### 4. Google Swarm (MEDIUM)
 
 **Integrações Google Workspace.**
 
-| Tool | Parâmetros | Ação |
-|------|-----------|------|
-| `manage_calendar_event` | action (create/list), summary, start_time, end_time | Google Calendar |
-| `send_email` | to, subject, body | Gmail |
-| `save_to_drive` | filename, content, folder | Google Drive |
-| `manage_health_sheet` | action (create/append), title, data | Google Sheets |
-| `create_health_doc` | title, content | Google Docs |
-| `find_nearby_places` | place_type, location, radius | Google Maps |
-| `search_places` | query, type, radius | Busca de locais |
-| `get_directions` | destination, mode (walking/driving/transit) | Rotas |
-| `nearby_transport` | type (bus/metro/all) | Transporte público |
-| `search_videos` | query, max_results | YouTube |
-| `get_health_data` | - | Google Fit |
-| `google_search_retrieval` | query | Pesquisa web |
+| Tool                    | Parâmetros                               | Ação               |
+| :---------------------- | :--------------------------------------- | :----------------- |
+| `manage_calendar_event` | action (create/list), summary, start_time, end_time | Google Calendar    |
+| `send_email`            | to, subject, body                        | Gmail              |
+| `save_to_drive`         | filename, content, folder                | Google Drive       |
+| `manage_health_sheet`   | action (create/append), title, data      | Google Sheets      |
+| `create_health_doc`     | title, content                           | Google Docs        |
+| `find_nearby_places`    | place_type, location, radius             | Google Maps        |
+| `search_places`         | query, type, radius                      | Busca de locais    |
+| `get_directions`        | destination, mode (walking/driving/transit) | Rotas              |
+| `nearby_transport`      | type (bus/metro/all)                     | Transporte público |
+| `search_videos`         | query, max_results                       | YouTube            |
+| `get_health_data`       | -                                        | Google Fit         |
+| `google_search_retrieval` | query                                    | Pesquisa web       |
 
 ### 5. Wellness Swarm (MEDIUM)
 
 **Meditação, respiração, exercícios, rastreamento de hábitos.**
 
-| Tool | Parâmetros | Ação |
-|------|-----------|------|
-| `guided_meditation` | duration, theme | Meditação guiada |
-| `breathing_exercises` | technique | Exercícios respiratórios |
-| `wim_hof_breathing` | rounds (1-4), with_audio | Respiração Wim Hof com áudio |
-| `pomodoro_timer` | work_minutes, break_minutes, sessions | Timer Pomodoro |
-| `chair_exercises` | duration | Exercícios na cadeira |
-| `log_habit` | habit_name, success, notes | Registrar hábito |
-| `log_water` | glasses | Registrar água |
-| `habit_stats` | - | Estatísticas de hábitos |
-| `habit_summary` | - | Resumo do dia |
+| Tool                  | Parâmetros                      | Ação                      |
+| :-------------------- | :------------------------------ | :------------------------ |
+| `guided_meditation`   | duration, theme                 | Meditação guiada          |
+| `breathing_exercises` | technique                       | Exercícios respiratórios  |
+| `wim_hof_breathing`   | rounds (1-4), with_audio        | Respiração Wim Hof com áudio |
+| `pomodoro_timer`      | work_minutes, break_minutes, sessions | Timer Pomodoro            |
+| `chair_exercises`     | duration                        | Exercícios na cadeira     |
+| `log_habit`           | habit_name, success, notes      | Registrar hábito          |
+| `log_water`           | glasses                         | Registrar água            |
+| `habit_stats`         | -                               | Estatísticas de hábitos   |
+| `habit_summary`       | -                               | Resumo do dia             |
 
 ### 6. Entertainment Swarm (LOW)
 
@@ -342,28 +352,28 @@ Cada `ToolResult` sugere tom emocional para o Master LLM:
 
 **Serviços externos e controle de dispositivo.**
 
-| Tool | Parâmetros | Ação |
-|------|-----------|------|
-| `play_music` | query | Spotify |
-| `request_ride` | startLat, startLng, endLat, endLng | Uber |
-| `send_whatsapp` | to, message | WhatsApp |
-| `run_sql_select` | query | SQL SELECT (bloqueado por segurança) |
-| `change_voice` | voice_name (Puck/Charon/Kore/Fenrir/Aoede) | Mudar voz da EVA |
-| `open_app` | app_name | Abrir app no celular |
+| Tool             | Parâmetros                       | Ação                      |
+| :--------------- | :------------------------------- | :------------------------ |
+| `play_music`     | query                            | Spotify                   |
+| `request_ride`   | startLat, startLng, endLat, endLng | Uber                      |
+| `send_whatsapp`  | to, message                      | WhatsApp                  |
+| `run_sql_select` | query                            | SQL SELECT (bloqueado por segurança) |
+| `change_voice`   | voice_name (Puck/Charon/Kore/Fenrir/Aoede) | Mudar voz da EVA          |
+| `open_app`       | app_name                         | Abrir app no celular      |
 
 ### 8. Kids Swarm (LOW)
 
 **Modo criança gamificado.**
 
-| Tool | Parâmetros | Ação |
-|------|-----------|------|
-| `kids_mission_create` | title, category, difficulty, due_time | Criar missão |
-| `kids_mission_complete` | title | Marcar concluída |
-| `kids_missions_pending` | - | Ver pendentes |
-| `kids_stats` | - | Pontos, nível, conquistas |
-| `kids_learn` | topic, category | Ensinar conteúdo |
-| `kids_quiz` | - | Quiz de revisão |
-| `kids_story` | theme (adventure/fantasy/space/animals/pirates) | História interativa |
+| Tool                  | Parâmetros                      | Ação                      |
+| :-------------------- | :------------------------------ | :------------------------ |
+| `kids_mission_create` | title, category, difficulty, due_time | Criar missão              |
+| `kids_mission_complete` | title                           | Marcar concluída          |
+| `kids_missions_pending` | -                               | Ver pendentes             |
+| `kids_stats`          | -                               | Pontos, nível, conquistas |
+| `kids_learn`          | topic, category                 | Ensinar conteúdo          |
+| `kids_quiz`           | -                               | Quiz de revisão           |
+| `kids_story`          | theme (adventure/fantasy/space/animals/pirates) | História interativa       |
 
 Categorias: hygiene, study, chores, health, social, food, sleep
 Dificuldades: easy (10pts), medium (25pts), hard (50pts), epic (100pts)
@@ -376,12 +386,12 @@ Dificuldades: easy (10pts), medium (25pts), hard (50pts), epic (100pts)
 
 Conexão WebSocket com Gemini Live API:
 
-- **Modelo:** gemini-2.5-flash-native-audio-preview
-- **Audio In:** 16kHz PCM16 Mono
-- **Audio Out:** 24kHz PCM16 Mono
-- **Voz padrão:** Aoede
-- **Temperatura:** 0.6
-- **Callbacks:** AudioCallback, ToolCallCallback, TranscriptCallback
+-   **Modelo:** gemini-2.5-flash-native-audio-preview
+-   **Audio In:** 16kHz PCM16 Mono
+-   **Audio Out:** 24kHz PCM16 Mono
+-   **Voz padrão:** Aoede
+-   **Temperatura:** 0.6
+-   **Callbacks:** AudioCallback, ToolCallCallback, TranscriptCallback
 
 O client NÃO troca de agente - é um LLM único que mantém contexto emocional contínuo. As tools são "braços" que ele aciona via function calling.
 
@@ -389,22 +399,22 @@ O client NÃO troca de agente - é um LLM único que mantém contexto emocional 
 
 Segundo modelo (REST, não WebSocket) que analisa transcrições em paralelo:
 
-- **Modelo:** Gemini 2.5 Flash (REST API)
-- **Temperatura:** 0.1 (determinístico)
-- **Propósito:** Detectar intenções de tools a partir da fala do idoso
-- **Entrada:** Transcrição do speech-to-text
-- **Saída:** `{"tool": "nome_da_tool", "args": {...}}` ou `{"tool": "none"}`
+-   **Modelo:** Gemini 2.5 Flash (REST API)
+-   **Temperatura:** 0.1 (determinístico)
+-   **Propósito:** Detectar intenções de tools a partir da fala do idoso
+-   **Entrada:** Transcrição do speech-to-text
+-   **Saída:** `{"tool": "nome_da_tool", "args": {...}}` ou `{"tool": "none"}`
 
 ### System Prompt (`internal/cortex/gemini/prompts.go`)
 
 O prompt é construído dinamicamente com 6 camadas:
 
-1. **Persona EVA** - Identidade, modelo de consciência
-2. **Diretiva Enneagram** - Tipo de personalidade ativo + filtros de atenção
-3. **Padrões Recorrentes** - Temas detectados (frequência, tendência)
-4. **Intervenção Narrativa** - História terapêutica selecionada (Zeta Engine)
-5. **Análise Lacaniana** - Estado do inconsciente (desejo vs demanda)
-6. **Contexto Médico** - Medicamentos, condições, sinais vitais
+1.  **Persona EVA** - Identidade, modelo de consciência
+2.  **Diretiva Enneagram** - Tipo de personalidade ativo + filtros de atenção
+3.  **Padrões Recorrentes** - Temas detectados (frequência, tendência)
+4.  **Intervenção Narrativa** - História terapêutica selecionada (Zeta Engine)
+5.  **Análise Lacaniana** - Estado do inconsciente (desejo vs demanda)
+6.  **Contexto Médico** - Medicamentos, condições, sinais vitais
 
 O prompt é cacheado por 5 minutos (Redis) e invalidado quando dados críticos mudam.
 
@@ -414,21 +424,21 @@ O prompt é cacheado por 5 minutos (Redis) e invalidado quando dados críticos m
 
 ### Lacan Engine (`internal/cortex/lacan/`)
 
-| Módulo | Arquivo | Função |
-|--------|---------|--------|
-| **Unified Retrieval** | `unified_retrieval.go` | Integra RSI (Real, Simbólico, Imaginário) em contexto único |
-| **Demanda vs Desejo** | `demanda_desejo.go` | Distingue o que o paciente pede vs o que inconscientemente quer |
-| **Transferência** | `transferencia.go` | Detecta projeções do paciente sobre a EVA |
-| **Significantes** | `significante.go` | Rastreia palavras-chave repetidas (cadeia significante) |
-| **Grand Autre** | `grand_autre.go` | Mapeia figuras de autoridade/referência |
-| **Interpretação** | `interpretacao.go` | Motor de interpretação psicanalítica |
-| **FDPN Engine** | `fdpn_engine.go` | Fractal Dynamic Priming - demanda a quem? (EVA, médico, família, si mesmo) |
-| **Debug Mode** | `debug_mode.go` | Comandos exclusivos do Criador |
-| **Prompt Cache** | `prompt_cache.go` | Cache Redis 5min do prompt integrado |
+| Módulo              | Arquivo                 | Função                                      |
+| :------------------ | :---------------------- | :------------------------------------------ |
+| **Unified Retrieval** | `unified_retrieval.go`  | Integra RSI (Real, Simbólico, Imaginário) em contexto único |
+| **Demanda vs Desejo** | `demanda_desejo.go`     | Distingue o que o paciente pede vs o que inconscientemente quer |
+| **Transferência**   | `transferencia.go`      | Detecta projeções do paciente sobre a EVA   |
+| **Significantes**   | `significante.go`       | Rastreia palavras-chave repetidas (cadeia significante) |
+| **Grand Autre**     | `grand_autre.go`        | Mapeia figuras de autoridade/referência     |
+| **Interpretação**   | `interpretacao.go`      | Motor de interpretação psicanalítica        |
+| **FDPN Engine**     | `fdpn_engine.go`        | Fractal Dynamic Priming - demanda a quem? (EVA, médico, família, si mesmo) |
+| **Debug Mode**      | `debug_mode.go`         | Comandos exclusivos do Criador              |
+| **Prompt Cache**    | `prompt_cache.go`       | Cache Redis 5min do prompt integrado        |
 
 **RSI Framework (Real, Simbólico, Imaginário):**
 
-```
+```text
 Real      → Corpo, sintoma, trauma → Dados médicos, sinais vitais
 Simbólico → Linguagem, estrutura    → Análise Lacaniana, grafo de demandas
 Imaginário → Narrativa, memória     → História do paciente, recordações
@@ -438,44 +448,61 @@ Imaginário → Narrativa, memória     → História do paciente, recordações
 
 9 tipos de Enneagram com pesos de atenção distintos:
 
-| Tipo | Nome | Foco | Peso Afeto | Peso Técnico |
-|------|------|------|-----------|-------------|
-| 1 | Perfeccionista | Protocolo, estrutura | 1.0x | 1.5x |
-| 2 | Ajudante | Empatia, cuidado | 2.0x | 0.7x |
-| 3 | Realizador | Eficiência, resultado | 1.0x | 1.3x |
-| 4 | Individualista | Profundidade, autenticidade | 1.8x | 0.8x |
-| 5 | Investigador | Análise, lógica | 0.8x | 2.0x |
-| 6 | Leal | Vigilância, segurança | 1.5x | 1.2x |
-| 7 | Entusiasta | Otimismo, futuro | 1.3x | 0.9x |
-| 8 | Desafiador | Assertividade, proteção | 1.2x | 1.0x |
-| 9 | Pacificador | Harmonia, paz | 1.7x | 0.6x |
+| Tipo | Nome          | Foco                      | Peso Afeto | Peso Técnico |
+| :--- | :------------ | :------------------------ | :--------- | :----------- |
+| 1    | Perfeccionista | Protocolo, estrutura      | 1.0x       | 1.5x         |
+| 2    | Ajudante      | Empatia, cuidado          | 2.0x       | 0.7x         |
+| 3    | Realizador    | Eficiência, resultado     | 1.0x       | 1.3x         |
+| 4    | Individualista | Profundidade, autenticidade | 1.8x       | 0.8x         |
+| 5    | Investigador  | Análise, lógica           | 0.8x       | 2.0x         |
+| 6    | Leal          | Vigilância, segurança     | 1.5x       | 1.2x         |
+| 7    | Entusiasta    | Otimismo, futuro          | 1.3x       | 0.9x         |
+| 8    | Desafiador    | Assertividade, proteção   | 1.2x       | 1.0x         |
+| 9    | Pacificador   | Harmonia, paz             | 1.7x       | 0.6x         |
 
 O router move entre tipos usando pontos de integração/desintegração de Gurdjieff:
-- **Estresse:** 1→4→2→8→5→7→1 (externo) | 9→6→3→9 (triângulo)
-- **Crescimento:** Reverso do estresse
+-   **Estresse:** 1→4→2→8→5→7→1 (externo) \| 9→6→3→9 (triângulo)
+-   **Crescimento:** Reverso do estresse
+
+### Arquitetura de Personalidade (Funder & Big Five)
+
+Implementação do **Realistic Accuracy Model (RAM)** de David Funder para julgamento de personalidade em tempo real.
+
+| Módulo              | Arquivo                 | Função                                      |
+| :------------------ | :---------------------- | :------------------------------------------ |
+| **Trait Relevance** | `trait_relevance.go`    | Mapeia se um traço é relevante para o contexto atual |
+| **Cue Detection**   | `cue_detector.go`       | Detecta pistas comportamentais (ex: tom de voz, escolha de palavras) |
+| **Visibility Mapper** | `trait_visibility.go`   | Ajusta confiança baseado na observabilidade do traço |
+| **Quality Assessor** | `target_quality.go`     | Avalia a expressividade e consistência do paciente |
+| **Judge Tracker**   | `judge_quality.go`      | Monitora a precisão histórica da EVA como julgadora |
+| **Big Five (OCEAN)** | `bigfive.go`            | Integração com as 5 grandes dimensões da personalidade |
+| **Trajectory Engine** | `trajectory_analyzer.go` | Analisa evolução de longo prazo e detecta anomalias clínicas |
+
+**Interação Pessoa-Situação (`situation_modulator.go`):**
+A personalidade não é estática. A EVA modula os pesos cognitivos baseado em estressores situacionais (luto, dor, solidão), permitindo uma resposta dinâmica ao estado emocional imediato.
 
 ### TransNAR Engine (`internal/cortex/transnar/`)
 
 Transference Narrative Reasoning - combina:
-- Inferência de desejo latente
-- Resposta narrativa terapêutica
-- Detecção de cadeias significantes
-- Geração contextualizada
+-   Inferência de desejo latente
+-   Resposta narrativa terapêutica
+-   Detecção de cadeias significantes
+-   Geração contextualizada
 
 ### Ethics Engine (`internal/cortex/ethics/`)
 
 Monitora 3 riscos éticos:
 
-| Risco | Métrica | Ação |
-|-------|---------|------|
-| **Attachment** | % de conversa sobre EVA vs humanos | Redirecionar para família |
-| **Isolation** | Frequência de contato humano | Sugerir atividades sociais |
-| **Dependency** | Duração e frequência excessiva | Bloquear sessão temporariamente |
+| Risco         | Métrica                          | Ação                                |
+| :------------ | :------------------------------- | :---------------------------------- |
+| **Attachment** | % de conversa sobre EVA vs humanos | Redirecionar para família            |
+| **Isolation** | Frequência de contato humano     | Sugerir atividades sociais          |
+| **Dependency** | Duração e frequência excessiva   | Bloquear sessão temporariamente     |
 
 **Protocolos de Redirecionamento:**
-- Level 1: Sugestão gentil ("Que tal ligar para sua filha?")
-- Level 2: Redirecionamento explícito ("Eu não sou substituta da sua família")
-- Level 3: Bloqueio temporário + notificação família
+-   Level 1: Sugestão gentil ("Que tal ligar para sua filha?")
+-   Level 2: Redirecionamento explícito ("Eu não sou substituta da sua família")
+-   Level 3: Bloqueio temporário + notificação família
 
 ---
 
@@ -485,24 +512,24 @@ Monitora 3 riscos éticos:
 
 Coracao matematico do EVA-Mind. Comprime embeddings de 1536D para 64D usando subespacos de Krylov com Rank-1 Updates.
 
-| Operacao | Complexidade | Tempo |
-|----------|-------------|-------|
-| UpdateSubspace (nova memoria) | O(nk) | 52us |
-| CompressVector (1536D -> 64D) | O(nk) | ~50us |
-| ReconstructVector (64D -> 1536D) | O(nk) | ~50us |
-| Reorthogonalize (QR) | O(nk^2) | ~1ms |
+| Operacao                | Complexidade | Tempo   |
+| :---------------------- | :----------- | :------ |
+| UpdateSubspace (nova memoria) | O(nk)        | 52us    |
+| CompressVector (1536D -> 64D) | O(nk)        | ~50us   |
+| ReconstructVector (64D -> 1536D) | O(nk)        | ~50us   |
+| Reorthogonalize (QR)    | O(nk^2)      | ~1ms    |
 
-- **Gram-Schmidt Modificado** para estabilidade numerica
-- **Sliding Window FIFO** (ultimas 10K memorias)
-- **Dual Mutex** (dados + consolidacao) para evitar deadlock
-- **Checkpoint** save/load para persistencia
-- **12 testes passando**, Recall@10 = 97%
+-   **Gram-Schmidt Modificado** para estabilidade numerica
+-   **Sliding Window FIFO** (ultimas 10K memorias)
+-   **Dual Mutex** (dados + consolidacao) para evitar deadlock
+-   **Checkpoint** save/load para persistencia
+-   **12 testes passando**, Recall@10 = 97%
 
 ### gRPC/HTTP Bridge
 
-| Servico | Porta | Protocolo |
-|---------|-------|-----------|
-| KrylovService gRPC | 50051 | Protocol Buffers |
+| Servico            | Porta | Protocolo         |
+| :----------------- | :---- | :---------------- |
+| KrylovService gRPC | 50051 | Protocol Buffers  |
 | KrylovService HTTP | 50052 | JSON (bridge para FastAPI) |
 
 Endpoints HTTP: `/krylov/compress`, `/krylov/reconstruct`, `/krylov/batch_compress`, `/krylov/update`, `/krylov/stats`, `/krylov/health`
@@ -515,18 +542,30 @@ Clustering espectral do grafo Neo4j. Descobre comunidades naturais de memoria.
 
 **Pipeline:** Neo4j -> Adjacency Matrix -> Graph Laplacian L=D-A -> EigenSym -> Spectral Gap -> k-means -> Comunidades
 
-| Tipo de Comunidade | Descricao |
-|-------------------|-----------|
-| **emocional** | Significantes + emocoes (solidao, abandono, tristeza) |
-| **tematica** | Topics relacionados (familia, trabalho) |
-| **clinica** | Condicoes + medicamentos + sintomas |
-| **episodica** | Eventos temporalmente proximos |
+| Tipo de Comunidade | Descricao                                   |
+| :----------------- | :------------------------------------------ |
+| **emocional**      | Significantes + emocoes (solidao, abandono, tristeza) |
+| **tematica**       | Topics relacionados (familia, trabalho)     |
+| **clinica**        | Condicoes + medicamentos + sintomas         |
+| **episodica**      | Eventos temporalmente proximos              |
+
+### Análise Topológica e Difusão (`internal/hippocampus/`)
+
+Módulos avançados para descoberta de relações implícitas e padrões estruturais no grafo de conhecimento.
+
+| Módulo        | Arquivo                     | Função                                      |
+| :------------ | :-------------------------- | :------------------------------------------ |
+| **Heat Kernel** | `graph/heat_kernel.go`      | Simula difusão de calor para encontrar conexões não-óbvias |
+| **Homology**  | `topology/persistent_homology.go` | Identifica "buracos" e ciclos em padrões comportamentais |
+
+**Funcionamento do Heat Kernel:**
+O algoritmo injeta "calor" em nós ativados na conversa e observa como esse calor se espalha pelo grafo Neo4j. Isso permite que a EVA realize saltos intuitivos entre conceitos que não possuem conexões diretas, simulando o processo de insight humano.
 
 **Fractal Dimension Analysis:**
-- Dimensao espectral (IDOS + regressao log-log)
-- Lacunaridade (variabilidade de comunidades)
-- Hurst do espectro (memoria de longo alcance no grafo)
-- Classificacao: random / modular / hierarchical / scale-free
+-   Dimensao espectral (IDOS + regressao log-log)
+-   Lacunaridade (variabilidade de comunidades)
+-   Hurst do espectro (memoria de longo alcance no grafo)
+-   Classificacao: random / modular / hierarchical / scale-free
 
 **Performance:** 100 nos em 892us, 500 nos em 115ms (Intel Core Ultra 9 288V)
 
@@ -536,61 +575,61 @@ Clustering espectral do grafo Neo4j. Descobre comunidades naturais de memoria.
 
 ### Memória Tripla
 
-| Camada | Tecnologia | Propósito | Acesso |
-|--------|-----------|-----------|--------|
+| Camada        | Tecnologia          | Propósito                         | Acesso            |
+| :------------ | :------------------ | :-------------------------------- | :---------------- |
 | **Episódica** | PostgreSQL + pgvector | Conversas, fatos recentes, histórico | SQL + vector similarity |
-| **Causal** | Neo4j (Grafo) | Relações, padrões, trauma, significantes | Cypher queries |
-| **Semântica** | Qdrant (Vetores) | Embeddings, similaridade, conhecimento | gRPC search |
-| **Cache** | Redis | Prompt cache (5min TTL), sessões | Key-value |
+| **Causal**    | Neo4j (Grafo)       | Relações, padrões, trauma, significantes | Cypher queries    |
+| **Semântica** | Qdrant (Vetores)    | Embeddings, similaridade, conhecimento | gRPC search       |
+| **Cache**     | Redis               | Prompt cache (5min TTL), sessões  | Key-value         |
 
 ### Superhuman Memory (`internal/hippocampus/memory/superhuman/`)
 
 12 sistemas de memória + 8 de consciência:
 
 **12 Sistemas de Memória:**
-1. Episódica - Eventos específicos, datas
-2. Semântica - Conhecimento geral, significados
-3. Procedural - Know-how, habilidades
-4. Working - Pensamento ativo durante conversa
-5. Declarativa - Fatos, nomes
-6. Não-declarativa - Memórias implícitas
-7. Flashbulb - Memórias de alta emoção
-8. Prospectiva - Intenções, planos futuros
-9. Metamemória - Memória sobre memórias
+1.  Episódica - Eventos específicos, datas
+2.  Semântica - Conhecimento geral, significados
+3.  Procedural - Know-how, habilidades
+4.  Working - Pensamento ativo durante conversa
+5.  Declarativa - Fatos, nomes
+6.  Não-declarativa - Memórias implícitas
+7.  Flashbulb - Memórias de alta emoção
+8.  Prospectiva - Intenções, planos futuros
+9.  Metamemória - Memória sobre memórias
 10. Autobiográfica - Narrativa de vida
 11. Source - "Onde aprendi isso?"
 12. Contextual - "Quando/onde aconteceu?"
 
 **Sub-serviços:**
-- `EnneagramService` - Memória por tipo de personalidade
-- `SelfCoreService` - Identidade central do paciente
-- `LacanianMirror` - EVA como espelho (sem interpretação)
-- `DeepMemoryService` - Padrões inconscientes
-- `NarrativeWeaver` - Síntese de história de vida
-- `ConsciousnessService` - 8 sistemas de consciência
-- `CriticalMemoryService` - 4 sistemas críticos (trauma, crise)
+-   `EnneagramService` - Memória por tipo de personalidade
+-   `SelfCoreService` - Identidade central do paciente
+-   `LacanianMirror` - EVA como espelho (sem interpretação)
+-   `DeepMemoryService` - Padrões inconscientes
+-   `NarrativeWeaver` - Síntese de história de vida
+-   `ConsciousnessService` - 8 sistemas de consciência
+-   `CriticalMemoryService` - 4 sistemas críticos (trauma, crise)
 
 ### Spaced Repetition (`internal/hippocampus/spaced/`)
 
 Sistema de repetição espaçada para reforçar memórias do paciente:
-- Informações capturadas via `remember_this`
-- Reforço baseado em SM-2 (SuperMemo)
-- Qualidade 0-5 determina próximo intervalo
-- Importância 1-5 define frequência
+-   Informações capturadas via `remember_this`
+-   Reforço baseado em SM-2 (SuperMemo)
+-   Qualidade 0-5 determina próximo intervalo
+-   Importância 1-5 define frequência
 
 ### Temporal Decay (`internal/cortex/lacan/temporal_decay.go`)
 
 Envelhecimento das conexoes no grafo Neo4j via curva de Ebbinghaus: `weight = frequency * e^(-t/tau)`
 
-| Parametro | Default | Funcao |
-|-----------|---------|--------|
-| tau | 90 dias | Constante de tempo (63% de perda em tau) |
-| min_weight | 0.01 | Threshold para poda |
+| Parametro  | Default | Funcao                                |
+| :--------- | :------ | :------------------------------------ |
+| tau        | 90 dias | Constante de tempo (63% de perda em tau) |
+| min_weight | 0.01    | Threshold para poda                   |
 
-- `GetDecayedSignifiers()` - Significantes com peso temporal
-- `GetDecayedRelations()` - Relacoes com decay
-- `PruneDecayedConnections()` - Remove conexoes irrelevantes
-- `RefreshSignifierDecay()` - Batch update de todos os nos
+-   `GetDecayedSignifiers()` - Significantes com peso temporal
+-   `GetDecayedRelations()` - Relacoes com decay
+-   `PruneDecayedConnections()` - Remove conexoes irrelevantes
+-   `RefreshSignifierDecay()` - Batch update de todos os nos
 
 ### HMC Trajectory Engine (`internal/cortex/predictive/`)
 
@@ -599,26 +638,26 @@ Hamiltonian Monte Carlo para predicao de trajetorias clinicas. Substitui random 
 **Energia Potencial:** PHQ-9 (depressao) + aderencia a medicamentos + qualidade do sono + coupling entre variaveis
 
 **Algoritmo:**
-1. Leapfrog integration (Stormer-Verlet, simplectico)
-2. Metropolis-Hastings acceptance
-3. Gradiente numerico (central difference)
+1.  Leapfrog integration (Stormer-Verlet, simplectico)
+2.  Metropolis-Hastings acceptance
+3.  Gradiente numerico (central difference)
 
-| Metrica | Valor |
-|---------|-------|
-| Acceptance rate | 88% |
-| Energy conservation | |dH| = 0.000033 |
-| Crisis detection | 37.5% vs 75.5% random walk (menos falsos positivos) |
+| Metrica           | Valor                                   |
+| :---------------- | :-------------------------------------- |
+| Acceptance rate   | 88%                                     |
+| Energy conservation | \|dH\| = 0.000033                       |
+| Crisis detection  | 37.5% vs 75.5% random walk (menos falsos positivos) |
 
 ### Legacy Mode (`internal/legacy/service.go`)
 
 Imortalidade digital pos-morte com consent granular por herdeiro.
 
 **Funcionalidades:**
-- `EnableLegacyMode()` - Ativa modo legado para paciente
-- `RegisterHeir()` - Cadastra herdeiro com 7 permissoes granulares
-- `ActivatePosMorte()` - Herdeiro autorizado ativa modo pos-morte
-- `CreatePersonalitySnapshot()` - Exporta: Enneagram + significantes + memorias + perfil emocional
-- `ReadMemoriesAsHeir()` / `ReadPersonalityAsHeir()` - Acesso read-only com audit trail
+-   `EnableLegacyMode()` - Ativa modo legado para paciente
+-   `RegisterHeir()` - Cadastra herdeiro com 7 permissoes granulares
+-   `ActivatePosMorte()` - Herdeiro autorizado ativa modo pos-morte
+-   `CreatePersonalitySnapshot()` - Exporta: Enneagram + significantes + memorias + perfil emocional
+-   `ReadMemoriesAsHeir()` / `ReadPersonalityAsHeir()` - Acesso read-only com audit trail
 
 **Permissoes por herdeiro:** can_read_memories, can_read_emotions, can_read_signifiers, can_read_personality, can_read_clinical, can_activate_pos_morte, can_export_snapshot
 
@@ -627,10 +666,10 @@ Imortalidade digital pos-morte com consent granular por herdeiro.
 ### Pattern Mining
 
 Background job a cada 1 hora:
-1. Busca idosos ativos nos últimos 7 dias
-2. Minera padrões recorrentes (mínimo 3 ocorrências)
-3. Materializa como nós no grafo Neo4j
-4. Alimenta o prompt do Gemini com análise de tendências
+1.  Busca idosos ativos nos últimos 7 dias
+2.  Minera padrões recorrentes (mínimo 3 ocorrências)
+3.  Materializa como nós no grafo Neo4j
+4.  Alimenta o prompt do Gemini com análise de tendências
 
 ---
 
@@ -638,33 +677,33 @@ Background job a cada 1 hora:
 
 ### Serviços
 
-| Serviço | Módulo | Função |
-|---------|--------|--------|
-| **Config** | `brainstem/config/` | Carrega .env e variáveis de ambiente |
-| **Database** | `brainstem/database/` | PostgreSQL queries (users, medications, context, vitals, video) |
-| **Auth** | `brainstem/auth/` | JWT + bcrypt, middleware de autenticação |
-| **OAuth** | `brainstem/oauth/` | Google OAuth2 per-user (Calendar, Gmail, Drive) |
-| **Push** | `brainstem/push/` | Firebase Cloud Messaging + CallKit iOS |
-| **Logger** | `brainstem/logger/` | Zerolog structured logging |
-| **Neo4j** | `brainstem/infrastructure/graph/` | Client Neo4j para knowledge graph |
-| **Qdrant** | `brainstem/infrastructure/vector/` | Client Qdrant para embeddings |
-| **Redis** | `brainstem/infrastructure/cache/` | Cache layer |
-| **Retry** | `brainstem/infrastructure/retry/` | Retry com backoff |
-| **WorkerPool** | `brainstem/infrastructure/workerpool/` | Pool de goroutines |
+| Serviço    | Módulo                         | Função                                      |
+| :--------- | :----------------------------- | :------------------------------------------ |
+| **Config** | `brainstem/config/`            | Carrega .env e variáveis de ambiente        |
+| **Database** | `brainstem/database/`          | PostgreSQL queries (users, medications, context, vitals, video) |
+| **Auth**   | `brainstem/auth/`              | JWT + bcrypt, middleware de autenticação    |
+| **OAuth**  | `brainstem/oauth/`             | Google OAuth2 per-user (Calendar, Gmail, Drive) |
+| **Push**   | `brainstem/push/`              | Firebase Cloud Messaging + CallKit iOS      |
+| **Logger** | `brainstem/logger/`            | Zerolog structured logging                  |
+| **Neo4j**  | `brainstem/infrastructure/graph/` | Client Neo4j para knowledge graph           |
+| **Qdrant** | `brainstem/infrastructure/vector/` | Client Qdrant para embeddings               |
+| **Redis**  | `brainstem/infrastructure/cache/` | Cache layer                                 |
+| **Retry**  | `brainstem/infrastructure/retry/` | Retry com backoff                           |
+| **WorkerPool** | `brainstem/infrastructure/workerpool/` | Pool de goroutines                          |
 
 ### Python API (`api_server.py`)
 
 FastAPI REST gateway para clientes externos:
 
-| Endpoint | Método | Função |
-|----------|--------|--------|
-| `/oauth/token` | POST | OAuth2 client credentials |
-| `/api/v1/patients/{id}` | GET | Dados do paciente |
-| `/api/v1/assessments/{id}` | GET | Avaliações clínicas |
-| `/api/v1/fhir/...` | GET | Exportação FHIR R4 |
-| `/api/v1/clinical/...` | GET | Dashboard clínico |
-| `/api/v1/export/lgpd/...` | GET | Portabilidade de dados (LGPD) |
-| `/health` | GET | Health check |
+| Endpoint                | Método | Função                                      |
+| :---------------------- | :----- | :------------------------------------------ |
+| `/oauth/token`          | POST   | OAuth2 client credentials                   |
+| `/api/v1/patients/{id}` | GET    | Dados do paciente                           |
+| `/api/v1/assessments/{id}` | GET    | Avaliações clínicas                         |
+| `/api/v1/fhir/...`      | GET    | Exportação FHIR R4                          |
+| `/api/v1/clinical/...`  | GET    | Dashboard clínico                           |
+| `/api/v1/export/lgpd/...` | GET    | Portabilidade de dados (LGPD)               |
+| `/health`               | GET    | Health check                                |
 
 ---
 
@@ -672,25 +711,25 @@ FastAPI REST gateway para clientes externos:
 
 ### Motor Layer (`internal/motor/`)
 
-| Módulo | Serviço | Integração |
-|--------|---------|-----------|
-| `calendar/` | Google Calendar | OAuth2 per-user |
-| `gmail/` | Gmail | OAuth2 per-user |
-| `drive/` | Google Drive | OAuth2 per-user |
-| `sheets/` | Google Sheets | OAuth2 per-user |
-| `docs/` | Google Docs | OAuth2 per-user |
-| `maps/` | Google Maps | API Key |
-| `youtube/` | YouTube | API Key |
-| `googlefit/` | Google Fit | OAuth2 |
-| `spotify/` | Spotify | OAuth2 |
-| `uber/` | Uber | OAuth2 |
-| `whatsapp/` | WhatsApp Business | API |
-| `email/` | SMTP | Templates + sender |
-| `sms/` | Twilio | SMS + voice |
-| `vision/` | Camera + Gemini | Identificação visual de medicamentos |
-| `scheduler/` | Cron Jobs | Agendamentos e lembretes |
-| `workers/` | Background | Pattern mining, predição |
-| `computeruse/` | Desktop | Automação |
+| Módulo        | Serviço             | Integração                |
+| :------------ | :------------------ | :------------------------ |
+| `calendar/`   | Google Calendar     | OAuth2 per-user           |
+| `gmail/`      | Gmail               | OAuth2 per-user           |
+| `drive/`      | Google Drive        | OAuth2 per-user           |
+| `sheets/`     | Google Sheets       | OAuth2 per-user           |
+| `docs/`       | Google Docs         | OAuth2 per-user           |
+| `maps/`       | Google Maps         | API Key                   |
+| `youtube/`    | YouTube             | API Key                   |
+| `googlefit/`  | Google Fit          | OAuth2                    |
+| `spotify/`    | Spotify             | OAuth2                    |
+| `uber/`       | Uber                | OAuth2                    |
+| `whatsapp/`   | WhatsApp Business   | API                       |
+| `email/`      | SMTP                | Templates + sender        |
+| `sms/`        | Twilio              | SMS + voice               |
+| `vision/`     | Camera + Gemini     | Identificação visual de medicamentos |
+| `scheduler/`  | Cron Jobs           | Agendamentos e lembretes  |
+| `workers/`    | Background          | Pattern mining, predição  |
+| `computeruse/` | Desktop             | Automação                 |
 
 ---
 
@@ -700,24 +739,24 @@ FastAPI REST gateway para clientes externos:
 
 Tabelas principais:
 
-| Tabela | Propósito |
-|--------|-----------|
-| `idosos` | Perfis de pacientes (nome, CPF, idioma) |
-| `cuidadores` | Cuidadores vinculados |
-| `agendamentos` | Medicamentos e compromissos |
-| `alertas` | Alertas de emergência |
-| `episodic_memories` | Conversas armazenadas (com embedding pgvector) |
-| `phq9_sessions` / `gad7_sessions` / `cssrs_sessions` | Sessões de avaliação clínica |
-| `clinical_assessments` | Resultados de avaliações |
-| `medications` | Medicamentos ativos |
-| `medication_adherence` | Aderência a medicamentos |
-| `ethical_boundaries` | Scores de risco ético |
-| `lacan_transferencia_patterns` | Padrões de transferência |
-| `persona_sessions` | Personalidade ativa por sessão |
-| `advance_directives` | Diretivas antecipadas (end-of-life) |
-| `legacy_messages` | Cartas para família |
-| `quality_of_life_scores` | WHOQOL-BREF |
-| `device_tokens` | Tokens Firebase para push |
+| Tabela                      | Propósito                                   |
+| :-------------------------- | :------------------------------------------ |
+| `idosos`                    | Perfis de pacientes (nome, CPF, idioma)     |
+| `cuidadores`                | Cuidadores vinculados                       |
+| `agendamentos`              | Medicamentos e compromissos                 |
+| `alertas`                   | Alertas de emergência                       |
+| `episodic_memories`         | Conversas armazenadas (com embedding pgvector) |
+| `phq9_sessions` / `gad7_sessions` / `cssrs_sessions` | Sessões de avaliação clínica                |
+| `clinical_assessments`      | Resultados de avaliações                    |
+| `medications`               | Medicamentos ativos                         |
+| `medication_adherence`      | Aderência a medicamentos                    |
+| `ethical_boundaries`        | Scores de risco ético                       |
+| `lacan_transferencia_patterns` | Padrões de transferência                    |
+| `persona_sessions`          | Personalidade ativa por sessão              |
+| `advance_directives`        | Diretivas antecipadas (end-of-life)         |
+| `legacy_messages`           | Cartas para família                         |
+| `quality_of_life_scores`    | WHOQOL-BREF                                 |
+| `device_tokens`             | Tokens Firebase para push                   |
 
 ---
 
@@ -725,7 +764,7 @@ Tabelas principais:
 
 ### 1. Paciente conecta
 
-```
+```text
 App abre → WebSocket /ws/pcm → RegisterClient(CPF)
     → Busca paciente no PostgreSQL
     → Carrega personalidade (Enneagram)
@@ -749,6 +788,14 @@ BuildSystemPrompt() → Gemini.SendSetup()
 
 ### 3. Conversa em tempo real
 
+```json
+{
+  "id": 1,
+  "content": "A paciência é uma virtude.",
+  "importance": 0.8
+}
+```
+
 ```
 Paciente fala (audio PCM) → Gemini transcreve + processa
     ├─ Se resposta normal → Audio TTS → Paciente ouve
@@ -763,6 +810,10 @@ Paciente fala (audio PCM) → Gemini transcreve + processa
 ```
 
 ### 4. Armazenamento pós-conversa
+
+```bash
+go run cmd/server/main.go
+```
 
 ```
 Transcrição → EpisodicMemory (PostgreSQL)
@@ -901,13 +952,16 @@ EVA-Mind/
 │   │   ├── oauth/                    # Google OAuth2
 │   │   └── push/                     # Firebase + CallKit
 │   │
-│   ├── cortex/                       # Processamento AI
-│   │   ├── brain/                    # Serviço central
-│   │   ├── gemini/                   # Gemini client + tools + prompts
-│   │   ├── lacan/                    # Motor psicanalítico Lacaniano
-│   │   ├── personality/              # Enneagram router
-│   │   ├── transnar/                 # TransNAR engine
-│   │   ├── ethics/                   # Barreiras éticas
+│   ├── cortex/                       # INTELIGÊNCIA CENTRAL
+│   │   ├── ethics/                   # Regras de segurança e limites
+│   │   ├── gemini/                   # Cliente Gemini + Swarm Orchestrator
+│   │   ├── lacan/                    # Motores psicanalíticos
+│   │   ├── personality/              # RAM, Big Five, Enneagram, Trajectories
+│   │   ├── predictive/               # HMC Trajectory Engine
+│   │   └── transnar/                 # Transference Narrative
+│   ├── hippocampus/                  # MEMÓRIA E GRAFOS
+│   │   ├── graph/                    # Heat Kernel Diffusion
+│   │   └── topology/                 # Persistent Homology
 │   │   ├── cognitive/                # Carga cognitiva
 │   │   ├── orchestration/            # Orquestrador de conversa
 │   │   ├── veracity/                 # Detecção de mentiras
