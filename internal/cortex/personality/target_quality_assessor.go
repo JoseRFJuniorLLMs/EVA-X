@@ -47,7 +47,7 @@ func CalculateExpressiveness(sessions []SessionData) float64 {
 
 		// Energy variance
 		if len(session.EnergyLevels) > 1 {
-			totalEnergyVariance += variance(session.EnergyLevels)
+			totalEnergyVariance += calculateVariance(session.EnergyLevels)
 		}
 	}
 
@@ -90,7 +90,7 @@ func CalculateConsistency(sessions []SessionData) float64 {
 	}
 
 	// High average similarity = high consistency
-	avgSimilarity := average(similarities)
+	avgSimilarity := calculateAverage(similarities)
 
 	// Also consider variance in tone and energy across sessions
 	toneVariances := []float64{}
@@ -99,13 +99,13 @@ func CalculateConsistency(sessions []SessionData) float64 {
 	for _, session := range sessions {
 		toneVariances = append(toneVariances, session.ToneVariance)
 		if len(session.EnergyLevels) > 0 {
-			energyMeans = append(energyMeans, average(session.EnergyLevels))
+			energyMeans = append(energyMeans, calculateAverage(session.EnergyLevels))
 		}
 	}
 
 	// Low variance in session-level metrics = high consistency
-	toneConsistency := 1.0 - math.Min(variance(toneVariances), 1.0)
-	energyConsistency := 1.0 - math.Min(variance(energyMeans), 1.0)
+	toneConsistency := 1.0 - math.Min(calculateVariance(toneVariances), 1.0)
+	energyConsistency := 1.0 - math.Min(calculateVariance(energyMeans), 1.0)
 
 	// Combine behavioral and metric consistency
 	consistency := (avgSimilarity*0.5 + toneConsistency*0.25 + energyConsistency*0.25)
@@ -183,7 +183,7 @@ func estimatePsychologicalAdjustment(sessions []SessionData) float64 {
 	}
 
 	// Low variance in energy = more stable = higher adjustment
-	energyVar := variance(allEnergy)
+	energyVar := calculateVariance(allEnergy)
 	stabilityScore := 1.0 - math.Min(energyVar, 1.0)
 
 	// Fewer extreme emotions = higher adjustment
@@ -201,33 +201,18 @@ func estimatePsychologicalAdjustment(sessions []SessionData) float64 {
 	return psychAdj
 }
 
-func variance(values []float64) float64 {
-	if len(values) == 0 {
-		return 0
+func calculateTraitConsistency(values []float64) float64 {
+	if len(values) < 2 {
+		return 1.0
 	}
 
-	mean := average(values)
-	sumSquaredDiff := 0.0
-
-	for _, v := range values {
-		diff := v - mean
-		sumSquaredDiff += diff * diff
+	v := calculateVariance(values)
+	// Higher variance = lower consistency
+	consistency := 1.0 - v
+	if consistency < 0 {
+		return 0.0
 	}
-
-	return sumSquaredDiff / float64(len(values))
-}
-
-func average(values []float64) float64 {
-	if len(values) == 0 {
-		return 0
-	}
-
-	sum := 0.0
-	for _, v := range values {
-		sum += v
-	}
-
-	return sum / float64(len(values))
+	return consistency
 }
 
 func jaccardSimilarity(set1, set2 map[string]bool) float64 {

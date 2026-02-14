@@ -163,7 +163,7 @@ func GenerateSituationalGuidance(baseType int, sit Situation) string {
 	guidance := ""
 
 	// Check for critical situations
-	if contains(sit.Stressors, "luto") && sit.SocialContext == "sozinho" && sit.TimeOfDay == "madrugada" {
+	if containsString(sit.Stressors, "luto") && sit.SocialContext == "sozinho" && sit.TimeOfDay == "madrugada" {
 		guidance = "ATENÇÃO: Usuário em luto, sozinho, de madrugada. Risco elevado de crise. Seja especialmente empática e considere acionar suporte."
 		return guidance
 	}
@@ -210,15 +210,6 @@ func getTimeOfDay(t time.Time) string {
 	} else {
 		return "noite"
 	}
-}
-
-func contains(slice []string, item string) bool {
-	for _, s := range slice {
-		if s == item {
-			return true
-		}
-	}
-	return false
 }
 
 func copyWeights(original map[string]float64) map[string]float64 {

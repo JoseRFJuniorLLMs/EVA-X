@@ -9,7 +9,7 @@ import (
 // PersonalityTrajectory tracks personality evolution over time
 type PersonalityTrajectory struct {
 	UserID          int64
-	Snapshots       []PersonalitySnapshot
+	Snapshots       []TrajectorySnapshot
 	BaselineProfile BigFiveProfile // First 10 sessions
 	CurrentProfile  BigFiveProfile
 	StabilityIndex  float64 // 0-1: how stable personality is
@@ -17,8 +17,8 @@ type PersonalityTrajectory struct {
 	LastUpdated     time.Time
 }
 
-// PersonalitySnapshot represents personality at a point in time
-type PersonalitySnapshot struct {
+// TrajectorySnapshot represents personality at a point in time
+type TrajectorySnapshot struct {
 	Timestamp time.Time
 	Profile   BigFiveProfile
 	SessionID string
@@ -47,17 +47,17 @@ type ClinicalAlert struct {
 }
 
 // GetPersonalityTrajectory retrieves the full trajectory for a user
-func GetPersonalityTrajectory(userID int64, snapshots []PersonalitySnapshot) PersonalityTrajectory {
+func GetPersonalityTrajectory(userID int64, snapshots []TrajectorySnapshot) PersonalityTrajectory {
 	if len(snapshots) == 0 {
 		return PersonalityTrajectory{
 			UserID:      userID,
-			Snapshots:   []PersonalitySnapshot{},
+			Snapshots:   []TrajectorySnapshot{},
 			LastUpdated: time.Now(),
 		}
 	}
 
 	// Baseline is average of first 10 sessions (or all if < 10)
-	baselineCount := min(10, len(snapshots))
+	baselineCount := minInt(10, len(snapshots))
 	baseline := averageBigFive(snapshots[:baselineCount])
 
 	current := snapshots[len(snapshots)-1].Profile
@@ -201,7 +201,7 @@ func GenerateAlerts(anomalies []AnomalyEvent, userID int64) []ClinicalAlert {
 
 // Helper functions
 
-func calculateStability(snapshots []PersonalitySnapshot) float64 {
+func calculateStability(snapshots []TrajectorySnapshot) float64 {
 	if len(snapshots) < 2 {
 		return 1.0 // Perfectly stable (no variance)
 	}
@@ -224,14 +224,14 @@ func calculateStability(snapshots []PersonalitySnapshot) float64 {
 		neuroticism = append(neuroticism, snapshot.Profile.Neuroticism)
 	}
 
-	variances = append(variances, variance(openness))
-	variances = append(variances, variance(conscientiousness))
-	variances = append(variances, variance(extraversion))
-	variances = append(variances, variance(agreeableness))
-	variances = append(variances, variance(neuroticism))
+	variances = append(variances, calculateVariance(openness))
+	variances = append(variances, calculateVariance(conscientiousness))
+	variances = append(variances, calculateVariance(extraversion))
+	variances = append(variances, calculateVariance(agreeableness))
+	variances = append(variances, calculateVariance(neuroticism))
 
 	// Average variance
-	avgVariance := average(variances)
+	avgVariance := calculateAverage(variances)
 
 	// Stability = 1 - variance (normalized)
 	stability := 1.0 - math.Min(avgVariance, 1.0)
@@ -273,7 +273,7 @@ func determineAction(anomaly AnomalyEvent) string {
 	}
 }
 
-func averageBigFive(snapshots []PersonalitySnapshot) BigFiveProfile {
+func averageBigFive(snapshots []TrajectorySnapshot) BigFiveProfile {
 	if len(snapshots) == 0 {
 		return BigFiveProfile{}
 	}
@@ -301,35 +301,6 @@ func averageBigFive(snapshots []PersonalitySnapshot) BigFiveProfile {
 	}
 }
 
-func variance(values []float64) float64 {
-	if len(values) == 0 {
-		return 0
-	}
-
-	mean := average(values)
-	sumSquaredDiff := 0.0
-
-	for _, v := range values {
-		diff := v - mean
-		sumSquaredDiff += diff * diff
-	}
-
-	return sumSquaredDiff / float64(len(values))
-}
-
-func average(values []float64) float64 {
-	if len(values) == 0 {
-		return 0
-	}
-
-	sum := 0.0
-	for _, v := range values {
-		sum += v
-	}
-
-	return sum / float64(len(values))
-}
-
 func formatDuration(d time.Duration) string {
 	days := int(d.Hours() / 24)
 	if days < 7 {
@@ -339,11 +310,4 @@ func formatDuration(d time.Duration) string {
 	} else {
 		return fmt.Sprintf("%d meses", days/30)
 	}
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
