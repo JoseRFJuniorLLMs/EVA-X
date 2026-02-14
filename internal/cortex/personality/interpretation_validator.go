@@ -5,7 +5,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/JoseRFJuniorLLMs/EVA-Mind/internal/cortex/pattern"
+	"eva-mind/internal/cortex/pattern"
 )
 
 // InterpretationHypothesis represents a possible interpretation of a behavioral cue
