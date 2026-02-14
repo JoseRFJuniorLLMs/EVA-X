@@ -182,3 +182,129 @@ func getGrowthPoint(t EneagramType) EneagramType {
 		return t
 	}
 }
+
+// SelectPostureWithSituation selects personality posture considering situational context
+// This integrates the Situation Modulator to adjust personality weights based on context
+func (r *PersonalityRouter) SelectPostureWithSituation(
+	baseType EneagramType,
+	sessionData SessionData,
+	recentEvents []LifeEvent,
+) (EneagramType, map[string]float64, string) {
+	// 1. Infer current situation
+	sit := InferSituation(int64(baseType), sessionData, recentEvents)
+
+	// 2. Get base attention weights
+	baseWeights := r.GetAttentionWeights(baseType)
+
+	// 3. Modulate weights based on situation
+	modulatedWeights := ModulateWeights(int(baseType), sit)
+
+	// 4. Merge base attention weights with situational modulation
+	finalWeights := mergeWeights(baseWeights, modulatedWeights)
+
+	// 5. Generate situational guidance
+	guidance := GenerateSituationalGuidance(int(baseType), sit)
+
+	// 6. Check if situation requires persona override
+	overrideType := checkPersonaOverride(baseType, sit)
+
+	return overrideType, finalWeights, guidance
+}
+
+// GetActivePersonalityWithContext returns active personality considering situational context
+func (r *PersonalityRouter) GetActivePersonalityWithContext(
+	baseType EneagramType,
+	currentSituation Situation,
+) EneagramType {
+	// Check for critical situational overrides
+	if len(currentSituation.Stressors) > 2 {
+		// Multiple stressors = switch to more supportive persona
+		return selectSupportivePersona(baseType, currentSituation)
+	}
+
+	// Check for specific high-risk situations
+	if containsString(currentSituation.Stressors, "luto") &&
+		currentSituation.SocialContext == "sozinho" &&
+		currentSituation.TimeOfDay == "madrugada" {
+		// Critical situation: grief + alone + night = switch to Type 2 (Helper)
+		return Type2
+	}
+
+	// No override needed
+	return baseType
+}
+
+// Helper functions
+
+func mergeWeights(baseWeights, situationalWeights map[string]float64) map[string]float64 {
+	merged := make(map[string]float64)
+
+	// Copy base weights
+	for k, v := range baseWeights {
+		merged[k] = v
+	}
+
+	// Apply situational modulation
+	for k, v := range situationalWeights {
+		if baseVal, exists := merged[k]; exists {
+			// Multiply if key exists in both
+			merged[k] = baseVal * v
+		} else {
+			// Add new weight
+			merged[k] = v
+		}
+	}
+
+	return merged
+}
+
+func checkPersonaOverride(baseType EneagramType, sit Situation) EneagramType {
+	// Check for critical situations requiring persona switch
+	for _, stressor := range sit.Stressors {
+		switch stressor {
+		case "luto":
+			// Grief requires empathetic support (Type 2)
+			if baseType != Type2 {
+				return Type2
+			}
+		case "crise_panico":
+			// Panic requires calm, grounding presence (Type 9)
+			if baseType != Type9 {
+				return Type9
+			}
+		case "dor_cronica":
+			// Chronic pain requires patient, understanding support (Type 2)
+			if baseType != Type2 && baseType != Type9 {
+				return Type2
+			}
+		}
+	}
+
+	// No override needed
+	return baseType
+}
+
+func selectSupportivePersona(baseType EneagramType, sit Situation) EneagramType {
+	// Under multiple stressors, prioritize supportive types
+	supportiveTypes := []EneagramType{Type2, Type9, Type6}
+
+	// If already supportive, stay
+	for _, supportive := range supportiveTypes {
+		if baseType == supportive {
+			return baseType
+		}
+	}
+
+	// Otherwise, switch to Type 2 (most empathetic)
+	return Type2
+}
+
+// containsString checks if a slice contains a specific string
+func containsString(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}
