@@ -126,6 +126,15 @@ func (c *Client) SendSetup(instructions string, voiceSettings map[string]interfa
 		},
 	}
 
+	// ✅ NOVO: Configurar VAD (Automatic Activity Detection)
+	// Essencial para evitar que o eco ative o barge-in indevidamente.
+	setup["setup"].(map[string]interface{})["input_config"] = map[string]interface{}{
+		"automatic_activity_detection": map[string]interface{}{
+			"start_of_speech_sensitivity": "START_SENSITIVITY_LOW", // Menos sensível ao eco do viva-voz
+			"end_of_speech_sensitivity":   "END_SENSITIVITY_LOW",
+		},
+	}
+
 	// ⚠️ CRITICAL ARCHITECTURE FIX:
 	// O modelo 'gemini-2.5-flash-native-audio-preview' NÃO suporta Tools via WebSocket.
 	// Ele é estritamente para Audio Streaming (Input/Output).
