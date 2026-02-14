@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net/url"
 
-	"eva-mind/internal/config"
+	"eva-mind/internal/brainstem/config"
 
 	"github.com/gorilla/websocket"
 )

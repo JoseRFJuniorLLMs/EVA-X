@@ -3,7 +3,7 @@ package twilio
 import (
 	"fmt"
 
-	"eva-mind/internal/config"
+	"eva-mind/internal/brainstem/config"
 
 	"github.com/twilio/twilio-go"
 	twilioApi "github.com/twilio/twilio-go/rest/api/v2010"

@@ -40,7 +40,7 @@ import (
 	"eva-mind/internal/motor/email"
 	"eva-mind/internal/persona"
 	"eva-mind/internal/tools"
-	"eva-mind/internal/voice"
+	vdefs "eva-mind/internal/voice"
 	"eva-mind/pkg/types"
 
 	"eva-mind/internal/brainstem/push"
@@ -97,7 +97,7 @@ type WebSocketSession struct {
 	audioContextMu sync.RWMutex
 
 	// ✅ NOVO: Máquina de Estados para Ducking (Supressão Inteligente)
-	State voice.ConversationState
+	State vdefs.ConversationState
 }
 
 // ✅ NOVO MÉTODO: Thread-safe setter para o GraphReasoning usar
@@ -155,14 +155,14 @@ func (s *WebSocketSession) GetAudioContext() (emotion, urgency string, intensity
 }
 
 // ✅ NOVO: Thread-safe setter de estado
-func (s *WebSocketSession) SetState(state voice.ConversationState) {
+func (s *WebSocketSession) SetState(state vdefs.ConversationState) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.State = state
 }
 
 // ✅ NOVO: Thread-safe getter de estado
-func (s *WebSocketSession) GetState() voice.ConversationState {
+func (s *WebSocketSession) GetState() vdefs.ConversationState {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.State
@@ -694,7 +694,7 @@ func (s *SignalingServer) handleAudioMessage(session *WebSocketSession, pcmData 
 	// ✅ NOVO: Smart Ducking
 	// Se a IA está falando, reduzimos o volume do mic em 70%
 	// Isso impede o eco mas mantém a capacidade de interrupção legítima.
-	if session.GetState() == voice.StateSpeaking {
+	if session.GetState() == vdefs.StateSpeaking {
 		for i := 0; i < len(pcmData); i += 2 {
 			if i+1 < len(pcmData) {
 				sample := int16(binary.LittleEndian.Uint16(pcmData[i:]))
@@ -1000,7 +1000,7 @@ func (s *SignalingServer) handleGeminiResponse(session *WebSocketSession, respon
 	// Detectar quando idoso terminou de falar (Turn Complete)
 	if turnComplete, ok := serverContent["turnComplete"].(bool); ok && turnComplete {
 		log.Printf("🎙️ [TURNO COMPLETO] Resetando para StateListening.")
-		session.SetState(voice.StateListening)
+		session.SetState(vdefs.StateListening)
 		log.Printf("🎙️ Iniciando análise de áudio...")
 
 		// ✅ FASE 2.3: Audio Emotion Analysis (Redis Powered)
@@ -1119,7 +1119,7 @@ func (s *SignalingServer) handleGeminiResponse(session *WebSocketSession, respon
 	// ✅ FASE 5: Interruption Handling (Barge-in)
 	if interrupted, ok := serverContent["interrupted"].(bool); ok && interrupted {
 		log.Printf("🛑 [INTERRUPT] Usuário interrompeu! Resetando para StateListening.")
-		session.SetState(voice.StateListening)
+		session.SetState(vdefs.StateListening)
 
 		// Enviar sinal para o cliente limpar o buffer de áudio imediatamente
 		interruptMsg := ControlMessage{
@@ -1172,8 +1172,8 @@ func (s *SignalingServer) handleGeminiResponse(session *WebSocketSession, respon
 
 			// ✅ IA começou a enviar áudio, setar StateSpeaking
 			if strings.Contains(strings.ToLower(mimeType), "audio/pcm") && audioB64 != "" {
-				if session.GetState() != voice.StateSpeaking {
-					session.SetState(voice.StateSpeaking)
+				if session.GetState() != vdefs.StateSpeaking {
+					session.SetState(vdefs.StateSpeaking)
 				}
 
 				log.Printf("🎵 [GEMINI] Part %d: mimeType=%s, hasAudio=%v", i, mimeType, audioB64 != "")

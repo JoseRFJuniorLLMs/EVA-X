@@ -1,0 +1,12 @@
+.gcloudignore
+.git
+.gitignore
+node_modules
+venv
+.env
+*.log
+*.exe
+eva-mind
+# Ignorar auditorias antigas (já movidas para MD)
+MD/voice_audit_v*.md
+MD/google_best_practices.md
