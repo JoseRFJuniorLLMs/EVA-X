@@ -3,11 +3,18 @@ package main
 import (
 	"fmt"
 	"log"
+	"net/http"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
+
+var videoUpgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true
+	},
+}
 
 // VideoSession represents a video call session
 type VideoSession struct {
@@ -290,8 +297,13 @@ func (vsm *VideoSessionManager) UnregisterClient(sessionID string, conn *websock
 }
 
 // HandleVideoWebSocket handles WebSocket connections for video calls
-func HandleVideoWebSocket(vsm *VideoSessionManager) func(*websocket.Conn) {
-	return func(conn *websocket.Conn) {
+func HandleVideoWebSocket(vsm *VideoSessionManager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		conn, err := videoUpgrader.Upgrade(w, r, nil)
+		if err != nil {
+			log.Printf("❌ Video WebSocket upgrade error: %v", err)
+			return
+		}
 		var sessionID string
 		var clientType string
 

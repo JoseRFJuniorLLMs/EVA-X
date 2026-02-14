@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"eva-mind/internal/config"
-	"eva-mind/internal/database"
+	"eva-mind/internal/brainstem/config"
+	"eva-mind/internal/brainstem/database"
 	"eva-mind/internal/gemini"
 	"eva-mind/internal/twilio"
 	"eva-mind/pkg/models"
