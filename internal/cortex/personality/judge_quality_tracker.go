@@ -40,7 +40,7 @@ func CalculateExperience(totalUsers int) float64 {
 	}
 
 	experience := 1.0 - (1.0 / (1.0 + float64(totalUsers)/50.0))
-	return min(experience, 1.0)
+	return minFloat(experience, 1.0)
 }
 
 // CalculateSimilarity calculates how similar a user is to the training dataset
@@ -70,7 +70,7 @@ func CalculateSimilarity(userProfile PersonalityProfile) float64 {
 // UpdateHistoricalAccuracy updates accuracy based on new feedback
 func UpdateHistoricalAccuracy(currentAccuracy float64, prediction Prediction, outcome Outcome) float64 {
 	// Calculate error
-	error := abs(prediction.PredictedValue - outcome.ActualValue)
+	error := absFloat(prediction.PredictedValue - outcome.ActualValue)
 	wasAccurate := error < 0.20 // Within 20% = accurate
 
 	// Update with exponential moving average (weight recent more)
@@ -123,18 +123,4 @@ func GetJudgeQualityWarning(judgeQuality JudgeQuality) string {
 	}
 
 	return ""
-}
-
-func abs(x float64) float64 {
-	if x < 0 {
-		return -x
-	}
-	return x
-}
-
-func min(a, b float64) float64 {
-	if a < b {
-		return a
-	}
-	return b
 }

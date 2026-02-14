@@ -86,7 +86,7 @@ func InferBigFiveFromBehavior(sessions []SessionData) BigFiveProfile {
 	openness := calculateOpenness(sessions)
 
 	// Confidence increases with more sessions
-	confidence := min(float64(len(sessions))/10.0, 0.90)
+	confidence := minFloat(float64(len(sessions))/10.0, 0.90)
 
 	return BigFiveProfile{
 		Openness:          openness,
@@ -102,7 +102,7 @@ func InferBigFiveFromBehavior(sessions []SessionData) BigFiveProfile {
 // BlendBigFive blends inference from Enneagram and behavior
 func BlendBigFive(fromBehavior, fromEnnea BigFiveProfile, sessionCount int) BigFiveProfile {
 	// Weight behavior more heavily as sessions increase
-	behaviorWeight := min(float64(sessionCount)/10.0, 0.80)
+	behaviorWeight := minFloat(float64(sessionCount)/10.0, 0.80)
 	enneaWeight := 1.0 - behaviorWeight
 
 	return BigFiveProfile{
@@ -111,7 +111,7 @@ func BlendBigFive(fromBehavior, fromEnnea BigFiveProfile, sessionCount int) BigF
 		Extraversion:      fromBehavior.Extraversion*behaviorWeight + fromEnnea.Extraversion*enneaWeight,
 		Agreeableness:     fromBehavior.Agreeableness*behaviorWeight + fromEnnea.Agreeableness*enneaWeight,
 		Neuroticism:       fromBehavior.Neuroticism*behaviorWeight + fromEnnea.Neuroticism*enneaWeight,
-		Confidence:        max(fromBehavior.Confidence, fromEnnea.Confidence),
+		Confidence:        maxFloat(fromBehavior.Confidence, fromEnnea.Confidence),
 		LastUpdated:       time.Now(),
 	}
 }
@@ -134,7 +134,7 @@ func calculateExtraversion(sessions []SessionData) float64 {
 	}
 
 	avgEnergy := totalEnergy / float64(count)
-	return min(avgEnergy, 1.0)
+	return minFloat(avgEnergy, 1.0)
 }
 
 func calculateNeuroticism(sessions []SessionData) float64 {
@@ -145,7 +145,7 @@ func calculateNeuroticism(sessions []SessionData) float64 {
 		totalEmotions += session.EmotionCount
 		// Count negative emotions (simplified)
 		for _, behavior := range session.Behaviors {
-			if contains(behavior, []string{"ansioso", "triste", "preocupado", "medo"}) {
+			if containsKeyword(behavior, []string{"ansioso", "triste", "preocupado", "medo"}) {
 				negativeEmotions++
 			}
 		}
@@ -155,7 +155,7 @@ func calculateNeuroticism(sessions []SessionData) float64 {
 		return 0.5
 	}
 
-	return min(float64(negativeEmotions)/float64(totalEmotions), 1.0)
+	return minFloat(float64(negativeEmotions)/float64(totalEmotions), 1.0)
 }
 
 func calculateConscientiousness(sessions []SessionData) float64 {
@@ -172,7 +172,7 @@ func calculateAgreeableness(sessions []SessionData) float64 {
 	for _, session := range sessions {
 		totalBehaviors += len(session.Behaviors)
 		for _, behavior := range session.Behaviors {
-			if contains(behavior, []string{"gentil", "cooperativo", "empático", "amável"}) {
+			if containsKeyword(behavior, []string{"gentil", "cooperativo", "empático", "amável"}) {
 				cooperativeBehaviors++
 			}
 		}
@@ -182,7 +182,7 @@ func calculateAgreeableness(sessions []SessionData) float64 {
 		return 0.5
 	}
 
-	return min(float64(cooperativeBehaviors)/float64(totalBehaviors)*2, 1.0)
+	return minFloat(float64(cooperativeBehaviors)/float64(totalBehaviors)*2, 1.0)
 }
 
 func calculateOpenness(sessions []SessionData) float64 {
@@ -196,28 +196,5 @@ func calculateOpenness(sessions []SessionData) float64 {
 	}
 
 	// More unique topics = higher openness
-	return min(float64(len(uniqueTopics))/20.0, 1.0)
-}
-
-func contains(text string, keywords []string) bool {
-	for _, keyword := range keywords {
-		if len(text) >= len(keyword) && text[:len(keyword)] == keyword {
-			return true
-		}
-	}
-	return false
-}
-
-func min(a, b float64) float64 {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func max(a, b float64) float64 {
-	if a > b {
-		return a
-	}
-	return b
+	return minFloat(float64(len(uniqueTopics))/20.0, 1.0)
 }

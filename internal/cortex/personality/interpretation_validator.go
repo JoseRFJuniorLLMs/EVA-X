@@ -93,7 +93,7 @@ func generatePauseHypotheses(cue pattern.BehavioralCue, context UnifiedContext) 
 
 	// Check for recent emotional events
 	for _, event := range context.RecentEvents {
-		if contains(event, []string{"morte", "luto", "perda"}) {
+		if containsKeyword(event, []string{"morte", "luto", "perda"}) {
 			hypotheses[1].Confidence += 0.3
 			hypotheses[1].Evidence = append(hypotheses[1].Evidence, "Evento emocional recente: "+event)
 		}
@@ -257,7 +257,7 @@ func ValidateInterpretation(interp Interpretation, feedback UserFeedback) float6
 	// Interpretation was incorrect
 	// Find if any other hypothesis matches the actual state
 	for i, hyp := range interp.Hypotheses {
-		if i != interp.SelectedIndex && contains(hyp.Explanation, []string{feedback.ActualState}) {
+		if i != interp.SelectedIndex && containsKeyword(hyp.Explanation, []string{feedback.ActualState}) {
 			// We had the right hypothesis but didn't select it
 			return hyp.Confidence
 		}
@@ -284,15 +284,6 @@ func normalizeConfidences(hypotheses []InterpretationHypothesis) []Interpretatio
 	}
 
 	return hypotheses
-}
-
-func contains(text string, keywords []string) bool {
-	for _, keyword := range keywords {
-		if len(text) >= len(keyword) && text[:len(keyword)] == keyword {
-			return true
-		}
-	}
-	return false
 }
 
 func joinEvidence(evidence []string) string {
