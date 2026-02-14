@@ -298,13 +298,3 @@ func selectSupportivePersona(baseType EneagramType, sit Situation) EneagramType 
 	// Otherwise, switch to Type 2 (most empathetic)
 	return Type2
 }
-
-// containsString checks if a slice contains a specific string
-func containsString(slice []string, item string) bool {
-	for _, s := range slice {
-		if s == item {
-			return true
-		}
-	}
-	return false
-}
