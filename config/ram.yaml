@@ -1,0 +1,167 @@
+# Configuração do RAM (Realistic Accuracy Model)
+# Fase E1-E3 - Geração de interpretações + validação + feedback
+
+ram:
+  enabled: true
+
+  # E1: Interpretation Generation
+  interpretation_generation:
+    num_interpretations: 3           # Gerar 3 interpretações alternativas
+    temperature: 0.7                 # Criatividade do LLM (0.0-1.0)
+    max_retries: 3
+    timeout_ms: 2000
+
+    # LLM configuration
+    llm:
+      provider: "gemini"             # gemini, openai, etc
+      model: "gemini-1.5-pro"
+      max_tokens: 500
+      top_p: 0.9
+
+  # E2: Historical Validation
+  historical_validation:
+    enabled: true
+    similarity_threshold: 0.75       # Threshold para supporting facts
+    max_memories_to_check: 20        # Máximo de memórias a validar
+    temporal_validation: true        # Validação temporal adicional
+
+    # Consistency scoring weights
+    scoring:
+      plausibility_weight: 0.4       # 40% plausibility
+      historical_weight: 0.4         # 40% historical consistency
+      confidence_weight: 0.2         # 20% LLM confidence
+
+    # Contradiction detection
+    contradiction:
+      min_relevance_threshold: 0.7   # Relevância mínima para detectar
+      high_severity_threshold: 0.2   # Similarity < 0.2 + relevance > 0.9
+
+  # E3: Feedback Loop
+  feedback_loop:
+    enabled: true
+    learning_rate: 0.05              # Taxa de aprendizado
+    boost_factor: 1.5                # +50% boost se correto
+    decay_factor: 0.7                # -30% decay se incorreto
+
+    # Hebbian integration
+    hebbian:
+      apply_immediately: true        # Aplicar feedback imediatamente
+      batch_size: 10                 # Batch updates (se não immediate)
+      max_boost_per_edge: 2.0        # Máximo boost acumulado
+      min_weight_after_decay: 0.1    # Peso mínimo após decay
+
+  # Review triggers
+  review_required:
+    min_confidence_threshold: 0.6    # < 0.6 requer revisão
+    ambiguity_threshold: 0.1         # Score diff < 0.1 = ambíguo
+    high_severity_contradiction: true # Auto-trigger se contradiction alta
+
+  # Performance
+  performance:
+    max_response_time_ms: 2000       # Timeout total
+    cache_interpretations: true
+    cache_ttl_minutes: 60
+    parallel_validation: true        # Validar interpretações em paralelo
+
+  # Metrics
+  metrics:
+    track_interpretation_quality: true
+    track_validation_accuracy: true
+    track_feedback_effectiveness: true
+    export_prometheus: true
+
+# Exemplos de interpretações alternativas
+
+examples:
+  query: "O que eu fiz ontem com a Maria?"
+
+  interpretation_1:
+    content: "O paciente pergunta sobre atividades realizadas ontem com Maria (possivelmente filha ou cuidadora)"
+    plausibility: 0.85
+    historical_score: 0.9
+    combined_score: 0.87
+    supporting_facts:
+      - "Tomei café com Maria ontem de manhã"
+      - "Maria veio me visitar ontem à tarde"
+
+  interpretation_2:
+    content: "O paciente está confuso sobre quando foi o último encontro com Maria (pode não ter sido ontem)"
+    plausibility: 0.7
+    historical_score: 0.6
+    combined_score: 0.65
+    contradictions:
+      - "Última visita da Maria foi há 3 dias (severity: medium)"
+
+  interpretation_3:
+    content: "O paciente quer confirmar se lembra corretamente das atividades com Maria"
+    plausibility: 0.6
+    historical_score: 0.7
+    combined_score: 0.65
+
+  best_interpretation: "interpretation_1"
+  requires_review: false
+
+# Feedback examples
+
+feedback_examples:
+  positive_feedback:
+    interpretation_id: "interp_123"
+    correct: true
+    action: "boost_hebbian"
+    affected_edges:
+      - source: "entity_maria"
+        target: "entity_cafe"
+        boost_factor: 1.5
+        new_weight: 0.85  # was 0.57
+
+  negative_feedback:
+    interpretation_id: "interp_456"
+    correct: false
+    corrected_text: "Na verdade, foi há 2 dias, não ontem"
+    action: "decay_hebbian"
+    affected_edges:
+      - source: "entity_maria"
+        target: "memory_yesterday"
+        decay_factor: 0.7
+        new_weight: 0.28  # was 0.4
+
+# Integration points
+integration:
+  gemini_api: true                   # Gemini para geração
+  qdrant_search: true                # Qdrant para retrieval
+  neo4j_validation: true             # Neo4j para histórico
+  hebbian_feedback: true             # Hebbian para aprendizado
+  api_endpoints: true                # Expor API REST
+
+# API Endpoints (futuros)
+api:
+  process_query:
+    path: "/api/v1/ram/process/:patient_id"
+    method: "POST"
+    body:
+      - query: string
+      - context: string
+
+  submit_feedback:
+    path: "/api/v1/ram/feedback/:patient_id"
+    method: "POST"
+    body:
+      - interpretation_id: string
+      - correct: bool
+      - corrected_text: string (optional)
+
+  get_interpretations:
+    path: "/api/v1/ram/interpretations/:patient_id/:interpretation_id"
+    method: "GET"
+
+  get_feedback_stats:
+    path: "/api/v1/ram/feedback/stats/:patient_id"
+    method: "GET"
+
+# Validações científicas
+validations:
+  hebbian_learning: true             # ✅ Feedback → Hebbian boost/decay
+  multiple_hypotheses: true          # ✅ Gerar N alternativas
+  historical_consistency: true       # ✅ Validar contra histórico
+  contradiction_detection: true      # ✅ Detectar inconsistências
+  caregiver_feedback: true           # ✅ Aprender com cuidador

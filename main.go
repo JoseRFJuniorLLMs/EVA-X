@@ -15,6 +15,7 @@ import (
 	"eva-mind/internal/brainstem/infrastructure/vector"
 	"eva-mind/internal/brainstem/push"
 	"eva-mind/internal/cortex/gemini"
+	"eva-mind/internal/cortex/lacan"
 	"eva-mind/internal/cortex/personality"
 	"eva-mind/internal/hippocampus/memory"
 	"eva-mind/internal/scheduler"
@@ -42,6 +43,7 @@ type SignalingServer struct {
 	pushService        *push.FirebaseService
 	memoryStore        *memory.MemoryStore
 	personalityService *personality.PersonalityService
+	narrativeShift     *lacan.NarrativeShiftDetector
 	vsm                *VideoSessionManager
 }
 
@@ -85,7 +87,12 @@ func main() {
 	memoryStore := memory.NewMemoryStore(db.Conn, nil, qdrantClient)
 	personalitySvc := personality.NewPersonalityService(db.Conn)
 
-	// 7. SignalingServer (Legacy Support)
+	// 7. Cognitive Services
+	signifierService := lacan.NewSignifierService(neo4jClient)
+	narrativeShiftDetector := lacan.NewNarrativeShiftDetector(neo4jClient, signifierService)
+	log.Info().Msg("📊 Narrative Shift Detector initialized")
+
+	// 8. SignalingServer
 	server := &SignalingServer{
 		db:                 db,
 		cfg:                cfg,
@@ -95,10 +102,11 @@ func main() {
 		pushService:        pushService,
 		memoryStore:        memoryStore,
 		personalityService: personalitySvc,
+		narrativeShift:     narrativeShiftDetector,
 		vsm:                NewVideoSessionManager(),
 	}
 
-	// 6. Router & Servidor HTTP
+	// 9. Router & Servidor HTTP
 	router := mux.NewRouter()
 
 	// Middleware

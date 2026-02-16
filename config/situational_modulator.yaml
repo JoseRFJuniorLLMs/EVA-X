@@ -1,0 +1,117 @@
+# Configuração do Situational Modulator
+# Fase E0 - Prioridade Máxima
+
+situational_modulator:
+  enabled: true
+  cache_ttl_minutes: 5
+  timeout_ms: 100
+
+  # Keywords para detecção de stressors
+  stressor_keywords:
+    luto:
+      - faleceu
+      - morreu
+      - morte
+      - velório
+      - funeral
+      - falecimento
+      - perdeu
+      - partiu
+
+    hospital:
+      - hospital
+      - internado
+      - internação
+      - uti
+      - emergência
+      - pronto-socorro
+      - clínica
+
+    doença:
+      - doente
+      - doença
+      - enfermo
+      - mal
+      - sintoma
+      - dor
+      - febre
+      - tratamento
+
+    aniversário:
+      - aniversário
+      - niver
+      - parabéns
+      - anos de vida
+      - festa de aniversário
+
+    festa:
+      - festa
+      - celebração
+      - comemoração
+      - confraternização
+      - reunião familiar
+      - churrasco
+
+    crise:
+      - crise
+      - pânico
+      - desespero
+      - emergência
+      - ajuda
+      - socorro
+      - não aguento
+      - não suporto
+
+  # Regras de modulação de pesos
+  modulation_rules:
+    luto:
+      ANSIEDADE: 1.8          # +80%
+      BUSCA_SEGURANÇA: 2.0    # +100%
+      EXTROVERSÃO: 0.5        # -50%
+      TRISTEZA: 2.0           # +100%
+
+    hospital:
+      ALERTA: 2.0             # +100%
+      BUSCA_SEGURANÇA: 1.5    # +50%
+      PREOCUPAÇÃO: 1.8        # +80%
+
+    doença:
+      PREOCUPAÇÃO: 1.6        # +60%
+      BUSCA_SEGURANÇA: 1.4    # +40%
+      ALERTA: 1.5             # +50%
+
+    aniversário:
+      # NÃO inflar alegria (é esperado)
+      # Mas se pessoa séria em festa → inflar (comportamento incomum)
+      EXTROVERSÃO_THRESHOLD: 0.4  # Se < 0.4, inflar com intensity
+
+    festa:
+      # Mesma lógica de aniversário
+      EXTROVERSÃO_THRESHOLD: 0.4
+
+    crise:
+      ALERTA: 2.5             # +150%
+      ANSIEDADE: 2.0          # +100%
+      DESESPERO: 3.0          # +200%
+
+  # Regras contextuais
+  contextual_rules:
+    madrugada_sozinho:
+      SOLIDÃO: 1.5            # +50%
+      ANSIEDADE: 1.3          # +30%
+
+    madrugada_familia:
+      # Sem modulação (família presente = contexto normal)
+      SOLIDÃO: 1.0
+
+  # Thresholds
+  thresholds:
+    high_intensity: 0.8       # Intensity > 0.8 = alerta crítico
+    negative_emotion: -0.5    # EmotionScore < -0.5 = depressão
+    positive_emotion: 0.5     # EmotionScore > 0.5 = alegria
+
+  # Performance
+  performance:
+    max_cache_entries: 1000
+    cache_cleanup_interval_minutes: 30
+    max_keywords_per_text: 20

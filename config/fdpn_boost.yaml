@@ -1,0 +1,66 @@
+# Configuração do FDPN → Retrieval Boost
+# Fase B - Integração FDPN com busca vetorial
+
+fdpn_boost:
+  enabled: true
+  boost_factor: 0.15          # +15% máximo boost
+  min_activation: 0.3         # Ignorar ativações < 0.3
+
+  # Priming configuration
+  priming:
+    max_depth: 3              # Profundidade máxima do spreading
+    threshold: 0.3            # Threshold mínimo de ativação
+    max_keywords: 20          # Máximo de keywords por query
+    cache_ttl_seconds: 300    # Cache TTL (5 min)
+
+  # Boost strategy
+  boost_strategy:
+    type: proportional        # proportional | fixed | adaptive
+    proportional_factor: 0.15 # Se type=proportional
+    fixed_boost: 0.10         # Se type=fixed
+    adaptive_min: 0.05        # Se type=adaptive
+    adaptive_max: 0.25        # Se type=adaptive
+
+  # Performance
+  performance:
+    priming_timeout_ms: 100   # Timeout para priming
+    async_priming: true       # Priming assíncrono (não bloqueia)
+    fallback_on_error: true   # Continuar sem boost se FDPN falhar
+
+  # Metrics
+  metrics:
+    track_boost_effectiveness: true
+    log_boosted_memories: true
+    export_prometheus: true
+
+# Exemplos de boost por tipo de ativação
+boost_examples:
+  high_activation:
+    activation: 0.9
+    boost: 0.135              # 15% * 0.9
+    final_score_increase: 13.5%
+
+  medium_activation:
+    activation: 0.5
+    boost: 0.075              # 15% * 0.5
+    final_score_increase: 7.5%
+
+  low_activation:
+    activation: 0.3
+    boost: 0.045              # 15% * 0.3
+    final_score_increase: 4.5%
+
+# Keyword activation weights
+keyword_weights:
+  short_keywords:             # <= 5 chars
+    base_activation: 0.5
+  medium_keywords:            # 6-10 chars
+    base_activation: 0.7
+  long_keywords:              # > 10 chars
+    base_activation: 0.9
+
+# Integration points
+integration:
+  retrieval_service: true     # Integrar com RetrievalService
+  personality_router: false   # Integrar com PersonalityRouter (futuro)
+  context_builder: false      # Integrar com ContextBuilder (futuro)

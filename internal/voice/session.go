@@ -2,6 +2,7 @@ package voice
 
 import (
 	"eva-mind/internal/gemini"
+	"eva-mind/internal/multimodal"
 	"fmt"
 	"sync"
 	"time"
@@ -26,6 +27,11 @@ type SafeSession struct {
 	CreatedAt    time.Time
 	State        ConversationState
 	lastActivity time.Time
+
+	// NOVO: Campo opcional para capacidades multimodais
+	// Se nil, a sessão funciona apenas com áudio (comportamento original)
+	// Se não-nil, permite processar imagens e vídeo
+	multimodal *multimodal.MultimodalSession
 }
 
 func (s *SafeSession) SendAudio(data []byte) error {
@@ -64,6 +70,38 @@ func (s *SafeSession) SendText(text string) error {
 		return fmt.Errorf("session closed")
 	}
 	return s.Client.SendText(text)
+}
+
+// EnableMultimodal habilita capacidades multimodais na sessão
+// Este método NÃO afeta o funcionamento do áudio se não for chamado
+func (s *SafeSession) EnableMultimodal(config *multimodal.MultimodalConfig) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return fmt.Errorf("session closed")
+	}
+
+	if s.multimodal != nil {
+		return fmt.Errorf("multimodal already enabled for this session")
+	}
+
+	// Cria sessão multimodal
+	s.multimodal = multimodal.NewMultimodalSession(fmt.Sprintf("session-%v", s.CreatedAt.Unix()), config)
+
+	// Inicializa processadores
+	s.multimodal.SetImageProcessor(multimodal.NewImageProcessor(config))
+	s.multimodal.SetVideoProcessor(multimodal.NewVideoProcessor(config, nil)) // nil extractor por enquanto
+
+	return nil
+}
+
+// GetMultimodal retorna a sessão multimodal (ou nil se não habilitado)
+// Thread-safe read
+func (s *SafeSession) GetMultimodal() *multimodal.MultimodalSession {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.multimodal
 }
 
 func (s *SafeSession) Close() {
