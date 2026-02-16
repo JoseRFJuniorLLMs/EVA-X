@@ -199,6 +199,14 @@ Fluxo: Tecnico coleta amostra -> IA analisa imagem -> Medico revisa -> Tratament
 					}
 					geminiClient.SendAudio(pcmData)
 
+				case "video":
+					// Frame JPEG da camera do browser (1 FPS)
+					jpegData, err := base64.StdEncoding.DecodeString(msg.Data)
+					if err != nil {
+						continue
+					}
+					geminiClient.SendImage(jpegData)
+
 				case "text":
 					// Mensagem de texto direta
 					if msg.Text != "" {

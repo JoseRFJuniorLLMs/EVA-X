@@ -136,6 +136,23 @@ func (c *Client) SendText(text string) error {
 	return c.conn.WriteJSON(msg)
 }
 
+// SendImage envia um frame JPEG para o Gemini (camera do browser)
+func (c *Client) SendImage(data []byte) error {
+	encodedData := base64.StdEncoding.EncodeToString(data)
+
+	msg := map[string]interface{}{
+		"realtime_input": map[string]interface{}{
+			"media_chunks": []map[string]interface{}{
+				{
+					"data":      encodedData,
+					"mime_type": "image/jpeg",
+				},
+			},
+		},
+	}
+	return c.conn.WriteJSON(msg)
+}
+
 // WriteJSON envia uma mensagem arbitrária via WebSocket
 func (c *Client) WriteJSON(v interface{}) error {
 	return c.conn.WriteJSON(v)
