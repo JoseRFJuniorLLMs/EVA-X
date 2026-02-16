@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"eva-mind/internal/config"
+	"eva-mind/internal/brainstem/config"
 )
 
 type AnalysisResult struct {

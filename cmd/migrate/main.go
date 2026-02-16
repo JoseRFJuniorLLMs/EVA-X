@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
-	"eva-mind/internal/config"
-	"eva-mind/internal/database"
+	"eva-mind/internal/brainstem/config"
+	"eva-mind/internal/brainstem/database"
 	"os"
 	"path/filepath"
 	"time"
@@ -18,9 +18,12 @@ func main() {
 
 	godotenv.Load() // Carrega .env do root
 
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatal().Err(err).Msg("Erro ao carregar config")
+	}
 
-	db, err := database.Connect(cfg.DatabaseURL)
+	db, err := database.NewDB(cfg.DatabaseURL)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Erro ao conectar no banco")
 	}
@@ -38,7 +41,7 @@ func main() {
 
 	log.Info().Msg("Executando migração 003...")
 
-	_, err = db.Pool.Exec(ctx, string(content))
+	_, err = db.Conn.ExecContext(ctx, string(content))
 	if err != nil {
 		log.Fatal().Err(err).Msg("Erro ao executar migração")
 	}

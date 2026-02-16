@@ -11,12 +11,12 @@ help:
 
 build:
 	@echo "🔨 Building EVA-Mind..."
-	go build -o bin/eva-mind ./cmd/server
+	go build -o bin/eva-mind .
 	@echo "✓ Build complete: bin/eva-mind"
 
 run:
 	@echo "🚀 Starting EVA-Mind..."
-	go run ./cmd/server/main.go
+	go run .
 
 test:
 	@echo "🧪 Running tests..."
