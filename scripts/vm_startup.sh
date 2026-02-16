@@ -227,6 +227,31 @@ systemctl daemon-reload
 systemctl enable eva-mind
 systemctl restart eva-mind
 
+# 8. Webhook deploy server (auto-deploy on git push)
+echo "[8/8] Setting up webhook deploy server..."
+cat > /etc/systemd/system/webhook-deploy.service << 'WHEOF'
+[Unit]
+Description=EVA-Mind Webhook Deploy Server
+After=network.target
+
+[Service]
+Type=simple
+User=web2a
+WorkingDirectory=/home/web2a/EVA-Mind
+ExecStart=/usr/bin/python3 /home/web2a/EVA-Mind/scripts/webhook-server.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+WHEOF
+
+systemctl daemon-reload
+systemctl enable webhook-deploy
+systemctl restart webhook-deploy
+
 sleep 3
 echo "=== DEPLOY COMPLETE ==="
 echo "Docker:"
@@ -234,6 +259,9 @@ docker ps --format "table {{.Names}}\t{{.Status}}" | grep -E "(eva|NAMES)"
 echo ""
 echo "EVA-Mind:"
 systemctl is-active eva-mind
+echo ""
+echo "Webhook:"
+systemctl is-active webhook-deploy
 echo ""
 echo "Health:"
 curl -s http://localhost:8091/api/health || echo "Waiting..."
