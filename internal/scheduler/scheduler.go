@@ -2,20 +2,21 @@ package scheduler
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"time"
 
 	"eva-mind/internal/brainstem/config"
 	"eva-mind/internal/brainstem/database"
+	"eva-mind/internal/brainstem/push"
 	"eva-mind/internal/gemini"
-	"eva-mind/internal/twilio"
 	"eva-mind/internal/voice"
 	"eva-mind/pkg/models"
 
 	"github.com/rs/zerolog"
 )
 
-func Start(ctx context.Context, db *database.DB, cfg *config.Config, logger zerolog.Logger, alertService *voice.AlertService) {
+func Start(ctx context.Context, db *database.DB, cfg *config.Config, logger zerolog.Logger, alertService *voice.AlertService, pushService *push.FirebaseService) {
 	ticker := time.NewTicker(time.Minute * time.Duration(cfg.SchedulerInterval))
 	defer ticker.Stop()
 
@@ -29,12 +30,12 @@ func Start(ctx context.Context, db *database.DB, cfg *config.Config, logger zero
 			logger.Info().Msg("Scheduler encerrado")
 			return
 		case <-ticker.C:
-			processAgendamentos(ctx, db, cfg, logger, alertService)
+			processAgendamentos(ctx, db, cfg, logger, alertService, pushService)
 		}
 	}
 }
 
-func processAgendamentos(ctx context.Context, db *database.DB, cfg *config.Config, logger zerolog.Logger, alertService *voice.AlertService) {
+func processAgendamentos(ctx context.Context, db *database.DB, cfg *config.Config, logger zerolog.Logger, alertService *voice.AlertService, pushService *push.FirebaseService) {
 	logger.Info().Msg("Verificando agendamentos pendentes...")
 
 	ags, err := db.GetPendingCalls(ctx)
@@ -47,25 +48,24 @@ func processAgendamentos(ctx context.Context, db *database.DB, cfg *config.Confi
 
 	for _, ag := range ags {
 		if ag.TentativasRealizadas < ag.MaxRetries {
-			go handleAgendamento(ctx, ag, db, cfg, logger, alertService)
+			go handleAgendamento(ctx, ag, db, cfg, logger, alertService, pushService)
 		} else {
 			l := logger.With().Int("ag_id", ag.ID).Str("idoso", ag.NomeIdoso).Logger()
 			l.Warn().Msg("Limite de tentativas atingido. Iniciando escalonamento.")
-			// Escalonamento para família
 			db.UpdateCallStatus(ctx, ag.ID, "falhou_definitivamente", 0)
 			alertService.TriggerEscalationCall(ctx, ag)
 		}
 	}
 }
 
-func handleAgendamento(ctx context.Context, ag models.Agendamento, db *database.DB, cfg *config.Config, logger zerolog.Logger, alertService *voice.AlertService) {
+func handleAgendamento(ctx context.Context, ag models.Agendamento, db *database.DB, cfg *config.Config, logger zerolog.Logger, alertService *voice.AlertService, pushService *push.FirebaseService) {
 	l := logger.With().
 		Int("ag_id", ag.ID).
 		Str("idoso", ag.NomeIdoso).
 		Str("telefone", ag.Telefone).
 		Logger()
 
-	// ✅ Tenta adquirir lock para evitar processamento duplicado
+	// Tenta adquirir lock para evitar processamento duplicado
 	acquired, err := db.AcquireLock(ctx, ag.ID)
 	if err != nil {
 		l.Error().Err(err).Msg("Erro ao tentar adquirir lock do banco")
@@ -83,54 +83,74 @@ func handleAgendamento(ctx context.Context, ag models.Agendamento, db *database.
 
 	l.Info().Msg("Processando agendamento")
 
-	// ✅ Incrementa tentativas
+	// Incrementa tentativas
 	if err := db.IncrementAttempts(ctx, ag.ID); err != nil {
 		l.Error().Err(err).Msg("Erro ao incrementar tentativas")
 	}
 
-	// 1. Atualiza status para em_andamento
+	// Atualiza status para em_andamento
 	err = db.UpdateCallStatus(ctx, ag.ID, "em_andamento", 0)
 	if err != nil {
 		l.Error().Err(err).Msg("Falha ao atualizar status para em_andamento")
 		return
 	}
 
-	// ✅ REMOVIDO: Busca de contexto e template - agora usa prompt minimalista
-	// O modelo ficará livre para conversar naturalmente sem restrições
-
-	// ✅ BUSCA CONFIGURAÇÕES DINÂMICAS DO SISTEMA
+	// Busca configurações dinâmicas do sistema (modelo Gemini)
 	modelID, err := db.GetSystemSetting(ctx, "gemini.model_id")
 	if err == nil && modelID != "" {
 		l.Info().Str("model", modelID).Msg("Usando modelo configurado no DB")
 		cfg.ModelID = modelID
 	}
 
+	// Cria sessão Gemini Live
 	l.Debug().Msg("Criando sessão Gemini Live")
-
-	// 3. Cria sessão Gemini Live com prompt minimalista (já definido internamente)
-	geminiClient, err := gemini.NewLiveClient(ctx, cfg) // ✅ SEM systemPrompt!
+	geminiClient, err := gemini.NewLiveClient(ctx, cfg)
 	if err != nil {
 		l.Error().Err(err).Msg("Falha ao criar Gemini Live")
 		db.UpdateCallStatus(ctx, ag.ID, "aguardando_retry", ag.RetryIntervalMinutes)
 		return
 	}
 
-	// 4. Salva o client na sessão global
+	// Salva o client na sessão global
 	agIDStr := strconv.Itoa(ag.ID)
 	voice.StoreSession(agIDStr, geminiClient)
 	l.Info().Msg("Sessão Gemini armazenada")
 
-	// 5. Faz a ligação outbound Twilio
-	l.Info().Msg("Iniciando chamada Twilio")
-	err = twilio.MakeOutboundCall(cfg, ag.Telefone, int64(ag.ID))
+	// Verifica se tem device_token (app mobile instalado)
+	if ag.DeviceToken == "" {
+		l.Warn().Msg("Idoso sem device_token - app não instalado ou token não sincronizado")
+		voice.RemoveSession(agIDStr)
+		db.UpdateCallStatus(ctx, ag.ID, "aguardando_retry", ag.RetryIntervalMinutes)
+		return
+	}
+
+	if pushService == nil {
+		l.Error().Msg("Firebase push service não disponível")
+		voice.RemoveSession(agIDStr)
+		db.UpdateCallStatus(ctx, ag.ID, "aguardando_retry", ag.RetryIntervalMinutes)
+		return
+	}
+
+	// Envia push notification FCM para o app mobile
+	sessionID := fmt.Sprintf("call-%d-%d", ag.ID, time.Now().Unix())
+	tokenPreview := ag.DeviceToken
+	if len(tokenPreview) > 20 {
+		tokenPreview = tokenPreview[:20] + "..."
+	}
+	l.Info().Str("session_id", sessionID).Str("device_token", tokenPreview).Msg("Enviando FCM push para app mobile")
+
+	err = pushService.SendCallNotification(ag.DeviceToken, sessionID, ag.NomeIdoso)
 	if err != nil {
-		l.Error().Err(err).Msg("Falha na ligação Twilio")
+		l.Error().Err(err).Msg("Falha ao enviar FCM push")
 		voice.RemoveSession(agIDStr)
 
-		// Incrementa tentativas
-		db.IncrementAttempts(ctx, ag.ID)
+		// Se token inválido, limpar
+		if push.IsInvalidTokenError(err) {
+			l.Warn().Msg("Device token inválido - limpando")
+			db.Conn.ExecContext(ctx, "UPDATE idosos SET device_token = NULL, device_token_valido = false WHERE id = $1", ag.IdosoID)
+		}
 
-		// Verifica se atingiu o limite para escalonar
+		// Verifica se atingiu limite para escalonar
 		if ag.TentativasRealizadas+1 >= ag.MaxRetries {
 			l.Warn().Msg("Limite de tentativas atingido. Escalonando para família.")
 			db.UpdateCallStatus(ctx, ag.ID, "falhou_definitivamente", 0)
@@ -141,5 +161,5 @@ func handleAgendamento(ctx context.Context, ag models.Agendamento, db *database.
 		return
 	}
 
-	l.Info().Msg("Ligação iniciada com sucesso")
+	l.Info().Str("session_id", sessionID).Msg("Push FCM enviado - aguardando conexão WebSocket do app")
 }
