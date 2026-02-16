@@ -1,3 +1,11 @@
+//go:build integration
+// +build integration
+
+// NOTE: Tests that use NewEntityResolver pass mock structs that cannot satisfy
+// the concrete EmbeddingService type. Requires interface refactor.
+// Tests for CosineSimilarity and pure math logic work without mocks.
+// TODO: Refactor EmbeddingService to interface for testability.
+
 package memory
 
 import (

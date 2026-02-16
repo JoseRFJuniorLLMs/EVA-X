@@ -123,7 +123,7 @@ func (c *EdgeClassifier) GetConsolidatedEdges(ctx context.Context, patientID int
 
 	edges := make([]AssociationEdge, 0)
 
-	for _, record := range records {
+	for range records {
 		// TODO: Extrair corretamente do record baseado no driver Neo4j
 		edge := AssociationEdge{
 			NodeA:         "node_placeholder",
@@ -183,7 +183,7 @@ func (c *EdgeClassifier) GetEmergingEdges(ctx context.Context, patientID int64) 
 
 	edges := make([]AssociationEdge, 0)
 
-	for _, record := range records {
+	for range records {
 		// TODO: Extrair corretamente do record
 		edge := AssociationEdge{
 			Zone: ZoneEmerging,
@@ -230,7 +230,7 @@ func (c *EdgeClassifier) GetWeakEdges(ctx context.Context, patientID int64) ([]A
 
 	edges := make([]AssociationEdge, 0)
 
-	for _, record := range records {
+	for range records {
 		// TODO: Extrair corretamente do record
 		edge := AssociationEdge{
 			Zone: ZoneWeak,
@@ -262,7 +262,7 @@ func (c *EdgeClassifier) PruneWeakEdges(ctx context.Context, patientID int64) (*
 		RETURN count(r) AS pruned
 	`
 
-	records, err := c.neo4j.ExecuteWrite(ctx, query, map[string]interface{}{
+	_, err := c.neo4j.ExecuteWrite(ctx, query, map[string]interface{}{
 		"patientId":  patientID,
 		"threshold":  c.thresholdLow,
 		"pruningAge": c.pruningAge,

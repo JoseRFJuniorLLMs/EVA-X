@@ -9,23 +9,62 @@ import (
 	"os"
 	"time"
 
+	"eva-mind/internal/motor/email"
+	"eva-mind/internal/motor/sms"
+
 	"github.com/rs/zerolog/log"
 )
 
-// Notifier handles multi-channel notifications
+// Notifier handles multi-channel notifications for crisis events
 type Notifier struct {
 	webhookURL string
-	emailAPI   string
-	smsAPI     string
+	emailSvc   *email.EmailService
+	smsSvc     *sms.TwilioService
+	// Fallback: direct API URLs if services not injected
+	emailAPI string
+	smsAPI   string
+	// Emergency contact numbers/emails
+	emergencyEmails []string
+	emergencyPhones []string
 }
 
-// NewNotifier creates a new notifier
-func NewNotifier() *Notifier {
-	return &Notifier{
-		webhookURL: os.Getenv("CRISIS_WEBHOOK_URL"),
-		emailAPI:   os.Getenv("EMAIL_API_URL"),
-		smsAPI:     os.Getenv("SMS_API_URL"),
+// NewNotifier creates a new notifier with real email/SMS services
+func NewNotifier(emailSvc *email.EmailService, smsSvc *sms.TwilioService) *Notifier {
+	emergencyEmails := []string{}
+	if e := os.Getenv("EMERGENCY_TEAM_EMAILS"); e != "" {
+		for _, addr := range splitAndTrim(e) {
+			emergencyEmails = append(emergencyEmails, addr)
+		}
 	}
+
+	emergencyPhones := []string{}
+	if p := os.Getenv("EMERGENCY_TEAM_PHONES"); p != "" {
+		for _, phone := range splitAndTrim(p) {
+			emergencyPhones = append(emergencyPhones, phone)
+		}
+	}
+
+	return &Notifier{
+		webhookURL:      os.Getenv("CRISIS_WEBHOOK_URL"),
+		emailSvc:        emailSvc,
+		smsSvc:          smsSvc,
+		emailAPI:        os.Getenv("EMAIL_API_URL"),
+		smsAPI:          os.Getenv("SMS_API_URL"),
+		emergencyEmails: emergencyEmails,
+		emergencyPhones: emergencyPhones,
+	}
+}
+
+// splitAndTrim splits a comma-separated string and trims whitespace
+func splitAndTrim(s string) []string {
+	var result []string
+	for _, part := range bytes.Split([]byte(s), []byte(",")) {
+		trimmed := bytes.TrimSpace(part)
+		if len(trimmed) > 0 {
+			result = append(result, string(trimmed))
+		}
+	}
+	return result
 }
 
 // NotificationPayload represents notification data
@@ -112,65 +151,195 @@ func (n *Notifier) sendWebhook(ctx context.Context, payload NotificationPayload)
 	return nil
 }
 
-// sendEmail sends email notification
+// sendEmail sends email notification using the real email service
 func (n *Notifier) sendEmail(ctx context.Context, payload NotificationPayload) error {
-	// TODO: Integrate with SendGrid, AWS SES, or similar
+	subject := fmt.Sprintf("ALERTA DE CRISE [%s] - Paciente %d", payload.Severity, payload.PatientID)
+	reason := fmt.Sprintf("Crise %s detectada: %s", payload.CrisisType, payload.TriggerStatement)
 
-	emailBody := fmt.Sprintf(`
-🚨 CRISIS ALERT
-
-Event ID: %d
-Patient ID: %d
-Crisis Type: %s
-Severity: %s
-
-Trigger Statement: "%s"
-
-Time: %s
-
-%s
-	`,
-		payload.EventID,
-		payload.PatientID,
-		payload.CrisisType,
-		payload.Severity,
-		payload.TriggerStatement,
-		payload.Timestamp.Format(time.RFC3339),
-		func() string {
-			if payload.RequiresAction {
-				return "⚠️ REQUIRES IMMEDIATE ACKNOWLEDGMENT"
+	if n.emailSvc != nil {
+		// Use real email service
+		for _, addr := range n.emergencyEmails {
+			err := n.emailSvc.SendEmergencyAlert(addr, "Equipe EVA-Mind", fmt.Sprintf("Paciente %d", payload.PatientID), reason)
+			if err != nil {
+				log.Error().Err(err).Str("to", addr).Msg("Falha ao enviar email de crise")
+			} else {
+				log.Info().Str("to", addr).Int64("event_id", payload.EventID).Msg("Email de crise enviado")
 			}
-			return ""
-		}(),
-	)
+		}
+		return nil
+	}
 
-	log.Info().
-		Int64("event_id", payload.EventID).
-		Msg("Email notification sent (simulated)")
-
-	// TODO: Actually send email
-	_ = emailBody
+	// Fallback: webhook-based email API
+	if n.emailAPI != "" {
+		emailPayload := map[string]interface{}{
+			"to":      n.emergencyEmails,
+			"subject": subject,
+			"payload": payload,
+		}
+		jsonData, _ := json.Marshal(emailPayload)
+		req, err := http.NewRequestWithContext(ctx, "POST", n.emailAPI, bytes.NewBuffer(jsonData))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		client := &http.Client{Timeout: 10 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		log.Info().Int64("event_id", payload.EventID).Msg("Email de crise enviado via API")
+	}
 
 	return nil
 }
 
-// sendSMS sends SMS notification
+// sendSMS sends SMS notification using the real Twilio service
 func (n *Notifier) sendSMS(ctx context.Context, payload NotificationPayload) error {
-	// TODO: Integrate with Twilio or similar
+	reason := fmt.Sprintf("CRISE %s (%s) - Paciente %d - Acao imediata necessaria",
+		payload.CrisisType, payload.Severity, payload.PatientID)
 
-	smsBody := fmt.Sprintf(
-		"🚨 CRISIS ALERT: %s (%s) - Patient %d - Requires immediate attention",
-		payload.CrisisType,
-		payload.Severity,
-		payload.PatientID,
-	)
+	if n.smsSvc != nil {
+		// Use real SMS service
+		results := n.smsSvc.SendBulkEmergencyAlert(n.emergencyPhones, fmt.Sprintf("Paciente %d", payload.PatientID), reason)
+		for _, r := range results {
+			if r.Success {
+				log.Info().Str("message_id", r.MessageID).Int64("event_id", payload.EventID).Msg("SMS de crise enviado")
+			} else {
+				log.Error().Str("error", r.Error).Int64("event_id", payload.EventID).Msg("Falha ao enviar SMS de crise")
+			}
+		}
+		return nil
+	}
 
-	log.Info().
-		Int64("event_id", payload.EventID).
-		Msg("SMS notification sent (simulated)")
+	// Fallback: webhook-based SMS API
+	if n.smsAPI != "" {
+		smsPayload := map[string]interface{}{
+			"phones":  n.emergencyPhones,
+			"message": reason,
+			"payload": payload,
+		}
+		jsonData, _ := json.Marshal(smsPayload)
+		req, err := http.NewRequestWithContext(ctx, "POST", n.smsAPI, bytes.NewBuffer(jsonData))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		client := &http.Client{Timeout: 10 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		log.Info().Int64("event_id", payload.EventID).Msg("SMS de crise enviado via API")
+	}
 
-	// TODO: Actually send SMS
-	_ = smsBody
+	return nil
+}
 
+// NotifyEmergencyServices sends notifications to emergency services (SAMU/Police)
+func (n *Notifier) NotifyEmergencyServices(ctx context.Context, event *CrisisEvent) error {
+	reason := fmt.Sprintf("Crise %s detectada (severidade: %s) - Paciente %d",
+		event.CrisisType, event.Severity, event.PatientID)
+
+	var lastErr error
+
+	// 1. SMS para telefones de emergencia configurados
+	if n.smsSvc != nil && len(n.emergencyPhones) > 0 {
+		results := n.smsSvc.SendBulkEmergencyAlert(n.emergencyPhones, fmt.Sprintf("Paciente %d", event.PatientID), reason)
+		for _, r := range results {
+			if !r.Success {
+				lastErr = fmt.Errorf("SMS emergencia falhou: %s", r.Error)
+				log.Error().Str("error", r.Error).Msg("Falha SMS servicos emergencia")
+			}
+		}
+	}
+
+	// 2. Email para equipe de emergencia
+	if n.emailSvc != nil && len(n.emergencyEmails) > 0 {
+		for _, addr := range n.emergencyEmails {
+			err := n.emailSvc.SendEmergencyAlert(addr, "Servicos de Emergencia", fmt.Sprintf("Paciente %d", event.PatientID), reason)
+			if err != nil {
+				lastErr = err
+				log.Error().Err(err).Msg("Falha email servicos emergencia")
+			}
+		}
+	}
+
+	// 3. Webhook para dashboard de emergencia
+	if n.webhookURL != "" {
+		payload := NotificationPayload{
+			EventID:          event.ID,
+			PatientID:        event.PatientID,
+			CrisisType:       string(event.CrisisType),
+			Severity:         event.Severity,
+			TriggerStatement: event.TriggerStatement,
+			Timestamp:        event.CreatedAt,
+			RequiresAction:   true,
+		}
+		if err := n.sendWebhook(ctx, payload); err != nil {
+			lastErr = err
+			log.Error().Err(err).Msg("Falha webhook servicos emergencia")
+		}
+	}
+
+	if lastErr != nil {
+		return fmt.Errorf("algumas notificacoes de emergencia falharam: %w", lastErr)
+	}
+
+	log.Warn().Int64("patient_id", event.PatientID).Str("crisis_type", string(event.CrisisType)).
+		Msg("Notificacoes de emergencia enviadas")
+	return nil
+}
+
+// NotifyAuthorities sends notifications to authorities (child protective services, etc.)
+func (n *Notifier) NotifyAuthorities(ctx context.Context, event *CrisisEvent) error {
+	reason := fmt.Sprintf("ALERTA AUTORIDADES: %s detectado (severidade: %s) - Paciente %d - Declaracao: %q",
+		event.CrisisType, event.Severity, event.PatientID, event.TriggerStatement)
+
+	var lastErr error
+
+	// 1. SMS para telefones de emergencia
+	if n.smsSvc != nil && len(n.emergencyPhones) > 0 {
+		results := n.smsSvc.SendBulkEmergencyAlert(n.emergencyPhones, fmt.Sprintf("Paciente %d", event.PatientID), reason)
+		for _, r := range results {
+			if !r.Success {
+				lastErr = fmt.Errorf("SMS autoridades falhou: %s", r.Error)
+			}
+		}
+	}
+
+	// 2. Email detalhado para equipe
+	if n.emailSvc != nil && len(n.emergencyEmails) > 0 {
+		for _, addr := range n.emergencyEmails {
+			err := n.emailSvc.SendEmergencyAlert(addr, "Autoridades", fmt.Sprintf("Paciente %d", event.PatientID), reason)
+			if err != nil {
+				lastErr = err
+			}
+		}
+	}
+
+	// 3. Webhook
+	if n.webhookURL != "" {
+		payload := NotificationPayload{
+			EventID:          event.ID,
+			PatientID:        event.PatientID,
+			CrisisType:       string(event.CrisisType),
+			Severity:         event.Severity,
+			TriggerStatement: event.TriggerStatement,
+			Timestamp:        event.CreatedAt,
+			RequiresAction:   true,
+		}
+		if err := n.sendWebhook(ctx, payload); err != nil {
+			lastErr = err
+		}
+	}
+
+	if lastErr != nil {
+		return fmt.Errorf("algumas notificacoes para autoridades falharam: %w", lastErr)
+	}
+
+	log.Warn().Int64("patient_id", event.PatientID).Str("crisis_type", string(event.CrisisType)).
+		Msg("Notificacoes para autoridades enviadas")
 	return nil
 }

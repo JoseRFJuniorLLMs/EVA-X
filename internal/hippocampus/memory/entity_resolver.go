@@ -9,6 +9,11 @@ import (
 	"time"
 )
 
+// Neo4jClient interface para operações no grafo (entity resolution)
+type Neo4jClient interface {
+	ExecuteQuery(ctx context.Context, query string, params map[string]interface{}) ([]map[string]interface{}, error)
+}
+
 // EntityResolver resolve variações de nomes de entidades no grafo
 // Exemplo: "Maria", "Dona Maria", "minha mãe Maria" → mesmo nó
 // Usa embedding similarity (NÃO SRC - conforme mente.md)

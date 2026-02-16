@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"log"
 	"strings"
+
+	"github.com/qdrant/go-client/qdrant"
 )
 
 // RetrieveHybridWithFDPN busca memórias usando Qdrant + FDPN boost

@@ -16,11 +16,18 @@ import (
 
 // RetrievalService busca memórias por similaridade semântica
 // RetrievalService busca memórias por similaridade semântica
+// FDPNActivator interface para obter nós ativados pelo FDPN
+type FDPNActivator interface {
+	GetActivatedNodes(ctx context.Context, userID string, query string) (map[string]float64, error)
+}
+
 type RetrievalService struct {
 	db         *sql.DB
 	embedder   *EmbeddingService
 	qdrant     *vector.QdrantClient
 	graphStore *GraphStore // Para busca recursiva via Neo4j
+	fdpn       FDPNActivator
+	hebbianRT  *HebbianRealTime
 }
 
 // NewRetrievalService cria um novo serviço de busca

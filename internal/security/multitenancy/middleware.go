@@ -73,8 +73,27 @@ func GetTenantFromContext(ctx context.Context) (string, error) {
 	return tenantID, nil
 }
 
+// allowedTables defines the set of valid table names for tenant isolation queries.
+// This prevents SQL injection via table name concatenation.
+var allowedTables = map[string]bool{
+	"users":          true,
+	"idosos":         true,
+	"cuidadores":     true,
+	"sessions":       true,
+	"agendamentos":   true,
+	"alertas":        true,
+	"crisis_records": true,
+	"vital_signs":    true,
+	"medications":    true,
+}
+
 // ValidateIsolation ensures query results belong to the tenant
 func ValidateIsolation(ctx context.Context, db *sql.DB, table string, id int64) error {
+	if !allowedTables[table] {
+		log.Printf("⚠️ [SECURITY] Rejected invalid table name in isolation check: %s", table)
+		return errors.New("invalid resource type")
+	}
+
 	tenantID, err := GetTenantFromContext(ctx)
 	if err != nil {
 		return err

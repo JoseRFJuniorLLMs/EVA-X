@@ -48,9 +48,8 @@ COPY --from=builder /eva-mind .
 # Copy migrations (needed for auto-migration on startup)
 COPY --from=builder /app/migrations ./migrations
 
-# Copy Python API server (FastAPI bridge)
-COPY --from=builder /app/api_server.py ./api_server.py
-COPY --from=builder /app/requirements.txt ./requirements.txt
+# NOTE: Python scripts (api_server.py) moved to docs/legacy-python/
+# The Go binary handles all API routes natively — no Python runtime needed.
 
 # Cloud Run uses PORT env var
 ENV PORT=8091

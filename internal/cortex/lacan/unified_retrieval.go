@@ -84,9 +84,13 @@ func IsCreatorCPF(cpf string) bool {
 
 	// Log detalhado para debug
 	if isCreator {
-		log.Printf("🔴🔴🔴 [DIRETIVA 01] CRIADOR DETECTADO! CPF: %s = %s ✅", cleanCPF, CREATOR_CPF)
+		log.Printf("🔴🔴🔴 [DIRETIVA 01] CRIADOR DETECTADO ✅")
 	} else {
-		log.Printf("👤 [DIRETIVA 01] Usuário comum. CPF recebido: '%s' (limpo: '%s') != '%s'", cpf, cleanCPF, CREATOR_CPF)
+		maskedCPF := "***"
+		if len(cleanCPF) >= 3 {
+			maskedCPF = "***" + cleanCPF[len(cleanCPF)-3:]
+		}
+		log.Printf("👤 [DIRETIVA 01] Usuário comum. CPF: %s", maskedCPF)
 	}
 
 	return isCreator
@@ -100,7 +104,7 @@ func IsCreatorByName(name string) bool {
 		(strings.Contains(nameLower, "junior") || strings.Contains(nameLower, "júnior"))
 
 	if isCreator {
-		log.Printf("🔴🔴🔴 [DIRETIVA 01] CRIADOR DETECTADO POR NOME! Nome: %s ✅", name)
+		log.Printf("🔴🔴🔴 [DIRETIVA 01] CRIADOR DETECTADO POR NOME ✅")
 	}
 
 	return isCreator

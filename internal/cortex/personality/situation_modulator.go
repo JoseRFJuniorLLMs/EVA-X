@@ -1,3 +1,7 @@
+// DEPRECATED: Este módulo é duplicado de internal/cortex/situation/modulator.go
+// que é a implementação ativa usada pelo FDPN pipeline.
+// SelectPostureWithSituation no personality_router.go nunca é chamado externamente.
+// TODO: Consolidar com cortex/situation e remover este arquivo.
 package personality
 
 import (

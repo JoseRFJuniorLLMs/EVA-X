@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/gorilla/mux"
+	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
 )
 
 // RegisterRoutes registra rotas HTTP para Core Memory
@@ -78,7 +79,7 @@ func getIdentityHandler(engine *CoreMemoryEngine) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
-		identityContext, err := engine.GetIdentityContext(ctx, 10)
+		identityContext, err := engine.GetIdentityContext(ctx)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -125,19 +126,21 @@ func getMemoriesHandler(engine *CoreMemoryEngine) http.HandlerFunc {
 			LIMIT $limit
 		`
 
-		result, err := engine.driver.ExecuteQuery(
-			ctx,
-			query,
-			map[string]interface{}{"limit": limit},
-			engine.dbName,
-		)
+		session := engine.driver.NewSession(ctx, neo4j.SessionConfig{
+			AccessMode:   neo4j.AccessModeRead,
+			DatabaseName: engine.dbName,
+		})
+		defer session.Close(ctx)
+
+		result, err := session.Run(ctx, query, map[string]interface{}{"limit": limit})
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 
 		var memories []map[string]interface{}
-		for _, record := range result.Records {
+		for result.Next(ctx) {
+			record := result.Record()
 			memory := make(map[string]interface{})
 			for _, key := range []string{"id", "content", "type", "abstraction", "importance", "reinforcement", "created_at"} {
 				if val, ok := record.Get(key); ok {
@@ -179,7 +182,7 @@ func searchMemoriesHandler(engine *CoreMemoryEngine) http.HandlerFunc {
 			RETURN mem.id AS id, mem.content AS content, mem.embedding AS embedding, mem.reinforcement_count AS reinforcement
 		`
 
-		result, err := engine.driver.ExecuteQuery(ctx, query, nil, engine.dbName)
+		records, err := engine.ExecuteReadQuery(ctx, query, nil)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -187,7 +190,7 @@ func searchMemoriesHandler(engine *CoreMemoryEngine) http.HandlerFunc {
 
 		// Converte para ExistingMemory
 		var memories []ExistingMemory
-		for _, record := range result.Records {
+		for _, record := range records {
 			id, _ := record.Get("id")
 			content, _ := record.Get("content")
 			embeddingRaw, _ := record.Get("embedding")
@@ -237,7 +240,7 @@ func getMemoryStatsHandler(engine *CoreMemoryEngine) http.HandlerFunc {
 				mem.memory_type AS type
 		`
 
-		result, err := engine.driver.ExecuteQuery(ctx, query, nil, engine.dbName)
+		records, err := engine.ExecuteReadQuery(ctx, query, nil)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -246,7 +249,7 @@ func getMemoryStatsHandler(engine *CoreMemoryEngine) http.HandlerFunc {
 		stats := make(map[string]int)
 		total := 0
 
-		for _, record := range result.Records {
+		for _, record := range records {
 			memType, _ := record.Get("type")
 			count, _ := record.Get("total")
 			stats[memType.(string)] = int(count.(int64))
@@ -275,14 +278,14 @@ func getMetaInsightsHandler(engine *CoreMemoryEngine) http.HandlerFunc {
 			ORDER BY insight.confidence DESC, insight.evidence_count DESC
 		`
 
-		result, err := engine.driver.ExecuteQuery(ctx, query, nil, engine.dbName)
+		records, err := engine.ExecuteReadQuery(ctx, query, nil)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 
 		var insights []map[string]interface{}
-		for _, record := range result.Records {
+		for _, record := range records {
 			insight := make(map[string]interface{})
 			for _, key := range []string{"id", "content", "evidence", "confidence", "discovered_at"} {
 				if val, ok := record.Get(key); ok {
@@ -312,23 +315,18 @@ func getMetaInsightByIDHandler(engine *CoreMemoryEngine) http.HandlerFunc {
 			RETURN insight, collect(mem.content) AS supporting_memories
 		`
 
-		result, err := engine.driver.ExecuteQuery(
-			ctx,
-			query,
-			map[string]interface{}{"id": insightID},
-			engine.dbName,
-		)
+		records, err := engine.ExecuteReadQuery(ctx, query, map[string]interface{}{"id": insightID})
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 
-		if len(result.Records) == 0 {
+		if len(records) == 0 {
 			respondError(w, http.StatusNotFound, "Meta-insight não encontrado")
 			return
 		}
 
-		record := result.Records[0]
+		record := records[0]
 		insight, _ := record.Get("insight")
 		memories, _ := record.Get("supporting_memories")
 
@@ -364,7 +362,7 @@ func teachEVAHandler(engine *CoreMemoryEngine) http.HandlerFunc {
 
 		ctx := r.Context()
 
-		if err := engine.TeachEVA(ctx, req.Lesson, req.Category, req.Importance); err != nil {
+		if err := engine.TeachEVA(ctx, req.Lesson, req.Importance); err != nil {
 			respondError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -395,16 +393,14 @@ func processSessionHandler(engine *CoreMemoryEngine) http.HandlerFunc {
 
 		ctx := r.Context()
 
-		reflectionInput := ReflectionInput{
-			SessionID:        req.SessionID,
-			AnonymizedText:   req.Transcript, // Já deve vir anonimizado
-			SessionDuration:  req.Duration,
-			CrisisDetected:   req.CrisisDetected,
-			UserSatisfaction: req.UserSatisfaction,
-			TopicsDiscussed:  req.Topics,
+		sessionData := SessionData{
+			SessionID:      req.SessionID,
+			Transcript:     req.Transcript,
+			DurationMinutes: float64(req.Duration),
+			CrisisHappened: req.CrisisDetected,
 		}
 
-		if err := engine.ProcessSessionEnd(ctx, reflectionInput); err != nil {
+		if err := engine.ProcessSessionEnd(ctx, sessionData); err != nil {
 			respondError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -427,14 +423,14 @@ func getDiversityScoreHandler(engine *CoreMemoryEngine) http.HandlerFunc {
 			RETURN mem.id AS id, mem.content AS content, mem.embedding AS embedding, mem.reinforcement_count AS reinforcement
 		`
 
-		result, err := engine.driver.ExecuteQuery(ctx, query, nil, engine.dbName)
+		records, err := engine.ExecuteReadQuery(ctx, query, nil)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 
 		var memories []ExistingMemory
-		for _, record := range result.Records {
+		for _, record := range records {
 			id, _ := record.Get("id")
 			content, _ := record.Get("content")
 			embeddingRaw, _ := record.Get("embedding")

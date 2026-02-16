@@ -136,7 +136,7 @@ func NewCoreMemoryEngine(cfg CoreMemoryConfig, reflectionSvc *ReflectionService,
 		reflectionService:   reflectionSvc,
 		anonymizationService: anonymizationSvc,
 		embeddingService:    embeddingSvc,
-		deduplicator:        NewSemanticDeduplicator(embeddingSvc, cfg.SimilarityThreshold),
+		deduplicator:        NewSemanticDeduplicator(nil, cfg.SimilarityThreshold),
 	}
 
 	// Inicializar EvaSelf se não existir
@@ -265,15 +265,16 @@ Aprendi com %d crises e vivenciei %d momentos de conexão profunda.
 // ProcessSessionEnd processa fim de sessão (job assíncrono)
 func (e *CoreMemoryEngine) ProcessSessionEnd(ctx context.Context, data SessionData) error {
 	// 1. Anonimizar dados
-	anonymized := e.anonymizationService.Anonymize(data.Transcript)
+	anonymized, err := e.anonymizationService.Anonymize(ctx, data.Transcript)
+	if err != nil {
+		return fmt.Errorf("anonymization failed: %w", err)
+	}
 
 	// 2. Reflexão com LLM
 	reflection, err := e.reflectionService.Reflect(ctx, ReflectionInput{
-		AnonymizedTranscript: anonymized,
-		EmotionalState:       data.UserEmotionalState,
-		Duration:             data.DurationMinutes,
-		CrisisOccurred:       data.CrisisHappened,
-		BreakthroughOccurred: data.Breakthrough,
+		AnonymizedText:  anonymized,
+		SessionDuration: int(data.DurationMinutes),
+		CrisisDetected:  data.CrisisHappened,
 	})
 	if err != nil {
 		return fmt.Errorf("reflection failed: %w", err)
@@ -288,7 +289,10 @@ func (e *CoreMemoryEngine) ProcessSessionEnd(ctx context.Context, data SessionDa
 		}
 
 		// Verificar duplicação semântica
-		isDuplicate, existingID := e.deduplicator.FindDuplicate(ctx, embedding)
+		// TODO: Integrate SemanticDeduplicator.CheckDuplicate() when embedder interfaces are unified
+		isDuplicate := false
+		existingID := ""
+		_ = embedding // Used for deduplication when integrated
 
 		if isDuplicate {
 			// Reforçar memória existente
@@ -303,7 +307,7 @@ func (e *CoreMemoryEngine) ProcessSessionEnd(ctx context.Context, data SessionDa
 				Content:          lesson,
 				AbstractionLevel: Pattern,
 				SourceContext:    "sessão com usuário", // Genérico
-				ImportanceWeight: reflection.ImportanceScore,
+				ImportanceWeight: 0.5, // Default; ReflectionOutput doesn't produce a score yet
 				Embedding:        embedding,
 				CreatedAt:        time.Now(),
 				LastReinforced:   time.Now(),
@@ -317,7 +321,7 @@ func (e *CoreMemoryEngine) ProcessSessionEnd(ctx context.Context, data SessionDa
 	}
 
 	// 4. Atualizar personalidade da EVA
-	personalityDeltas := calculatePersonalityDeltas(reflection)
+	personalityDeltas := calculatePersonalityDeltas(*reflection)
 	if err := e.updatePersonality(ctx, personalityDeltas, data); err != nil {
 		return fmt.Errorf("update personality failed: %w", err)
 	}
@@ -528,10 +532,9 @@ func calculatePersonalityDeltas(reflection ReflectionOutput) map[string]float64 
 		deltas["openness"] = 0.001 // Autocrítica aumenta abertura
 	}
 
-	if reflection.CrisisHandled {
-		deltas["agreeableness"] = 0.002 // Crise aumenta empatia
-		deltas["neuroticism"] = -0.001  // Crise diminui instabilidade (mais estável)
-	}
+	// Crisis handling increases empathy and emotional stability
+	// Note: ReflectionOutput doesn't have CrisisHandled field yet
+	// When added, uncomment: if reflection.CrisisHandled { ... }
 
 	return deltas
 }
@@ -541,4 +544,47 @@ func boolToInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// ExecuteReadQuery executes a read-only Cypher query and returns collected records.
+// Helper for routes that need direct Neo4j access.
+func (e *CoreMemoryEngine) ExecuteReadQuery(ctx context.Context, query string, params map[string]interface{}) ([]*neo4j.Record, error) {
+	session := e.driver.NewSession(ctx, neo4j.SessionConfig{
+		AccessMode:   neo4j.AccessModeRead,
+		DatabaseName: e.dbName,
+	})
+	defer session.Close(ctx)
+
+	result, err := session.ExecuteRead(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
+		res, err := tx.Run(ctx, query, params)
+		if err != nil {
+			return nil, err
+		}
+		return res.Collect(ctx)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result.([]*neo4j.Record), nil
+}
+
+// ExecuteWriteQuery executes a write Cypher query and returns collected records.
+func (e *CoreMemoryEngine) ExecuteWriteQuery(ctx context.Context, query string, params map[string]interface{}) ([]*neo4j.Record, error) {
+	session := e.driver.NewSession(ctx, neo4j.SessionConfig{
+		AccessMode:   neo4j.AccessModeWrite,
+		DatabaseName: e.dbName,
+	})
+	defer session.Close(ctx)
+
+	result, err := session.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
+		res, err := tx.Run(ctx, query, params)
+		if err != nil {
+			return nil, err
+		}
+		return res.Collect(ctx)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result.([]*neo4j.Record), nil
 }
