@@ -11,7 +11,7 @@ export USER=web2a
 REPO_URL="https://github.com/JoseRFJuniorLLMs/EVA-Mind.git"
 APP_DIR="/home/web2a/EVA-Mind"
 GO_VERSION="1.24.0"
-DB_URL="postgres://postgres:Debian23@35.232.177.102:5432/eva-db?sslmode=disable"
+DB_URL="postgres://postgres:Debian23%40@34.35.142.107:5432/eva-mind?sslmode=disable"
 
 # 1. Docker
 if ! command -v docker &> /dev/null; then
@@ -79,12 +79,12 @@ APP_NAME=EVA Mind
 PORT=8091
 ENVIRONMENT=production
 METRICS_PORT=9090
-DATABASE_URL=postgres://postgres:Debian23@35.232.177.102:5432/eva-db?sslmode=disable
-DB_HOST=35.232.177.102
+DATABASE_URL=postgres://postgres:Debian23%40@34.35.142.107:5432/eva-mind?sslmode=disable
+DB_HOST=34.35.142.107
 DB_PORT=5432
 DB_USER=postgres
-DB_PASSWORD=Debian23
-DB_NAME=eva-db
+DB_PASSWORD=Debian23@
+DB_NAME=eva-mind
 DB_SSLMODE=disable
 GOOGLE_API_KEY=AIzaSyBq3AqjhJ4NZv4W9ksN2IAZg-buxKBQi_I
 MODEL_ID=gemini-2.5-flash-native-audio-preview-12-2025
@@ -135,8 +135,8 @@ chown web2a:web2a "$APP_DIR/.env"
 echo "[5b] Running migrations..."
 apt-get install -y -qq postgresql-client 2>/dev/null || true
 MIGRATION_DIR="$APP_DIR/migrations"
-export PGPASSWORD='Debian23'
-PG_CONN="-h 35.232.177.102 -p 5432 -U postgres -d eva-db"
+export PGPASSWORD='Debian23@'
+PG_CONN="-h 34.35.142.107 -p 5432 -U postgres -d eva-mind"
 for migration in \
     001_initial.sql \
     001_create_device_tokens_table.sql \
