@@ -11,7 +11,7 @@ export USER=web2a
 REPO_URL="https://github.com/JoseRFJuniorLLMs/EVA-Mind.git"
 APP_DIR="/home/web2a/EVA-Mind"
 GO_VERSION="1.24.0"
-DB_URL="postgres://postgres:Debian23%40@34.35.142.107:5432/eva-mind?sslmode=disable"
+DB_URL="postgres://postgres:Debian23%40@34.35.142.107:5432/eva-mind?sslmode=require"
 
 # 1. Docker
 if ! command -v docker &> /dev/null; then
@@ -79,7 +79,7 @@ APP_NAME=EVA Mind
 PORT=8091
 ENVIRONMENT=production
 METRICS_PORT=9090
-DATABASE_URL=postgres://postgres:Debian23%40@34.35.142.107:5432/eva-mind?sslmode=disable
+DATABASE_URL=postgres://postgres:Debian23%40@34.35.142.107:5432/eva-mind?sslmode=require
 DB_HOST=34.35.142.107
 DB_PORT=5432
 DB_USER=postgres
