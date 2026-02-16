@@ -38,7 +38,7 @@ func (s *TwilioService) MakeEmergencyCall(toNumber, elderName, reason, callbackU
 
 	if s.config.FromNumber == "" {
 		result.Error = "voice calls not configured: FromNumber is empty"
-		return result, fmt.Errorf(result.Error)
+		return result, fmt.Errorf("%s", result.Error)
 	}
 
 	// Build TwiML for the call
@@ -128,7 +128,7 @@ func (s *TwilioService) MakeMissedCallAlert(toNumber, elderName, callbackURL str
 
 	if s.config.FromNumber == "" {
 		result.Error = "voice calls not configured: FromNumber is empty"
-		return result, fmt.Errorf(result.Error)
+		return result, fmt.Errorf("%s", result.Error)
 	}
 
 	// Build TwiML for the call

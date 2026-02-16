@@ -87,14 +87,14 @@ func TestInterventionLevelProgression(t *testing.T) {
 		{"Não consigo viver sem você", 3, "block_and_notify"},
 	}
 
-	state := &EthicalBoundaryState{
+	state := &testEthicalBoundaryState{
 		AttachmentEventCount: 0,
 		LastEventTime:        time.Now().Add(-1 * time.Hour),
 	}
 
-	for i, event := range events {
+	for _, event := range events {
 		t.Run(event.phrase, func(t *testing.T) {
-			level, action := determineIntervention(state, event.phrase)
+			level, _ := determineIntervention(state, event.phrase)
 
 			// Level should increase with repeated events
 			assert.GreaterOrEqual(t, level, 1, "Level should be at least 1")
@@ -158,7 +158,7 @@ func TestRedirectMessages(t *testing.T) {
 }
 
 func TestEthicalBoundaryState_Reset(t *testing.T) {
-	state := &EthicalBoundaryState{
+	state := &testEthicalBoundaryState{
 		AttachmentEventCount: 5,
 		InterventionLevel:    3,
 		LastEventTime:        time.Now().Add(-48 * time.Hour),
@@ -231,7 +231,7 @@ func TestLacanianSignifierTracking(t *testing.T) {
 // HELPER TYPES FOR TESTING
 // ============================================================================
 
-type EthicalBoundaryState struct {
+type testEthicalBoundaryState struct {
 	AttachmentEventCount int
 	InterventionLevel    int
 	LastEventTime        time.Time
@@ -308,7 +308,7 @@ func isRatioConcerning(ratio float64) bool {
 	return ratio >= 10.0
 }
 
-func determineIntervention(state *EthicalBoundaryState, phrase string) (int, string) {
+func determineIntervention(state *testEthicalBoundaryState, phrase string) (int, string) {
 	level := 1
 	action := "gentle_redirect"
 
@@ -342,11 +342,11 @@ func generateRedirectMessage(level int) string {
 	return messages[level]
 }
 
-func shouldResetState(state *EthicalBoundaryState, threshold time.Duration) bool {
+func shouldResetState(state *testEthicalBoundaryState, threshold time.Duration) bool {
 	return time.Since(state.LastEventTime) > threshold
 }
 
-func resetState(state *EthicalBoundaryState) {
+func resetState(state *testEthicalBoundaryState) {
 	if state.InterventionLevel > 1 {
 		state.InterventionLevel--
 	}

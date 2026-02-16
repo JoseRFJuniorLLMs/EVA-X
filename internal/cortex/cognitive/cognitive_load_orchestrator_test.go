@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // ============================================================================
@@ -133,7 +132,7 @@ func TestFatigueDetection_FreshSession(t *testing.T) {
 
 func TestActionBlocking_HighLoad(t *testing.T) {
 	// Test that complex actions are blocked under high load
-	state := CognitiveLoadState{
+	state := testCognitiveLoadState{
 		CurrentLoad:        0.85,
 		FatigueLevel:       0.7,
 		EmotionalIntensity: 0.8,
@@ -148,7 +147,7 @@ func TestActionBlocking_HighLoad(t *testing.T) {
 
 func TestActionBlocking_NormalLoad(t *testing.T) {
 	// Test that all actions are allowed under normal load
-	state := CognitiveLoadState{
+	state := testCognitiveLoadState{
 		CurrentLoad:        0.4,
 		FatigueLevel:       0.3,
 		EmotionalIntensity: 0.4,
@@ -160,7 +159,7 @@ func TestActionBlocking_NormalLoad(t *testing.T) {
 
 func TestSystemInstructions_HighLoad(t *testing.T) {
 	// Test system instructions adapt to high load
-	state := CognitiveLoadState{
+	state := testCognitiveLoadState{
 		CurrentLoad:        0.8,
 		FatigueLevel:       0.7,
 		EmotionalIntensity: 0.6,
@@ -174,7 +173,7 @@ func TestSystemInstructions_HighLoad(t *testing.T) {
 
 func TestSystemInstructions_Rumination(t *testing.T) {
 	// Test system instructions for rumination
-	state := CognitiveLoadState{
+	state := testCognitiveLoadState{
 		CurrentLoad:    0.7,
 		IsRuminating:   true,
 		RuminationTopic: "death_of_spouse",
@@ -210,7 +209,7 @@ type SessionMetrics struct {
 	EnergyTrend          float64
 }
 
-type CognitiveLoadState struct {
+type testCognitiveLoadState struct {
 	CurrentLoad        float64
 	FatigueLevel       float64
 	EmotionalIntensity float64
@@ -292,7 +291,7 @@ func calculateFatigue(m SessionMetrics) float64 {
 	return fatigue
 }
 
-func isActionAllowed(state CognitiveLoadState, actionType string, threshold float64) bool {
+func isActionAllowed(state testCognitiveLoadState, actionType string, threshold float64) bool {
 	// Simple actions always allowed
 	if actionType == "simple_response" || actionType == "acknowledgment" {
 		return true
@@ -302,7 +301,7 @@ func isActionAllowed(state CognitiveLoadState, actionType string, threshold floa
 	return state.CurrentLoad < threshold
 }
 
-func generateAdaptiveInstructions(state CognitiveLoadState) string {
+func generateAdaptiveInstructions(state testCognitiveLoadState) string {
 	instructions := "Diretrizes adaptativas:\n"
 
 	if state.CurrentLoad > 0.7 {
