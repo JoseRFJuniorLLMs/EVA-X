@@ -130,11 +130,17 @@ func main() {
 	authHandler := auth.NewHandler(db, cfg)
 	api.HandleFunc("/auth/login", authHandler.Login).Methods("POST")
 
+	// Mobile API (EVA-Mobile)
+	v1 := api.PathPrefix("/v1").Subrouter()
+	v1.HandleFunc("/idosos/by-cpf/{cpf}", server.handleGetIdosoByCpf).Methods("GET")
+	v1.HandleFunc("/idosos/{id}", server.handleGetIdoso).Methods("GET")
+	v1.HandleFunc("/idosos/sync-token-by-cpf", server.handleSyncTokenByCpf).Methods("PATCH")
+
 	// 7. Scheduler (Background Jobs)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	go scheduler.Start(ctx, db, cfg, log.Logger, alertService)
+	go scheduler.Start(ctx, db, cfg, log.Logger, alertService, pushService)
 
 	// 8. Start Server
 	srv := &http.Server{

@@ -17,6 +17,7 @@ type Agendamento struct {
 	ProximaTentativa     *time.Time             `json:"proxima_tentativa,omitempty"`
 	EscalationPolicy     string                 `json:"escalation_policy"`
 	Prioridade           string                 `json:"prioridade"`
+	DeviceToken          string                 `json:"device_token"`
 	CallSID              *string                `json:"call_sid,omitempty"`
 	GeminiSessionHandle  string                 `json:"gemini_session_handle"`
 	SessionExpiresAt     *time.Time             `json:"session_expires_at,omitempty"`

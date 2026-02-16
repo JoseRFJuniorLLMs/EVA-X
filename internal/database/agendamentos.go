@@ -76,7 +76,7 @@ func (db *DB) GetPendingCalls(ctx context.Context) ([]models.Agendamento, error)
 	// Limpeza dos logs de depuração agora que o problema foi identificado
 
 	query := `
-        SELECT 
+        SELECT
             a.id,
             a.idoso_id,
             i.telefone,
@@ -87,7 +87,8 @@ func (db *DB) GetPendingCalls(ctx context.Context) ([]models.Agendamento, error)
             a.tentativas_realizadas,
             a.max_retries,
             a.retry_interval_minutes,
-            a.prioridade
+            a.prioridade,
+            COALESCE(i.device_token, '') as device_token
         FROM agendamentos a
         JOIN idosos i ON a.idoso_id = i.id
         WHERE (a.data_hora_agendada <= (NOW() + INTERVAL '1 minute') OR (a.proxima_tentativa IS NOT NULL AND a.proxima_tentativa <= NOW()))
@@ -124,6 +125,7 @@ func (db *DB) GetPendingCalls(ctx context.Context) ([]models.Agendamento, error)
 			&ag.MaxRetries,
 			&ag.RetryIntervalMinutes,
 			&ag.Prioridade,
+			&ag.DeviceToken,
 		)
 		if err != nil {
 			println("Erro ao ler linha do banco:", err.Error())
