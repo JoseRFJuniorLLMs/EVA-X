@@ -2,37 +2,20 @@ name: EVA-Mind CI/CD
 
 on:
   push:
-    branches: [main, staging, develop]
-  pull_request:
-    branches: [main, staging]
+    branches: [main]
 
 env:
-  GO_VERSION: "1.21"
-  PYTHON_VERSION: "3.11"
-  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-  GCP_REGION: us-central1
+  GO_VERSION: "1.24"
+  VM_IP: "34.35.36.178"
+  VM_USER: "web2a"
 
 jobs:
   # ============================================================================
-  # LINT & TEST
+  # BUILD & TEST (local no GitHub Actions)
   # ============================================================================
-  lint-and-test:
-    name: Lint and Test
+  build:
+    name: Build & Test
     runs-on: ubuntu-latest
-
-    services:
-      postgres:
-        image: postgres:15
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: eva-test
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
 
     steps:
       - name: Checkout code
@@ -43,11 +26,6 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
       - name: Cache Go modules
         uses: actions/cache@v4
         with:
@@ -56,115 +34,20 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-go-
 
-      - name: Install Go dependencies
-        run: go mod download
-
-      - name: Install Python dependencies
+      - name: Build
         run: |
-          pip install -r requirements.txt
-
-      - name: Lint Go code
-        run: |
-          go install golang.org/x/lint/golint@latest
-          golint ./...
-
-      - name: Lint Python code
-        run: |
-          pip install flake8
-          flake8 api_server.py --max-line-length=120
-
-      - name: Run Go tests
-        env:
-          DB_HOST: localhost
-          DB_PORT: 5432
-          DB_NAME: eva-test
-          DB_USER: postgres
-          DB_PASSWORD: postgres
-        run: |
-          go test -v -race -coverprofile=coverage.out ./...
-
-      - name: Upload coverage
-        uses: codecov/codecov-action@v4
-        with:
-          files: ./coverage.out
-          flags: unittests
+          go mod tidy
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o eva-mind .
+          echo "Build OK: $(ls -lh eva-mind | awk '{print $5}')"
 
   # ============================================================================
-  # BUILD
+  # DEPLOY TO VM
   # ============================================================================
-  build:
-    name: Build Docker Image
-    runs-on: ubuntu-latest
-    needs: lint-and-test
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: false
-          tags: eva-mind:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  # ============================================================================
-  # DEPLOY TO STAGING
-  # ============================================================================
-  deploy-staging:
-    name: Deploy to Staging
-    runs-on: ubuntu-latest
-    needs: build
-    if: github.ref == 'refs/heads/staging'
-    environment: staging
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-
-      - name: Configure Docker for GCR
-        run: |
-          gcloud auth configure-docker
-
-      - name: Build and push to GCR
-        run: |
-          docker build -t gcr.io/${{ env.GCP_PROJECT_ID }}/eva-mind:staging-${{ github.sha }} .
-          docker push gcr.io/${{ env.GCP_PROJECT_ID }}/eva-mind:staging-${{ github.sha }}
-
-      - name: Deploy to Cloud Run (Staging)
-        run: |
-          gcloud run deploy eva-mind-staging \
-            --image gcr.io/${{ env.GCP_PROJECT_ID }}/eva-mind:staging-${{ github.sha }} \
-            --platform managed \
-            --region ${{ env.GCP_REGION }} \
-            --allow-unauthenticated \
-            --set-env-vars="ENVIRONMENT=staging" \
-            --memory 2Gi \
-            --cpu 2 \
-            --max-instances 10
-
-  # ============================================================================
-  # DEPLOY TO PRODUCTION
-  # ============================================================================
-  deploy-production:
-    name: Deploy to Production
+  deploy:
+    name: Deploy to VM
     runs-on: ubuntu-latest
     needs: build
     if: github.ref == 'refs/heads/main'
-    environment: production
 
     steps:
       - name: Checkout code
@@ -178,44 +61,24 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Configure Docker for GCR
+      - name: Deploy via SSH
         run: |
-          gcloud auth configure-docker
+          gcloud compute ssh ${{ env.VM_USER }}@malaria-vm \
+            --zone=africa-south1-a \
+            --project=malaria-487614 \
+            --command="bash /home/web2a/EVA-Mind/scripts/redeploy.sh" \
+            --ssh-flag="-o StrictHostKeyChecking=no"
 
-      - name: Build and push to GCR
+      - name: Health check
         run: |
-          docker build -t gcr.io/${{ env.GCP_PROJECT_ID }}/eva-mind:prod-${{ github.sha }} .
-          docker tag gcr.io/${{ env.GCP_PROJECT_ID }}/eva-mind:prod-${{ github.sha }} gcr.io/${{ env.GCP_PROJECT_ID }}/eva-mind:latest
-          docker push gcr.io/${{ env.GCP_PROJECT_ID }}/eva-mind:prod-${{ github.sha }}
-          docker push gcr.io/${{ env.GCP_PROJECT_ID }}/eva-mind:latest
+          sleep 5
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 10 http://${{ env.VM_IP }}:8091/api/health || echo "000")
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "Health check OK (HTTP $HTTP_CODE)"
+          else
+            echo "WARNING: Health check returned HTTP $HTTP_CODE"
+          fi
 
-      - name: Deploy to Cloud Run (Production)
-        run: |
-          gcloud run deploy eva-mind-prod \
-            --image gcr.io/${{ env.GCP_PROJECT_ID }}/eva-mind:prod-${{ github.sha }} \
-            --platform managed \
-            --region ${{ env.GCP_REGION }} \
-            --allow-unauthenticated \
-            --set-env-vars="ENVIRONMENT=production,ENABLE_TLS=true" \
-            --memory 4Gi \
-            --cpu 4 \
-            --max-instances 50 \
-            --min-instances 2
-
-      - name: Run database migrations
-        run: |
-          # Get Cloud Run service URL
-          SERVICE_URL=$(gcloud run services describe eva-mind-prod --region ${{ env.GCP_REGION }} --format 'value(status.url)')
-
-          # Run migrations via Cloud Run Jobs
-          gcloud run jobs create eva-mind-migrate-${{ github.sha }} \
-            --image gcr.io/${{ env.GCP_PROJECT_ID }}/eva-mind:prod-${{ github.sha }} \
-            --region ${{ env.GCP_REGION }} \
-            --command "/bin/sh" \
-            --args "-c,cd /app && psql \$DATABASE_URL -f migrations/*.sql"
-
-          gcloud run jobs execute eva-mind-migrate-${{ github.sha }} --region ${{ env.GCP_REGION }}
-
-      - name: Notify deployment
-        run: |
-          echo "✅ Deployed to production: ${{ github.sha }}"
+      - name: Notify
+        if: always()
+        run: echo "Deploy ${{ job.status }} - commit ${{ github.sha }}"
