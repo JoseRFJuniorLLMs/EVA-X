@@ -18,6 +18,11 @@ func (s *SignalingServer) handleGetIdosoByCpf(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	if s.db == nil || s.db.Conn == nil {
+		http.Error(w, `{"error":"Database unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+
 	row := s.db.Conn.QueryRow(`
 		SELECT id, nome, cpf, telefone, data_nascimento, endereco, device_token, ativo
 		FROM idosos WHERE cpf = $1 AND ativo = true
@@ -57,6 +62,11 @@ func (s *SignalingServer) handleGetIdoso(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	if s.db == nil || s.db.Conn == nil {
+		http.Error(w, `{"error":"Database unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+
 	row := s.db.Conn.QueryRow(`
 		SELECT id, nome, cpf, telefone, data_nascimento, endereco, device_token, ativo
 		FROM idosos WHERE id = $1
@@ -92,6 +102,11 @@ func (s *SignalingServer) handleSyncTokenByCpf(w http.ResponseWriter, r *http.Re
 
 	if cpf == "" || token == "" {
 		http.Error(w, `{"error":"cpf and token are required"}`, http.StatusBadRequest)
+		return
+	}
+
+	if s.db == nil || s.db.Conn == nil {
+		http.Error(w, `{"error":"Database unavailable"}`, http.StatusServiceUnavailable)
 		return
 	}
 

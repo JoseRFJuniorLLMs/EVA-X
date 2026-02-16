@@ -71,7 +71,7 @@ func (g *InterpretationGenerator) Generate(ctx context.Context, patientID int64,
 
 	// 4. Construir objetos Interpretation
 	interpretations := make([]Interpretation, 0, len(texts))
-	for i, text := range texts {
+	for _, text := range texts {
 		interp := Interpretation{
 			ID:              uuid.New().String(),
 			Content:         text,
@@ -131,7 +131,7 @@ Formato da resposta:
 [INTERPRETATION_2]
 ...
 
-Gere %d interpretações alternativas:`, n, n)
+Gere %d interpretações alternativas:`, query, n, n)
 
 	return prompt
 }

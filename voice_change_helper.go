@@ -27,9 +27,11 @@ func (s *SignalingServer) changeVoice(client *PCMClient, newVoice string) map[st
 
 	// Obter voz atual
 	var currentVoice sql.NullString
-	s.db.GetConnection().QueryRow(`
+	if err := s.db.GetConnection().QueryRow(`
 		SELECT preferred_voice FROM idosos WHERE id = $1
-	`, client.IdosoID).Scan(&currentVoice)
+	`, client.IdosoID).Scan(&currentVoice); err != nil && err != sql.ErrNoRows {
+		log.Printf("⚠️ [VOICE] Erro ao buscar voz atual: %v", err)
+	}
 
 	oldVoice := "Aoede" // Padrão
 	if currentVoice.Valid {
@@ -50,18 +52,23 @@ func (s *SignalingServer) changeVoice(client *PCMClient, newVoice string) map[st
 	}
 
 	// Registrar histórico
-	s.db.GetConnection().Exec(`
+	if _, err := s.db.GetConnection().Exec(`
 		INSERT INTO voice_change_history (idoso_id, old_voice, new_voice, change_method)
 		VALUES ($1, $2, $3, 'voice_command')
-	`, client.IdosoID, oldVoice, newVoice)
+	`, client.IdosoID, oldVoice, newVoice); err != nil {
+		log.Printf("⚠️ [VOICE] Erro ao registrar historico de troca: %v", err)
+	}
 
 	log.Printf("✅ [VOICE] Voz alterada: %s → %s (Idoso %d)", oldVoice, newVoice, client.IdosoID)
 
 	// Obter nome amigável da voz
 	var displayName string
-	s.db.GetConnection().QueryRow(`
+	if err := s.db.GetConnection().QueryRow(`
 		SELECT display_name FROM eva_voices WHERE voice_name = $1
-	`, newVoice).Scan(&displayName)
+	`, newVoice).Scan(&displayName); err != nil {
+		log.Printf("⚠️ [VOICE] Erro ao buscar display_name: %v", err)
+		displayName = newVoice // fallback
+	}
 
 	// **CRÍTICO:** A mudança só afeta próxima sessão
 	// Para mudar EM TEMPO REAL, precisamos reconfigurar Gemini
@@ -98,7 +105,10 @@ func (s *SignalingServer) getAvailableVoices() map[string]interface{} {
 	var voices []map[string]string
 	for rows.Next() {
 		var voiceName, displayName, gender, tone string
-		rows.Scan(&voiceName, &displayName, &gender, &tone)
+		if err := rows.Scan(&voiceName, &displayName, &gender, &tone); err != nil {
+			log.Printf("⚠️ [VOICE] Erro ao ler voz: %v", err)
+			continue
+		}
 
 		voices = append(voices, map[string]string{
 			"voice_name":   voiceName,
@@ -106,6 +116,9 @@ func (s *SignalingServer) getAvailableVoices() map[string]interface{} {
 			"gender":       gender,
 			"tone":         tone,
 		})
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("⚠️ [VOICE] Erro na iteração de vozes: %v", err)
 	}
 
 	return map[string]interface{}{

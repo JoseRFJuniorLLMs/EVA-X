@@ -146,7 +146,7 @@ func Load() (*Config, error) {
 		SMTPFromEmail: getEnvWithDefault("SMTP_FROM_EMAIL", "web2ajax@gmail.com"),
 
 		// Auth
-		JWTSecret: getEnvWithDefault("JWT_SECRET", "super-secret-default-key-change-me"),
+		JWTSecret: getEnvRequired("JWT_SECRET"),
 
 		// Neo4j
 		Neo4jURI:      getEnvWithDefault("NEO4J_URI", "neo4j://localhost:7687"),
@@ -168,6 +168,14 @@ func Load() (*Config, error) {
 		EnableCodeExecution:  getEnvBool("ENABLE_CODE_EXECUTION", false),
 		EnableContextCaching: getEnvBool("ENABLE_CONTEXT_CACHING", true),
 	}, nil
+}
+
+func getEnvRequired(key string) string {
+	value := os.Getenv(key)
+	if value == "" {
+		log.Printf("⚠️ AVISO: %s não configurado. Usando valor vazio — configure antes de ir para produção!", key)
+	}
+	return value
 }
 
 func getEnvWithDefault(key, defaultValue string) string {

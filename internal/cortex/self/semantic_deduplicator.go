@@ -8,12 +8,12 @@ import (
 
 // SemanticDeduplicator detecta duplicatas usando similaridade de embeddings
 type SemanticDeduplicator struct {
-	embeddingService  EmbeddingService
+	embeddingService  DeduplicatorEmbeddings
 	similarityThreshold float64 // 0.88 = muito similar
 }
 
-// EmbeddingService interface para gerar embeddings
-type EmbeddingService interface {
+// DeduplicatorEmbeddings interface para gerar embeddings
+type DeduplicatorEmbeddings interface {
 	GetEmbedding(ctx context.Context, text string) ([]float32, error)
 	GetEmbeddingBatch(ctx context.Context, texts []string) ([][]float32, error)
 }
@@ -27,7 +27,7 @@ type DuplicateCheckResult struct {
 }
 
 // NewSemanticDeduplicator cria o deduplicador
-func NewSemanticDeduplicator(embeddingService EmbeddingService, threshold float64) *SemanticDeduplicator {
+func NewSemanticDeduplicator(embeddingService DeduplicatorEmbeddings, threshold float64) *SemanticDeduplicator {
 	if threshold == 0 {
 		threshold = 0.88 // Default: 88% de similaridade
 	}

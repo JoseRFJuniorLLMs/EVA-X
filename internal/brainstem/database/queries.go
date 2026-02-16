@@ -137,6 +137,10 @@ func (db *DB) GetIdosoByCPF(cpf string) (*Idoso, error) {
 		return nil, fmt.Errorf("erro ao consultar CPF: %w", err)
 	}
 
-	log.Printf("🔍 [POSTGRES] CPF consultado: %s -> ID: %d", cpf, idoso.ID)
+	maskedCPF := "***"
+	if len(cpf) >= 3 {
+		maskedCPF = "***" + cpf[len(cpf)-3:]
+	}
+	log.Printf("🔍 [POSTGRES] CPF consultado: %s -> ID: %d", maskedCPF, idoso.ID)
 	return &idoso, nil
 }

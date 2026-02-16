@@ -182,7 +182,11 @@ func (rm *ReconnectionManager) AttemptReconnection(
 			continue
 		}
 
-		log.Printf("✅ Reconexão bem-sucedida na tentativa %d para CPF: %s", attempt, cpf)
+		maskedCPF := "***"
+		if len(cpf) >= 3 {
+			maskedCPF = "***" + cpf[len(cpf)-3:]
+		}
+		log.Printf("✅ Reconexão bem-sucedida na tentativa %d para CPF: %s", attempt, maskedCPF)
 
 		// Executar callback de conexão
 		if err := onConnected(conn); err != nil {
@@ -207,7 +211,11 @@ func (rm *ReconnectionManager) RestoreConversation(
 		return err
 	}
 
-	log.Printf("🔄 Restaurando conversa para CPF: %s", cpf)
+	maskedCPF := "***"
+	if len(cpf) >= 3 {
+		maskedCPF = "***" + cpf[len(cpf)-3:]
+	}
+	log.Printf("🔄 Restaurando conversa para CPF: %s", maskedCPF)
 
 	// 1. Notificar cliente sobre restauração
 	if err := sendMessage(map[string]interface{}{
@@ -259,7 +267,7 @@ func (rm *ReconnectionManager) RestoreConversation(
 		}
 	}
 
-	log.Printf("✅ Conversa restaurada com sucesso para CPF: %s", cpf)
+	log.Printf("✅ Conversa restaurada com sucesso para CPF: %s", maskedCPF)
 
 	// Limpar estado após restauração
 	rm.DeleteState(cpf)

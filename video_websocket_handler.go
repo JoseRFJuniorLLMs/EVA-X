@@ -12,7 +12,23 @@ import (
 
 var videoUpgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
-		return true
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true // Permitir conexões sem Origin (ex: apps mobile, curl)
+		}
+		allowedOrigins := []string{
+			"https://eva-ia.org",
+			"https://www.eva-ia.org",
+			"https://app.eva-ia.org",
+			"http://localhost:3000",
+			"http://localhost:8080",
+		}
+		for _, allowed := range allowedOrigins {
+			if origin == allowed {
+				return true
+			}
+		}
+		return false
 	},
 }
 
@@ -22,6 +38,7 @@ type VideoSession struct {
 	MobileConn    *websocket.Conn
 	AttendantConn *websocket.Conn
 	SDPOffer      string // ✅ Store Offer for late-joining attendants
+	PatientData   map[string]interface{}
 	mu            sync.RWMutex
 }
 
@@ -126,12 +143,14 @@ func (vsm *VideoSessionManager) GetPendingSessions() []map[string]interface{} {
 	for _, session := range vsm.sessions {
 		// If no attendant is connected, it's pending
 		if session.AttendantConn == nil {
+			pd := session.PatientData
+			if pd == nil {
+				pd = map[string]interface{}{"nome": "Paciente (dados indisponíveis)"}
+			}
 			pending = append(pending, map[string]interface{}{
-				"session_id": session.SessionID,
-				"patient_data": map[string]interface{}{
-					"nome": "Paciente Emergência",
-				},
-				"started_at": time.Now().UTC().Format(time.RFC3339),
+				"session_id":   session.SessionID,
+				"patient_data": pd,
+				"started_at":   time.Now().UTC().Format(time.RFC3339),
 			})
 		}
 	}
@@ -184,27 +203,24 @@ func (vsm *VideoSessionManager) RegisterClient(sessionID string, conn *websocket
 		log.Printf("✅ Mobile client registered for session: %s", sessionID)
 
 		// Broadcast incoming call to all attendants
-		vsm.notifyIncomingCall(sessionID)
+		vsm.notifyIncomingCall(sessionID, session.PatientData)
 	}
 
 	return nil
 }
 
 // notifyIncomingCall broadcasts an incoming call notification to all attendants
-func (vsm *VideoSessionManager) notifyIncomingCall(sessionID string) {
-	// TODO: Fetch patient data from database
-	// For now, send basic notification
+func (vsm *VideoSessionManager) notifyIncomingCall(sessionID string, patientData map[string]interface{}) {
+	if patientData == nil {
+		patientData = map[string]interface{}{
+			"nome": "Paciente (dados indisponíveis)",
+		}
+	}
+
 	notification := map[string]interface{}{
-		"type":       "incoming_call",
-		"session_id": sessionID,
-		"patient_data": map[string]interface{}{
-			"nome":            "Paciente Emergência",
-			"idade":           0,
-			"telefone":        "",
-			"nivel_cognitivo": "Normal",
-			"limitacoes":      "",
-			"foto_url":        "",
-		},
+		"type":         "incoming_call",
+		"session_id":   sessionID,
+		"patient_data": patientData,
 	}
 
 	vsm.attendantPool.Broadcast(notification)
@@ -227,16 +243,17 @@ func (vsm *VideoSessionManager) notifyEmergencyCall(sessionID string, alertData 
 
 // RouteSignal routes WebRTC signals between mobile and web attendant
 func (vsm *VideoSessionManager) RouteSignal(sessionID string, senderConn *websocket.Conn, payload map[string]interface{}) error {
+	// Hold manager read lock while acquiring session lock to prevent
+	// the session from being deleted between the two lock acquisitions.
 	vsm.mu.RLock()
 	session, exists := vsm.sessions[sessionID]
-	vsm.mu.RUnlock()
-
 	if !exists {
+		vsm.mu.RUnlock()
 		log.Printf("⚠️ Session not found: %s", sessionID)
 		return nil
 	}
-
 	session.mu.RLock()
+	vsm.mu.RUnlock()
 	defer session.mu.RUnlock()
 
 	// Determine target connection (opposite of sender)
@@ -361,6 +378,20 @@ func HandleVideoWebSocket(vsm *VideoSessionManager) http.HandlerFunc {
 				if sessionID == "" {
 					log.Printf("⚠️ Registration missing session_id")
 					continue
+				}
+
+				// Store patient data sent by mobile client
+				if patientData, ok := msg["patient_data"].(map[string]interface{}); ok && clientType != "web_attendant" {
+					vsm.mu.Lock()
+					if sess, exists := vsm.sessions[sessionID]; exists {
+						sess.PatientData = patientData
+					} else {
+						vsm.sessions[sessionID] = &VideoSession{
+							SessionID:   sessionID,
+							PatientData: patientData,
+						}
+					}
+					vsm.mu.Unlock()
 				}
 
 				vsm.RegisterClient(sessionID, conn, clientType, "", "", "")

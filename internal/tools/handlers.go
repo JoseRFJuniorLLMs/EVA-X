@@ -927,7 +927,11 @@ func (h *ToolsHandler) getCallTargetCPF(idosoID int64, callType string) (string,
 		}
 	}
 
-	log.Printf("📞 [CALL] Contato encontrado: %s (CPF: %s) para %s", nome, cpf, callType)
+	maskedCPF := "***"
+	if len(cpf) >= 3 {
+		maskedCPF = "***" + cpf[len(cpf)-3:]
+	}
+	log.Printf("📞 [CALL] Contato encontrado: %s (CPF: %s) para %s", nome, maskedCPF, callType)
 	return cpf, nome, nil
 }
 

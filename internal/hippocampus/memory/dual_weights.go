@@ -144,7 +144,7 @@ func (d *DualWeightSystem) MigrateExistingEdges(ctx context.Context, patientID i
 		RETURN count(r) AS migrated
 	`
 
-	records, err := d.neo4j.ExecuteWrite(ctx, query, map[string]interface{}{
+	_, err := d.neo4j.ExecuteWrite(ctx, query, map[string]interface{}{
 		"patientId": patientID,
 		"batchSize": batchSize,
 		"slowRatio": d.slowRatio,
@@ -205,7 +205,7 @@ func (d *DualWeightSystem) NormalizeWeights(ctx context.Context, patientID int64
 			count(r) AS totalEdges
 	`
 
-	records, err := d.neo4j.ExecuteRead(ctx, statsQuery, map[string]interface{}{
+	_, err := d.neo4j.ExecuteRead(ctx, statsQuery, map[string]interface{}{
 		"patientId": patientID,
 	})
 	if err != nil {

@@ -24,7 +24,19 @@ func (s *SignalingServer) handleVideoCascade(idosoID int64, sessionID string) {
 		ORDER BY prioridade ASC
 	`
 
-	rows, err := s.db.GetConnection().Query(query, idosoID)
+	if s.db == nil {
+		log.Printf("❌ Database não inicializada")
+		s.escalateToEmergency(idosoID, sessionID, "Database não inicializada")
+		return
+	}
+	conn := s.db.GetConnection()
+	if conn == nil {
+		log.Printf("❌ Conexão com banco indisponível")
+		s.escalateToEmergency(idosoID, sessionID, "Conexão com banco indisponível")
+		return
+	}
+
+	rows, err := conn.Query(query, idosoID)
 	if err != nil {
 		log.Printf("❌ Erro ao buscar cuidadores: %v", err)
 		s.escalateToEmergency(idosoID, sessionID, "Erro ao buscar cuidadores")
@@ -47,6 +59,9 @@ func (s *SignalingServer) handleVideoCascade(idosoID int64, sessionID string) {
 			continue
 		}
 		caregivers = append(caregivers, cg)
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("❌ Erro na iteração de cuidadores: %v", err)
 	}
 
 	if len(caregivers) == 0 {

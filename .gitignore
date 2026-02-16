@@ -1,11 +1,17 @@
 # Binaries
 bin/
 eva-mind
+eva-mind-linux
+eva-mind-test
+aurora-linux
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
+
+# Deploy archives
+*.tar.gz
 
 # Test
 *.test
@@ -29,6 +35,7 @@ venv/
 *.env
 *.env.local
 vm.env
+env_backup.txt
 serviceAccountKey.json
 
 # Scripts to ignore

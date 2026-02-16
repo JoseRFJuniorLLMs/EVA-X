@@ -5,9 +5,33 @@ import (
 	"eva-mind/internal/brainstem/config"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
 )
+
+// sensitiveParamKeys lists parameter names that should be redacted in logs (LGPD compliance)
+var sensitiveParamKeys = map[string]bool{
+	"cpf": true, "nome": true, "name": true, "telefone": true, "phone": true,
+	"email": true, "endereco": true, "address": true, "rg": true,
+	"content": true, "text": true, "transcript": true, "speaker": true,
+}
+
+// sanitizeParams returns a log-safe version of query parameters
+func sanitizeParams(params map[string]interface{}) string {
+	if params == nil {
+		return "{}"
+	}
+	parts := make([]string, 0, len(params))
+	for k, v := range params {
+		if sensitiveParamKeys[strings.ToLower(k)] {
+			parts = append(parts, fmt.Sprintf("%s:[REDACTED]", k))
+		} else {
+			parts = append(parts, fmt.Sprintf("%s:%v", k, v))
+		}
+	}
+	return "{" + strings.Join(parts, ", ") + "}"
+}
 
 type Neo4jClient struct {
 	driver neo4j.DriverWithContext
@@ -64,7 +88,7 @@ func (c *Neo4jClient) ExecuteWrite(ctx context.Context, cypher string, params ma
 			if len(preview) > 100 {
 				preview = preview[:100] + "..."
 			}
-			log.Printf("📥 [NEO4J] Escrita concluída: Query=\"%s\", Params=%v", preview, params)
+			log.Printf("📥 [NEO4J] Escrita concluída: Query=\"%s\", Params=%s", preview, sanitizeParams(params))
 		}
 		return summary, err
 	})

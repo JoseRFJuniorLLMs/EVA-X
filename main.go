@@ -73,7 +73,10 @@ func main() {
 	}
 
 	// 3. Serviços Base
-	pushService, _ := push.NewFirebaseService(cfg.FirebaseCredentialsPath)
+	pushService, err := push.NewFirebaseService(cfg.FirebaseCredentialsPath)
+	if err != nil {
+		log.Error().Err(err).Msg("Firebase indisponível - Push notifications desabilitadas. Alertas de emergência podem falhar!")
+	}
 	alertService := voice.NewAlertService(db, cfg, logger)
 
 	// 4. Cortex (Lógica de Negócio e IA)
@@ -148,7 +151,14 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	go scheduler.Start(ctx, db, cfg, log.Logger, alertService, pushService)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().Interface("panic", r).Msg("CRITICO: Scheduler panic - background jobs parados")
+			}
+		}()
+		scheduler.Start(ctx, db, cfg, log.Logger, alertService, pushService)
+	}()
 
 	// 8. Start Server
 	srv := &http.Server{

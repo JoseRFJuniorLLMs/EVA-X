@@ -23,7 +23,25 @@ const (
 )
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+	CheckOrigin: func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true // Permitir conexões sem Origin (ex: apps mobile, curl)
+		}
+		allowedOrigins := []string{
+			"https://eva-ia.org",
+			"https://www.eva-ia.org",
+			"https://app.eva-ia.org",
+			"http://localhost:3000",
+			"http://localhost:8080",
+		}
+		for _, allowed := range allowedOrigins {
+			if origin == allowed {
+				return true
+			}
+		}
+		return false
+	},
 }
 
 // bufferPool reutiliza slices de byte para evitar pressão no GC
