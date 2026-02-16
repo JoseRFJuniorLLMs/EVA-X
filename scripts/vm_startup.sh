@@ -227,6 +227,10 @@ systemctl daemon-reload
 systemctl enable eva-mind
 systemctl restart eva-mind
 
+# 7b. Allow web2a to restart services without password
+echo "web2a ALL=(ALL) NOPASSWD: /bin/systemctl restart eva-mind, /bin/systemctl restart webhook-deploy, /bin/systemctl status eva-mind, /bin/journalctl *" > /etc/sudoers.d/eva-mind
+chmod 440 /etc/sudoers.d/eva-mind
+
 # 8. Webhook deploy server (auto-deploy on git push)
 echo "[8/8] Setting up webhook deploy server..."
 cat > /etc/systemd/system/webhook-deploy.service << 'WHEOF'
