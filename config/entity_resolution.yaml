@@ -1,0 +1,139 @@
+# Configuração do Entity Resolution
+# Fase D - Resolução de entidades duplicadas usando embedding similarity
+
+entity_resolution:
+  enabled: true
+
+  # Similarity threshold (conservador = 0.85)
+  similarity_threshold: 0.85
+  min_name_length: 3          # Ignorar nomes < 3 chars
+  batch_size: 50              # Processar 50 nós por vez
+
+  # Confidence levels
+  confidence_levels:
+    high:                     # >= 0.95
+      auto_merge: true        # Merge automático
+      require_review: false
+    medium:                   # >= 0.90
+      auto_merge: false       # Requer revisão
+      require_review: true
+    low:                      # >= 0.85
+      auto_merge: false
+      require_review: true
+
+  # Auto-resolution schedule
+  auto_resolve:
+    enabled: false            # Desabilitado por padrão
+    schedule: "0 2 * * *"     # 2AM diariamente
+    dry_run: true             # Modo dry-run (apenas detecta)
+    min_interval_hours: 24    # Mínimo 24h entre execuções
+
+  # Cache configuration
+  cache:
+    enabled: true
+    ttl_hours: 24             # Cache embeddings por 24h
+    max_entries: 10000        # Máximo de embeddings em cache
+
+  # Entity types
+  entity_types:
+    person:
+      enabled: true
+      threshold: 0.85         # Mais conservador para pessoas
+      merge_strategy: "preserve_most_frequent"
+    place:
+      enabled: true
+      threshold: 0.90         # Mais rigoroso para lugares
+      merge_strategy: "preserve_most_frequent"
+    concept:
+      enabled: true
+      threshold: 0.87
+      merge_strategy: "preserve_most_frequent"
+    event:
+      enabled: true
+      threshold: 0.88
+      merge_strategy: "preserve_most_recent"
+
+  # Merge strategy
+  merge:
+    preserve_field: "frequency"  # Preserva nó com maior frequency
+    add_aliases: true            # Source.name vira alias no target
+    consolidate_edges: true      # Move todas as arestas
+    delete_source: true          # Deleta nó source após merge
+
+  # Performance
+  performance:
+    max_entities_per_patient: 1000
+    embedding_timeout_ms: 500
+    merge_timeout_ms: 1000
+    parallel_batch_size: 10
+
+  # Metrics
+  metrics:
+    track_merges: true
+    track_resolution_time: true
+    export_prometheus: true
+    log_candidates: true
+
+# Exemplos de resolução
+
+examples:
+  # Caso 1: Variações de nome
+  case_person_variations:
+    entities:
+      - "Maria"
+      - "Dona Maria"
+      - "minha mãe Maria"
+    expected_result: "Maria"    # Nome mais frequente
+    similarity: 0.92
+
+  # Caso 2: Lugares similares
+  case_place_variations:
+    entities:
+      - "praça da igreja"
+      - "praça"
+    expected_result: "praça da igreja"  # Nome mais específico
+    similarity: 0.88
+
+  # Caso 3: Falsos positivos (NÃO devem ser merged)
+  case_false_positives:
+    entities:
+      - "Maria Silva"
+      - "Maria Costa"
+    expected_result: "NO_MERGE"  # Pessoas diferentes
+    similarity: 0.75             # Abaixo do threshold
+
+# Integration points
+integration:
+  graph_store: true           # Integrar com Neo4j GraphStore
+  retrieval_service: true     # Usar durante retrieval
+  memory_ingestion: true      # Resolver nomes durante ingestão
+  api_endpoints: true         # Expor API para cuidadores
+
+# API Endpoints (futuros)
+api:
+  get_candidates:
+    path: "/api/v1/entities/duplicates/:patient_id"
+    method: "GET"
+    description: "Retorna candidatos para merge"
+
+  merge_entities:
+    path: "/api/v1/entities/merge/:patient_id"
+    method: "POST"
+    description: "Executa merge de entidades"
+    body:
+      - source_id
+      - target_id
+
+  auto_resolve:
+    path: "/api/v1/entities/auto-resolve/:patient_id"
+    method: "POST"
+    description: "Auto-resolve com dry-run option"
+    params:
+      - dry_run: bool
+
+# Validações (mente.md)
+validations:
+  use_src: false              # ✅ NÃO usar SRC (validado no mente.md)
+  use_embeddings: true        # ✅ Usar embedding similarity
+  threshold_conservative: true # ✅ 0.85 é conservador
+  preserve_frequency: true    # ✅ Preservar nó mais usado

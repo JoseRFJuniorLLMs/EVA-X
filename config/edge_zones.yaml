@@ -1,0 +1,77 @@
+# Configuração das Edge Zones
+# Fase C - Classificação e ações por zona
+
+edge_zones:
+  enabled: true
+
+  # Thresholds para classificação
+  thresholds:
+    high: 0.7               # Consolidated (w > 0.7)
+    low: 0.3                # Weak (w < 0.3)
+                            # Emerging: entre high e low
+
+  # Pruning configuration
+  pruning:
+    enabled: true
+    age_days: 30            # Prune weak edges older than N days
+    schedule: "0 3 * * *"   # Cron: 3AM daily
+    batch_size: 100         # Process N edges per batch
+    dry_run: false          # Set true to simulate without deleting
+
+  # Zone actions
+  actions:
+    consolidated:
+      preload_in_context: true
+      max_preload: 50       # Máximo de associações a preload
+      priority: high
+
+    emerging:
+      suggest_to_caregiver: true
+      notification_threshold: 5  # Notificar se >= N novas emerging
+      review_frequency_days: 7   # Sugerir revisão a cada N dias
+
+    weak:
+      auto_prune: true
+      warning_threshold: 10      # Alertar se >= N weak edges acumulando
+      grace_period_days: 7       # Aguardar N dias antes de prune
+
+  # Context builder integration
+  context_builder:
+    inject_consolidated: true
+    format: markdown          # markdown | json | plain
+    include_metadata: true    # Incluir co_activations, weights, etc
+    max_associations: 30      # Máximo no contexto
+
+  # API configuration
+  api:
+    enabled: true
+    rate_limit: 100           # Requests por minuto
+    cache_ttl_seconds: 60     # Cache de respostas
+    require_auth: true        # Requer autenticação
+
+  # Metrics
+  metrics:
+    track_zone_distribution: true
+    track_pruning_rate: true
+    track_preload_effectiveness: true
+    export_prometheus: true
+
+# Exemplos de distribuição saudável
+healthy_distribution:
+  consolidated: 20-30%        # Muitas associações consolidadas = bom
+  emerging: 30-50%            # Formação ativa de novas associações
+  weak: 20-30%                # Decay natural de associações não usadas
+
+# Warning thresholds
+warnings:
+  too_many_weak:
+    threshold_percentage: 50  # > 50% weak = problema
+    message: "High percentage of weak associations. Consider reviewing patient engagement."
+
+  too_few_consolidated:
+    threshold_percentage: 10  # < 10% consolidated = problema
+    message: "Low consolidation rate. Associations may not be reinforcing properly."
+
+  no_emerging:
+    threshold_count: 0        # 0 emerging = problema
+    message: "No emerging associations. Patient may not be forming new memories."

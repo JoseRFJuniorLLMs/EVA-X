@@ -22,6 +22,10 @@ func NewRouter(db *database.DB, cfg *config.Config, logger zerolog.Logger, alert
 	voiceHandler := voice.NewHandler(db, cfg, logger, alertService)
 	mux.HandleFunc("/media-stream/", voiceHandler.HandleMediaStream)
 
+	// Multimodal - Upload de mídia (imagens/vídeo)
+	// NOVO: Fase 2 - Permite enviar imagens durante conversação
+	mux.HandleFunc("/media/upload", voiceHandler.HandleMediaUpload)
+
 	// TwiML - ESSENCIAL para o Twilio
 	mux.HandleFunc("/calls/twiml", handleTwiML(cfg))
 

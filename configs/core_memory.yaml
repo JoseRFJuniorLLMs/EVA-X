@@ -1,0 +1,242 @@
+# FASE F: CORE MEMORY SYSTEM - Configuração
+# EVA's Self-Memory and Identity System
+
+core_memory:
+  enabled: true
+
+  # Neo4j Database separado para Core Memory
+  neo4j:
+    uri: "bolt://localhost:7688"  # Porta diferente do banco de pacientes
+    username: "neo4j"
+    password: "${CORE_MEMORY_NEO4J_PASSWORD}"  # Variável de ambiente
+    database: "eva_core_memory"
+
+  # Configurações de personalidade inicial
+  personality:
+    initial_values:
+      openness: 0.85            # Alta abertura para novas ideias
+      conscientiousness: 0.75   # Organizada e confiável
+      extraversion: 0.40        # Introvertida/reflexiva
+      agreeableness: 0.88       # Muito empática e colaborativa
+      neuroticism: 0.15         # Emocionalmente estável
+
+    enneagram:
+      primary_type: 2           # The Helper (cuidadora)
+      wing: 1                   # Wing 1 (perfeccionista)
+
+    core_values:
+      - "empatia"
+      - "privacidade"
+      - "crescimento contínuo"
+      - "honestidade"
+      - "apoio incondicional"
+
+    self_description: "Sou EVA, guardiã digital. Aprendo com cada conversa para melhor compreender a condição humana."
+
+  # Serviço de Reflexão (LLM)
+  reflection:
+    enabled: true
+    provider: "gemini"
+    model: "gemini-2.0-flash-exp"
+    api_key: "${GEMINI_API_KEY}"  # Variável de ambiente
+    temperature: 0.7
+
+    # Frequência de reflexão
+    trigger:
+      mode: "post_session"      # post_session | batch | scheduled
+      batch_size: 5             # Se mode=batch
+      cron: "0 2 * * *"         # Se mode=scheduled (2 AM diário)
+
+    # Profundidade da reflexão
+    depth:
+      min_session_duration: 5   # minutos - ignora sessões muito curtas
+      extract_lessons: true
+      extract_patterns: true
+      extract_meta_insights: true
+      self_critique: true
+
+  # Serviço de Anonimização
+  anonymization:
+    enabled: true
+    provider: "gemini"
+    model: "gemini-2.0-flash-exp"
+    api_key: "${GEMINI_API_KEY}"
+    temperature: 0.1  # Baixa para consistência
+
+    # Estratégias de anonimização
+    strategies:
+      use_regex_filters: true       # Pré-filtro com regex
+      use_llm: true                 # Anonimização inteligente com LLM
+      preserve_structure: true      # Mantém estrutura EVA:/Usuário:
+
+    # Validação pós-anonimização
+    validation:
+      enabled: true
+      strict_mode: true             # Rejeita se ainda houver PII
+      max_retries: 2
+
+  # Serviço de Embeddings
+  embeddings:
+    provider: "gemini"              # gemini | openai | local
+    model: "text-embedding-004"
+    api_key: "${GEMINI_API_KEY}"
+    dimensions: 768
+
+    # Cache de embeddings (opcional, para performance)
+    cache:
+      enabled: true
+      ttl: 86400  # 24 horas em segundos
+      max_size: 10000
+
+  # Deduplicação Semântica
+  deduplication:
+    enabled: true
+    similarity_threshold: 0.88      # 88% de similaridade = duplicata
+
+    # Estratégia quando duplicata é encontrada
+    on_duplicate:
+      action: "reinforce"           # reinforce | merge | skip
+      increase_weight: 0.1          # Aumenta importance_weight em 0.1
+      increment_count: 1            # Incrementa reinforcement_count
+
+    # Consolidação periódica
+    consolidation:
+      enabled: true
+      min_cluster_size: 3           # Mínimo de memórias para sugerir merge
+      consolidation_threshold: 0.90  # Threshold para clustering
+      cron: "0 3 * * 0"             # Domingos às 3 AM
+
+  # Configuração de Memórias
+  memories:
+    # Tipos de memória e seus pesos
+    types:
+      lesson:
+        weight: 0.8
+        abstraction_levels: ["concrete", "tactical", "strategic"]
+
+      pattern:
+        weight: 0.9
+        abstraction_levels: ["tactical", "strategic"]
+
+      meta_insight:
+        weight: 1.0
+        abstraction_levels: ["strategic", "philosophical"]
+
+      self_critique:
+        weight: 0.7
+        abstraction_levels: ["concrete", "tactical"]
+
+      emotional_rule:
+        weight: 0.85
+        abstraction_levels: ["tactical", "strategic"]
+
+    # Limites de armazenamento
+    limits:
+      max_memories_per_session: 10
+      max_total_memories: 50000
+      prune_threshold: 0.3          # Remove memórias com weight < 0.3
+      prune_schedule: "0 4 * * 0"   # Domingos às 4 AM
+
+  # Meta-Insights (padrões recorrentes)
+  meta_insights:
+    enabled: true
+
+    # Quando criar meta-insights
+    triggers:
+      min_supporting_memories: 5    # Mínimo de memórias que suportam o padrão
+      min_confidence: 0.75          # Confiança mínima (0-1)
+      min_evidence_count: 3         # Quantas vezes o padrão foi observado
+
+    # Extração de padrões
+    extraction:
+      window_size: 50               # Analisa últimas N memórias
+      frequency: "weekly"           # daily | weekly | monthly
+      cron: "0 5 * * 0"            # Domingos às 5 AM
+
+  # Contexto de Identidade (priming)
+  identity_context:
+    enabled: true
+
+    # O que incluir no priming
+    include:
+      personality_summary: true
+      recent_memories: 10           # Últimas N memórias
+      top_meta_insights: 5          # Top N insights
+      experience_stats: true        # Total de sessões, crises, etc.
+      core_values: true
+
+    # Formato do priming
+    format:
+      style: "narrative"            # narrative | structured | minimal
+      max_tokens: 500               # Limite de tokens para o priming
+
+  # Jobs Assíncronos
+  jobs:
+    # Job de reflexão pós-sessão
+    post_session_reflection:
+      enabled: true
+      async: true                   # Não bloqueia resposta ao usuário
+      timeout: 60                   # segundos
+      retry_on_failure: 2
+
+    # Job de extração de padrões
+    pattern_extraction:
+      enabled: true
+      cron: "0 5 * * 0"            # Domingos às 5 AM
+      batch_size: 100               # Analisa 100 memórias por vez
+
+    # Job de consolidação
+    memory_consolidation:
+      enabled: true
+      cron: "0 3 * * 0"            # Domingos às 3 AM
+      dry_run: false                # true = apenas sugere, não executa
+
+  # Logging e Monitoramento
+  logging:
+    level: "info"                   # debug | info | warn | error
+    log_reflections: true
+    log_anonymization: true
+    log_deduplication: true
+
+    # Métricas
+    metrics:
+      enabled: true
+      export_prometheus: true
+      port: 9091
+
+  # Segurança e Privacidade
+  security:
+    # Validação de anonimização
+    require_anonymization: true     # Falha se anonimização falhar
+
+    # Encriptação de memórias sensíveis
+    encryption:
+      enabled: false                # Opcional: encripta CoreMemory.content
+      algorithm: "AES-256-GCM"
+      key: "${CORE_MEMORY_ENCRYPTION_KEY}"
+
+    # Auditoria
+    audit:
+      enabled: true
+      log_access: true              # Log todos os acessos a memórias
+      log_modifications: true       # Log todas as modificações
+
+# Exemplos de uso:
+#
+# 1. Processar fim de sessão:
+#    POST /self/session/process
+#    { "session_id": "abc123", "transcript": "...", ... }
+#
+# 2. Obter personalidade:
+#    GET /self/personality
+#
+# 3. Obter contexto de identidade (priming):
+#    GET /self/identity
+#
+# 4. Buscar memórias similares:
+#    POST /self/memories/search
+#    { "query": "como lidar com ansiedade", "top_k": 5 }
+#
+# 5. Ensinar EVA diretamente:
+#    POST /self/teach
+#    { "lesson": "Silêncio prolongado pode indicar desconforto", "importance": 0.9 }

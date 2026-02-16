@@ -15,25 +15,31 @@ import (
 )
 
 // REMConsolidator implementa consolidacao de memoria inspirada no sono REM
-// Pipeline: Episodicas quentes -> Spectral clustering -> Centroide Krylov -> Nó semantico Neo4j -> Prune redundancias
+// Pipeline: Episodicas quentes -> SRC selective replay -> Spectral clustering -> Centroide Krylov -> Nó semantico Neo4j -> Prune redundancias
 // Ciencia: Rasch & Born (2013) - "About sleep's role in memory" (Physiological Reviews)
+//          Tadros et al. (2022) - "Sleep-like Unsupervised Replay" (Nature Communications)
 type REMConsolidator struct {
-	neo4j  *graph.Neo4jClient
-	krylov *krylovmem.KrylovMemoryManager
-	tau    float64 // Constante de decay temporal em dias
-	minHot int     // Minimo de memorias quentes para consolidar
-	mu     sync.Mutex
+	neo4j     *graph.Neo4jClient
+	krylov    *krylovmem.KrylovMemoryManager
+	tau       float64 // Constante de decay temporal em dias
+	minHot    int     // Minimo de memorias quentes para consolidar
+	srcConfig *SelectiveReplayConfig
+	hebbian   *HebbianStrengthener
+	mu        sync.Mutex
 }
 
 // ConsolidationResult resultado de um ciclo de consolidacao
 type ConsolidationResult struct {
-	CycleTime            time.Time `json:"cycle_time"`
-	EpisodicProcessed    int       `json:"episodic_processed"`
-	CommunitiesFormed    int       `json:"communities_formed"`
-	SemanticNodesCreated int       `json:"semantic_nodes_created"`
-	MemoriesPruned       int       `json:"memories_pruned"`
-	StorageSavedPercent  float64   `json:"storage_saved_percent"`
-	Duration             string    `json:"duration"`
+	CycleTime               time.Time `json:"cycle_time"`
+	EpisodicProcessed       int       `json:"episodic_processed"`
+	CommunitiesFormed       int       `json:"communities_formed"`
+	SemanticNodesCreated    int       `json:"semantic_nodes_created"`
+	MemoriesPruned          int       `json:"memories_pruned"`
+	StorageSavedPercent     float64   `json:"storage_saved_percent"`
+	DissonantMemories       int       `json:"dissonant_memories"`
+	HebbianEdgesStrengthened int      `json:"hebbian_edges_strengthened"`
+	AvgDissonance           float64   `json:"avg_dissonance"`
+	Duration                string    `json:"duration"`
 }
 
 // EpisodicMemory representa uma memoria episodica para consolidacao
@@ -59,10 +65,12 @@ type ProtoConcept struct {
 // NewREMConsolidator cria um novo consolidador REM
 func NewREMConsolidator(neo4j *graph.Neo4jClient, krylov *krylovmem.KrylovMemoryManager) *REMConsolidator {
 	return &REMConsolidator{
-		neo4j:  neo4j,
-		krylov: krylov,
-		tau:    90.0,
-		minHot: 5,
+		neo4j:     neo4j,
+		krylov:    krylov,
+		tau:       90.0,
+		minHot:    5,
+		srcConfig: DefaultSelectiveReplayConfig(),
+		hebbian:   NewHebbianStrengthener(neo4j, 1.5),
 	}
 }
 
@@ -91,10 +99,20 @@ func (r *REMConsolidator) ConsolidateNightly(ctx context.Context, patientID int6
 		return result, nil
 	}
 
-	// 2. Replay: re-processar embeddings no Krylov (simula "sonhar" = re-ativar padroes)
-	for _, mem := range hotMemories {
-		if len(mem.Embedding) > 0 {
-			_ = r.krylov.UpdateSubspace(mem.Embedding)
+	// 2. SRC Selective Replay: prioritize dissonant memories (Tadros et al., 2022)
+	if r.srcConfig != nil && len(hotMemories) >= 3 {
+		replayResult := r.ExecuteSelectiveReplay(ctx, patientID, hotMemories, r.srcConfig, r.hebbian)
+		if replayResult != nil {
+			result.DissonantMemories = replayResult.DissonantCount
+			result.HebbianEdgesStrengthened = replayResult.HebbianEdges
+			result.AvgDissonance = replayResult.AvgDissonance
+		}
+	} else {
+		// Fallback: replay all (original behavior)
+		for _, mem := range hotMemories {
+			if len(mem.Embedding) > 0 {
+				_ = r.krylov.UpdateSubspace(mem.Embedding)
+			}
 		}
 	}
 
