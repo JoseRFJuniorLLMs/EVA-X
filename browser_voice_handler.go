@@ -222,6 +222,6 @@ Fluxo: Tecnico coleta amostra -> IA analisa imagem -> Medico revisa -> Tratament
 	}()
 
 	// Espera erro de qualquer goroutine
-	<-errChan
-	log.Info().Str("session", sessionID).Msg("Browser voice session ended")
+	sessionErr := <-errChan
+	log.Info().Str("session", sessionID).Err(sessionErr).Msg("Browser voice session ended")
 }
