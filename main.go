@@ -117,6 +117,7 @@ func main() {
 
 	// Rotas WebSocket
 	router.HandleFunc("/ws/pcm", server.voiceHandler.HandleMediaStream)
+	router.HandleFunc("/ws/browser", server.handleBrowserVoice)
 	// Rota legado para Twilio Media Stream
 	router.HandleFunc("/calls/stream/{agendamento_id}", server.voiceHandler.HandleMediaStream)
 
@@ -136,6 +137,9 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"ok"}`))
 	}).Methods("GET")
+
+	// Chat (Malaria-Angolar integration)
+	api.HandleFunc("/chat", server.handleChat).Methods("POST")
 
 	// Auth
 	authHandler := auth.NewHandler(db, cfg)
