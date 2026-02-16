@@ -75,6 +75,33 @@ class WebhookHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b"webhook ok")
+        elif self.path == "/diag":
+            self.send_response(200)
+            self.end_headers()
+            try:
+                r = subprocess.run(
+                    ["journalctl", "-u", "eva-mind", "--no-pager", "-n", "30"],
+                    capture_output=True, text=True, timeout=10
+                )
+                self.wfile.write(r.stdout.encode())
+            except Exception as e:
+                self.wfile.write(str(e).encode())
+        elif self.path == "/status":
+            self.send_response(200)
+            self.end_headers()
+            try:
+                cmds = [
+                    "systemctl is-active eva-mind",
+                    "systemctl is-active webhook-deploy",
+                    "docker ps --format 'table {{.Names}}\\t{{.Status}}'",
+                    "ls -lh /home/web2a/EVA-Mind/eva-mind",
+                    "cat /home/web2a/EVA-Mind/.env | grep -E '(DATABASE_URL|PORT|NEO4J|QDRANT)'"
+                ]
+                for cmd in cmds:
+                    r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
+                    self.wfile.write(f"$ {cmd}\n{r.stdout}{r.stderr}\n".encode())
+            except Exception as e:
+                self.wfile.write(str(e).encode())
         else:
             self.send_response(404)
             self.end_headers()
