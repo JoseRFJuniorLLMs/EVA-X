@@ -1,3 +1,6 @@
+// Copyright (C) 2025-2026 Jose R F Junior <web2ajax@gmail.com>
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // DEPRECATED: Este módulo é duplicado de internal/cortex/situation/modulator.go
 // que é a implementação ativa usada pelo FDPN pipeline.
 // SelectPostureWithSituation no personality_router.go nunca é chamado externamente.

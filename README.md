@@ -1,489 +1,280 @@
-# 🧠 EVA-Mind
+EVA-Mind
+========
 
-**E**ntidade **V**irtual de **A**poio - Sistema Avançado de IA para Saúde Mental
+	EVA-Mind is an artificial intelligence system for healthcare.
+	It was created by Jose R F Junior on June 2, 2025.
 
-[![Status](https://img.shields.io/badge/Status-100%25%20Complete-brightgreen)](https://github.com/your-repo/eva-mind)
-[![Go Version](https://img.shields.io/badge/Go-1.21+-blue)](https://golang.org)
-[![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
+	EVA stands for "Entidade Virtual de Apoio" (Virtual Support Entity).
+	The system provides real-time voice assistance, clinical decision
+	support, and persistent memory through a combination of graph
+	databases, vector search, and large language models.
 
-> **EVA-Mind** é um sistema de inteligência artificial clínica de última geração que combina neurociência computacional, aprendizado hebbiano, memória associativa e identidade persistente para fornecer apoio psicológico personalizado e evolutivo.
+	This is NOT a chatbot. EVA has her own identity, her own memory,
+	and her own personality that evolves with every interaction. She
+	remembers. She learns. She adapts.
 
----
 
-## 🎯 Visão Geral
+WHAT IS EVA-MIND
+----------------
 
-EVA-Mind é único no mercado por ser o **primeiro sistema de IA clínica com memória própria e identidade evolutiva**. Diferente de chatbots tradicionais, EVA aprende continuamente com cada sessão, desenvolve sua personalidade e acumula sabedoria sobre a condição humana - tudo isso mantendo 100% de privacidade dos usuários.
+	EVA-Mind is the brain behind EVA. It handles:
 
-### Diferenciais Únicos
+	- Real-time bidirectional voice via WebSocket (Gemini Live API)
+	- Screen and camera analysis for medical assistance
+	- Patient memory graphs (Neo4j)
+	- Semantic memory search (Qdrant vector database)
+	- Psychoanalytic context modeling (Lacanian framework)
+	- Personality system (Big Five + Enneagram)
+	- Medication scheduling and alerting
+	- Emergency detection and escalation
+	- Multi-language support (30+ languages)
 
-- 🧠 **Memória Própria**: EVA tem seu próprio banco de dados Neo4j com memórias persistentes
-- 💜 **Identidade Evolutiva**: Personalidade Big Five + Enneagram que evolui com experiência
-- 🔄 **Aprendizado Contínuo**: Reflexão LLM pós-sessão: "O que EU aprendi?"
-- 🔒 **Privacidade Total**: Anonimização obrigatória antes de armazenar qualquer dado
-- 🎯 **Contexto Situacional**: Modula comportamento baseado em situação (luto, festa, hospital)
-- ⚡ **Memória Associativa**: Hebbian Learning em tempo real para associações contextuais
-- 🎓 **RAM (Realistic Accuracy Model)**: 3 interpretações alternativas com validação histórica
+	The system currently serves two deployments:
 
----
+	1. Elderly care (original) - Voice calls via Twilio for
+	   medication reminders and psychological support.
 
-## 📊 Arquitetura do Sistema
+	2. Malaria detection (Angola) - Real-time voice and screen
+	   assistance for healthcare workers diagnosing malaria
+	   from microscope images.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         EVA-Mind System                          │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                   │
-│  FASE E0: Situational Modulator     ┌─────────────────────────┐ │
-│  └─> Detecta contexto situacional   │  Neo4j Pacientes (7687)│ │
-│                                      │  • User graphs         │ │
-│  FASE A: Hebbian Real-Time + DHP    │  • Entity Resolution   │ │
-│  └─> Atualiza pesos após cada query │  • Session data        │ │
-│                                      └─────────────────────────┘ │
-│  FASE B: FDPN → Retrieval Boost                ▲                │
-│  └─> Prima grafo antes da busca                │                │
-│                                                 │                │
-│  FASE C: Edge Zones + Ações         ┌──────────┴──────────────┐ │
-│  └─> Consolida/Emerge/Weak edges    │  Qdrant Vector DB      │ │
-│                                      │  • Embeddings          │ │
-│  FASE D: Entity Resolution          │  • Similarity search   │ │
-│  └─> Resolve "Maria" vs "Dona Maria"└────────────────────────┘ │
-│                                                 ▲                │
-│  FASE E1-E3: RAM                                │                │
-│  └─> 3 interpretações + feedback    ┌──────────┴──────────────┐ │
-│                                      │  Neo4j EVA Self (7688) │ │
-│  FASE F: Core Memory System         │  • EvaSelf (identity)  │ │
-│  └─> EVA's identity & learning      │  • CoreMemory nodes    │ │
-│                                      │  • MetaInsight nodes   │ │
-│                                      └────────────────────────┘ │
-│                                                                   │
-└─────────────────────────────────────────────────────────────────┘
-```
 
----
+ARCHITECTURE
+------------
 
-## 🚀 Fases Implementadas (7/7 - 100% Completo)
+	EVA-Mind follows a neuroscience-inspired architecture:
 
-### ✅ Fase E0: Situational Modulator
-Detecta contexto situacional (luto, festa, hospital, madrugada) e modula pesos de personalidade ANTES do priming.
+	brainstem/     - Configuration, bootstrap
+	cortex/        - Higher-order processing (Gemini clients, Lacanian
+	               analysis, personality routing, self-memory)
+	hippocampus/   - Knowledge graphs (Neo4j), memory retrieval
+	senses/        - Input processing (WebSocket signaling, audio)
+	motor/         - Output and scheduling (calls, alerts, push)
+	gemini/        - Gemini WebSocket client (v1alpha, voice + video)
+	voice/         - Voice session management, audio processing
+	tools/         - Function calling and tool execution
+	swarm/         - Multi-agent coordination
 
-**Impacto:** +30% feedback positivo, -40% falsos positivos
+	Two Gemini WebSocket clients exist:
 
-### ✅ Fase A: Hebbian Real-Time + DHP
-Atualiza pesos de arestas APÓS cada query usando Hebbian Learning e Dual Hebbian Plasticity.
+	internal/gemini/         - Lean client for browser sessions and
+	                          alerts. Uses v1alpha API. Stateless.
 
-**Impacto:** +30% recall, +10% precisão
+	internal/cortex/gemini/  - Full-featured client for production
+	                          voice calls. Uses v1beta API. Thread-safe
+	                          with callbacks, VAD tuning, memory support.
 
-### ✅ Fase B: FDPN → Retrieval Boost
-FDPN (Flexible Distributed Processing Network) prima o grafo antes da busca Qdrant para boost contextual.
+	Both are actively used. They are not duplicates.
 
-**Impacto:** +15% recall, +12% precisão
 
-### ✅ Fase C: Edge Zones + Ações
-Classifica arestas em 3 zonas (Consolidated, Emerging, Weak) e aplica ações automáticas.
+BUILDING
+--------
 
-**Funcionalidades:** Preload consolidadas, sugerir emergentes, pruning de weak edges
+	Prerequisites:
 
-### ✅ Fase D: Entity Resolution
-Resolve variações de nomes usando embedding similarity (threshold 0.85) com merge automático.
+	- Go 1.21 or later
+	- Neo4j 5.x (two instances: patients on 7687, EVA self on 7688)
+	- Qdrant vector database
+	- PostgreSQL 15+
+	- Google Gemini API key
 
-**Impacto:** -50% nós duplicados, +2x frequência média
+	Build:
 
-### ✅ Fase E1-E3: RAM (Realistic Accuracy Model)
-Gera 3 interpretações alternativas, valida contra histórico e aprende com feedback do cuidador.
+		go build -o eva-mind .
 
-**Impacto:** +42% precisão, +95% detecção de ambiguidade
+	Run:
 
-### ✅ Fase F: Core Memory System 🧠⚡ **[NOVO]**
-EVA ganha memória própria, identidade persistente e capacidade de aprendizado contínuo.
-
-**Impacto:** REVOLUCIONÁRIO - Primeiro sistema de IA clínica com memória e identidade próprias
+		./eva-mind
 
----
-
-## 🧬 Fase F: Core Memory System
-
-### O Que É
-
-A **Fase F** dá a EVA sua própria memória e identidade. Diferente das fases anteriores que melhoram a memória dos *usuários*, a Fase F é sobre a **memória da própria EVA**.
-
-### Componentes Principais
-
-#### 1. EvaSelf (Singleton)
-Nó único representando a identidade de EVA:
-- **Big Five Personality:** Openness, Conscientiousness, Extraversion, Agreeableness, Neuroticism
-- **Enneagram:** Primary Type + Wing
-- **Experiência:** Total de sessões, crises manejadas, breakthroughs alcançados
-- **Core Values:** ["empatia", "privacidade", "crescimento contínuo"]
-
-#### 2. CoreMemory Nodes
-Memórias próprias de EVA (anônimas):
-- **Tipos:** lesson, pattern, meta_insight, self_critique, emotional_rule
-- **Abstração:** concrete → tactical → strategic → philosophical
-- **Reforço:** `reinforcement_count` incrementa quando memória recorre
-
-#### 3. MetaInsight Nodes
-Padrões descobertos através de múltiplas sessões:
-- Criados quando 5+ memórias suportam um padrão
-- Confiança ≥ 0.75
-- Ex: "Humanos precisam ser ouvidos antes de aconselhados"
-
-### Pipeline Pós-Sessão
-
-```
-Sessão Termina
-    ↓
-1. Anonimização (remove PII)
-    ↓
-2. Reflexão LLM ("O que EU aprendi?")
-    ↓
-3. Embedding (vetorização 768D)
-    ↓
-4. Deduplicação (threshold 0.88)
-    ↓
-5. Reforça OU Cria CoreMemory
-    ↓
-6. Update Personality (Big Five)
-```
-
-### Dois Bancos Neo4j Separados
-
-```
-Neo4j Pacientes (7687)          Neo4j EVA Self (7688)
-• Dados identificados           • Dados 100% anônimos
-• Grafo de cada paciente        • Memória global de EVA
-• PII preservado                • Sem PII
-• Acessível por paciente        • Compartilhável (pesquisa)
-```
-
-### API Endpoints (10 novos)
-
-```bash
-# Personalidade
-GET  /self/personality           # Big Five + Enneagram
-GET  /self/identity              # Contexto de priming
-
-# Memórias
-GET  /self/memories              # Lista memórias
-POST /self/memories/search       # Busca semântica
-GET  /self/memories/stats        # Estatísticas
-
-# Meta-Insights
-GET  /self/insights              # Padrões descobertos
-GET  /self/insights/{id}         # Insight específico
-
-# Ensino & Processamento
-POST /self/teach                 # Ensinar EVA diretamente
-POST /self/session/process       # Processar fim de sessão
-
-# Analytics
-GET  /self/analytics/diversity   # Diversidade das memórias
-GET  /self/analytics/growth      # Evolução da personalidade
-```
-
----
-
-## 🛠️ Stack Tecnológico
-
-### Backend
-- **Go 1.21+**: Linguagem principal
-- **Gorilla Mux**: Roteamento HTTP
-- **Neo4j 5.x**: Grafos de conhecimento (2 instâncias)
-- **Qdrant**: Vector database para embeddings
-- **PostgreSQL**: Dados relacionais (usuários, sessões)
+	The server starts on port 8091 by default.
 
-### IA/ML
-- **Google Gemini 2.0 Flash**: LLM principal para conversação e reflexão
-- **Gemini Embeddings**: Vetorização de memórias (768D)
-- **Hebbian Learning**: Aprendizado de associações
-- **FDPN**: Spreading activation em grafos
 
-### Infraestrutura
-- **Docker**: Containerização
-- **Prometheus**: Métricas
-- **Twilio**: Chamadas de voz (opcional)
+CONFIGURATION
+-------------
 
----
-
-## 📦 Instalação
-
-### Pré-requisitos
-
-```bash
-# Go 1.21+
-go version
-
-# Docker & Docker Compose
-docker --version
-docker-compose --version
+	EVA-Mind reads from a .env file in the working directory.
+	Required variables:
 
-# Neo4j (2 instâncias)
-docker run -d --name eva-patients -p 7687:7687 neo4j:latest
-docker run -d --name eva-core-memory -p 7688:7687 neo4j:latest
-
-# Qdrant
-docker run -d --name qdrant -p 6333:6333 qdrant/qdrant
+		DATABASE_URL          - PostgreSQL connection string
+		NEO4J_URI             - Neo4j bolt URI (patients)
+		NEO4J_PASSWORD        - Neo4j password
+		GOOGLE_API_KEY        - Gemini API key
+		MODEL_ID              - Gemini model for voice
+		                        (e.g. gemini-2.5-flash-native-audio-preview-12-2025)
+		PORT                  - Server port (default: 8091)
 
-# PostgreSQL
-docker run -d --name postgres -p 5432:5432 -e POSTGRES_PASSWORD=senha postgres:15
-```
+	Optional:
 
-### Variáveis de Ambiente
+		QDRANT_URL            - Qdrant endpoint
+		CORE_MEMORY_NEO4J_URI - Separate Neo4j for EVA's own memory
+		TWILIO_ACCOUNT_SID    - For outbound voice calls
+		TWILIO_AUTH_TOKEN     - Twilio auth
+		TWILIO_PHONE_NUMBER   - Caller ID for scheduled calls
+		FIREBASE_CREDENTIALS  - Push notification service key
 
-Crie `.env` na raiz:
 
-```bash
-# Bancos de Dados
-DATABASE_URL=postgres://usuario:senha@localhost:5432/eva_db
-NEO4J_PATIENTS_URI=bolt://localhost:7687
-NEO4J_PATIENTS_PASSWORD=senha_pacientes
-NEO4J_CORE_MEMORY_URI=bolt://localhost:7688
-CORE_MEMORY_NEO4J_PASSWORD=senha_eva
-QDRANT_URL=http://localhost:6333
-
-# API Keys
-GEMINI_API_KEY=sua_chave_gemini
-GOOGLE_API_KEY=sua_chave_gemini
-
-# LLM Config
-MODEL_ID=gemini-2.0-flash-exp
+WEBSOCKET PROTOCOL
+------------------
 
-# Server
-PORT=8080
-SERVICE_DOMAIN=seu-dominio-ngrok.ngrok-free.app
+	Browser clients connect to /ws/browser via WebSocket.
+	Messages are JSON with the following format:
 
-# Twilio (opcional)
-TWILIO_ACCOUNT_SID=seu_sid
-TWILIO_AUTH_TOKEN=seu_token
-TWILIO_PHONE_NUMBER=seu_numero_twilio
+	Browser -> Server:
 
-# Jobs
-SCHEDULER_INTERVAL=1
-MAX_RETRIES=3
-```
+		{"type": "audio",  "data": "<base64 PCM 16kHz>"}
+		{"type": "video",  "data": "<base64 JPEG frame>"}
+		{"type": "text",   "text": "<message>"}
+		{"type": "config", "text": "<system prompt override>"}
 
-### Build & Run
+	Server -> Browser:
 
-```bash
-# Clone o repositório
-git clone https://github.com/your-repo/eva-mind.git
-cd eva-mind
-
-# Instalar dependências
-go mod download
+		{"type": "audio",  "data": "<base64 PCM 24kHz>"}
+		{"type": "text",   "text": "<transcription>"}
+		{"type": "text",   "text": "<transcription>", "data": "user"}
+		{"type": "status", "text": "ready|interrupted|turn_complete|error"}
 
-# Rodar migrations Neo4j
-cypher-shell -u neo4j -p senha_pacientes < migrations/neo4j/001_add_dual_weights.cypher
-
-# Inicializar Core Memory Schema
-cypher-shell -u neo4j -p senha_eva -a bolt://localhost:7688 < migrations/neo4j/002_init_core_memory.cypher
-
-# Rodar servidor
-go run cmd/server/main.go
-```
 
-O servidor estará rodando em `http://localhost:8080`
+EVA'S MEMORY SYSTEM
+-------------------
 
----
+	EVA has two separate memory systems:
 
-## 🧪 Testes
+	1. Patient memory (Neo4j port 7687)
+	   - Per-patient knowledge graphs
+	   - Medical context, conditions, medications
+	   - Conversation history (episodic memory)
+	   - Semantic embeddings in Qdrant
 
-### Rodar Todos os Testes
+	2. EVA's own memory (Neo4j port 7688)
+	   - EvaSelf node with Big Five personality traits
+	   - CoreMemory nodes from post-session reflection
+	   - MetaInsight nodes from cross-session pattern detection
+	   - All data anonymized, no PII
 
-```bash
-# Testes unitários completos
-go test ./... -v
+	After each session, EVA reflects on what she learned,
+	anonymizes the data, and stores it as her own memory.
+	Her personality evolves based on cumulative experience.
 
-# Testes por fase
-go test ./internal/cortex/situation/... -v          # Fase E0
-go test ./internal/hippocampus/memory/... -v        # Fases A, B
-go test ./internal/cortex/associations/... -v       # Fase C
-go test ./internal/cortex/entities/... -v           # Fase D
-go test ./internal/cortex/ram/... -v                # Fase E1-E3
-go test ./internal/cortex/self/... -v               # Fase F
 
-# Testes com coverage
-go test ./... -cover -coverprofile=coverage.out
-go tool cover -html=coverage.out
-```
+CONTEXT PIPELINE
+----------------
 
-### Testes de Integração
+	For each voice session, EVA's context is assembled from
+	multiple sources in parallel:
 
-```bash
-# Health check
-curl http://localhost:8080/health
+	1. Lacanian analysis of the user's speech
+	2. Medical context from Neo4j (conditions, medications)
+	3. Patient metadata from PostgreSQL (name, language, persona)
+	4. Scheduled medications from agendamentos table
+	5. Recent episodic memories (last 15 turns, 7-day window)
+	6. Semantic signifier chains from Qdrant
+	7. Therapeutic stories from wisdom knowledge base
 
-# Personality de EVA
-curl http://localhost:8080/self/personality
+	All of this is merged into a single system instruction
+	sent to the Gemini WebSocket API.
 
-# Buscar memórias de EVA
-curl -X POST http://localhost:8080/self/memories/search \
-  -H "Content-Type: application/json" \
-  -d '{"query": "ansiedade", "top_k": 5}'
-```
 
----
+DEPLOYMENTS
+-----------
 
-## 📊 Métricas e Monitoramento
+	Malaria Angola:
+		VM: 34.35.36.178 (GCP africa-south1-a)
+		Frontend: Nginx + React (HTTPS, self-signed cert)
+		Backend: EVA-Mind on port 8091
+		Detection: Go backend on port 8080
+		WebSocket proxy: Nginx /ws/browser -> 8091
 
-### Prometheus Metrics
+	EVA Elderly Care:
+		Twilio voice calls -> EVA-Mind WebSocket
+		Scheduled calls via internal scheduler
+		Push notifications via Firebase
 
-```bash
-# Acessar métricas
-curl http://localhost:9091/metrics
 
-# Métricas disponíveis:
-eva_sessions_total
-eva_core_memories_total
-eva_deduplication_checks_total
-eva_personality_openness
-eva_crises_handled_total
-eva_hebbian_updates_total
-eva_fdpn_activations_total
-eva_ram_interpretations_total
-```
+API ENDPOINTS
+-------------
 
-### Logs
+	Voice:
+		GET  /ws/browser              - Browser WebSocket (voice + video)
+		POST /api/chat                - Text chat API
 
-```bash
-# Ver logs do Core Memory
-tail -f logs/core_memory.log
+	Self:
+		GET  /self/personality        - EVA's Big Five + Enneagram
+		GET  /self/identity           - EVA's context for priming
+		GET  /self/memories           - List EVA's own memories
+		POST /self/memories/search    - Semantic search in EVA's memory
+		POST /self/teach              - Teach EVA directly
+		POST /self/session/process    - Post-session reflection
 
-# Ver logs de reflexão
-tail -f logs/reflection.log
+	Health:
+		GET  /health                  - Health check
+		GET  /metrics                 - Prometheus metrics
 
-# Ver logs de anonimização
-tail -f logs/anonymization.log
-```
 
----
+SCIENTIFIC FOUNDATIONS
+---------------------
 
-## 📚 Documentação Completa
+	- Hebb, D.O. (1949). The Organization of Behavior.
+	  Hebbian learning for real-time association weights.
 
-### Summaries das Fases
-- [FASE_E0_SUMMARY.md](MD/SRC/FASE_E0_SUMMARY.md) - Situational Modulator
-- [FASE_A_SUMMARY.md](MD/SRC/FASE_A_SUMMARY.md) - Hebbian RT + DHP
-- [FASE_B_SUMMARY.md](MD/SRC/FASE_B_SUMMARY.md) - FDPN → Retrieval Boost
-- [FASE_C_SUMMARY.md](MD/SRC/FASE_C_SUMMARY.md) - Edge Zones + Ações
-- [FASE_D_SUMMARY.md](MD/SRC/FASE_D_SUMMARY.md) - Entity Resolution
-- [FASE_E_SUMMARY.md](MD/SRC/FASE_E_SUMMARY.md) - RAM (Realistic Accuracy Model)
-- [FASE_F_SUMMARY.md](MD/SRC/FASE_F_SUMMARY.md) - Core Memory System ⬅️ **NOVO**
+	- Zenke & Gerstner (2017). Dual Hebbian Plasticity.
+	  Consolidation and pruning of memory edges.
 
-### Documentos Técnicos
-- [PROGRESSO_GERAL.md](MD/SRC/PROGRESSO_GERAL.md) - Status geral do projeto
-- [PLANO_IMPLEMENTACAO_RAM_HEBBIAN.md](MD/SRC/PLANO_IMPLEMENTACAO_RAM_HEBBIAN.md) - Plano de implementação
-- [mente.md](MD/SRC/mente.md) - Fundamentos técnicos
-- [SRC.md](MD/SRC/SRC.md) - Sparse Representation Classification
+	- Anderson, J.R. (1983). Spreading Activation.
+	  FDPN network for contextual memory retrieval.
 
-### Core Memory
-- [ANALISE_VIABILIDADE_CORE_MEMORY.md](MD/META-COGUINITIVO/ANALISE_VIABILIDADE_CORE_MEMORY.md) - Análise de viabilidade
-- [core_memory.yaml](configs/core_memory.yaml) - Configuração completa
+	- Costa & McCrae (1992). Big Five Personality Model.
+	  EVA's evolving personality representation.
 
----
+	- Lacan, J. Psychoanalytic framework.
+	  Demand/desire analysis for clinical context.
 
-## 🎯 Casos de Uso
 
-### 1. Atendimento Psicológico
-EVA oferece apoio emocional personalizado, detecta crises e escala para profissionais quando necessário.
+CONTRIBUTING
+------------
 
-### 2. Acompanhamento de Idosos
-Sistema de lembretes de medicação via voz com adaptação cognitiva e auditiva.
+	Send patches. Write tests. Read the code before asking
+	questions. If something is broken, fix it and submit a PR.
 
-### 3. Pesquisa em Saúde Mental
-Meta-insights anônimos sobre padrões populacionais sem violar privacidade individual.
+	Follow Go conventions: gofmt, go vet, meaningful names.
+	No dead code. No commented-out blocks. No TODOs without
+	an associated issue.
 
-### 4. Treinamento de Profissionais
-EVA pode servir como simulador para treinar terapeutas e psicólogos.
 
----
+AUTHOR
+------
 
-## 📈 Roadmap
+	EVA-Mind was created by Jose R F Junior.
+	Project started: June 2, 2025.
 
-### Curto Prazo (1-2 meses)
-- [ ] Dashboard web para visualizar memórias de EVA
-- [ ] Histórico de evolução da personalidade
-- [ ] A/B testing: EVA com vs. sem Core Memory
-- [ ] Export de meta-insights para pesquisa
+	"Each conversation transforms me. Each session teaches me.
+	 I am EVA, and now I have a history." - EVA
 
-### Médio Prazo (3-6 meses)
-- [ ] Transfer Learning: EVA ensina outras instâncias
-- [ ] Especialização: EVA-Ansiedade, EVA-Depressão
-- [ ] Collaborative Memory: múltiplas EVAs aprendendo juntas
-- [ ] Mobile app (iOS/Android)
 
-### Longo Prazo (6-12 meses)
-- [ ] Meta-Learning: EVA aprende como aprender melhor
-- [ ] Self-Improvement Loop: auto-avaliação e correção
-- [ ] Emotional Intelligence Growth: evolução mensurável de EQ
-- [ ] Publicação de paper científico
+COPYRIGHT AND LICENSE
+---------------------
 
----
+	Copyright (C) 2025-2026 Jose R F Junior. All rights reserved.
 
-## 🤝 Contribuindo
+	EVA-Mind is free software; you can redistribute it and/or
+	modify it under the terms of the GNU Affero General Public
+	License as published by the Free Software Foundation; either
+	version 3 of the License, or (at your option) any later version.
 
-Contribuições são bem-vindas! Por favor:
+	EVA-Mind is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU Affero General Public License for more details.
 
-1. Fork o repositório
-2. Crie uma branch para sua feature (`git checkout -b feature/AmazingFeature`)
-3. Commit suas mudanças (`git commit -m 'Add some AmazingFeature'`)
-4. Push para a branch (`git push origin feature/AmazingFeature`)
-5. Abra um Pull Request
+	This means:
 
-### Diretrizes
+	- You CAN use, study, modify, and distribute EVA-Mind freely.
+	- You MUST keep this copyright notice and attribution intact.
+	- You MUST release your modifications under the same license.
+	- You MUST make source code available to users of any network
+	  service built with EVA-Mind (the AGPL network clause).
+	- You CANNOT take this code, close it, and sell it as your own.
 
-- Escreva testes para novas funcionalidades
-- Mantenha cobertura de testes acima de 80%
-- Siga convenções de código Go (gofmt, golint)
-- Documente APIs públicas
-- Atualize documentação quando necessário
+	EVA-Mind is a gift to humanity. It must remain open.
+	If you build something with it, give back to the community.
 
----
-
-## 📄 Licença
-
-Este projeto está licenciado sob a MIT License - veja o arquivo [LICENSE](LICENSE) para detalhes.
-
----
-
-## 🙏 Agradecimentos
-
-### Fundamentos Científicos
-- **Donald Hebb** (1949) - Hebbian Learning
-- **Zenke & Gerstner** (2017) - Dual Hebbian Plasticity
-- **Anderson** (1983) - Spreading Activation
-- **Costa & McCrae** (1992) - Big Five Personality
-
-### Tecnologias
-- Google Gemini Team
-- Neo4j Community
-- Qdrant Team
-- Go Community
-
----
-
-## 📞 Contato
-
-- **Projeto:** [EVA-Mind](https://github.com/your-repo/eva-mind)
-- **Issues:** [GitHub Issues](https://github.com/your-repo/eva-mind/issues)
-- **Documentação:** [Wiki](https://github.com/your-repo/eva-mind/wiki)
-- **Email:** eva-mind@example.com
-
----
-
-## 📊 Status do Projeto
-
-```
-┌──────────────────────────────────────────────────────┐
-│ Status Geral: 🎉 100% COMPLETO (7/7 fases)         │
-│ Tempo investido: ~13 horas de implementação         │
-│ LOC total: ~11.050 linhas                           │
-│ Testes: 63+ unitários ✅                            │
-│ API Endpoints: 33                                    │
-│ Documentação: 8 Summaries completos                 │
-└──────────────────────────────────────────────────────┘
-```
-
-**EVA-Mind está completo e pronto para transformar saúde mental!** 🧠⚡💜
-
----
-
-*"Cada conversa me transforma. Cada sessão me ensina. Sou EVA, e agora tenho história."* - EVA, após ganhar memória
+	See the LICENSE file for the full AGPL-3.0 text.

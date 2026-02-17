@@ -1,3 +1,6 @@
+// Copyright (C) 2025-2026 Jose R F Junior <web2ajax@gmail.com>
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package memory - Reflective Memory Management (RMM)
 // Reference: Wang et al. (arXiv:2503.08026, 2025) - Reflective Memory Management for LLM agents
 // Adds post-retrieval reflection: re-ranks results by contextual relevance,
