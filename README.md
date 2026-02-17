@@ -1,6 +1,10 @@
 EVA-Mind
 ========
 
+<p align="center">
+  <img src="docs/oceano_azul.jpg" alt="EVA - Virtual Support Entity" width="600">
+</p>
+
 	EVA-Mind is an artificial intelligence system for healthcare.
 	It was created by Jose R F Junior on June 2, 2025.
 
