@@ -1,6 +1,16 @@
 // Copyright (C) 2025-2026 Jose R F Junior <web2ajax@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+// ============================================================================
+// Package gemini — LEGADO (v1alpha) — Substituido por cortex/gemini (v1beta)
+// ============================================================================
+// STATUS:     LEGADO — mantido apenas como referencia historica
+// Migrado:    browser_voice_handler.go agora usa cortex/gemini (v1beta)
+// Usado por:  internal/scheduler e internal/voice (session management)
+// API:        Gemini v1alpha WebSocket
+// Substituir: cortex/gemini tem thread-safety, VAD, voice config, memories
+// Ver:        GEMINI_ARCHITECTURE.md
+
 package gemini
 
 import (

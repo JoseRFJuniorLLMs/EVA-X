@@ -17,6 +17,7 @@ import (
 	"eva-mind/internal/brainstem/infrastructure/graph"
 	"eva-mind/internal/brainstem/infrastructure/vector"
 	"eva-mind/internal/brainstem/push"
+	"eva-mind/internal/cortex/eva_memory"
 	"eva-mind/internal/cortex/gemini"
 	"eva-mind/internal/cortex/lacan"
 	"eva-mind/internal/cortex/personality"
@@ -48,6 +49,7 @@ type SignalingServer struct {
 	personalityService *personality.PersonalityService
 	narrativeShift     *lacan.NarrativeShiftDetector
 	vsm                *VideoSessionManager
+	evaMemory          *eva_memory.EvaMemory
 }
 
 func main() {
@@ -90,8 +92,25 @@ func main() {
 	voice.InitSessionManager(logger)
 
 	// 6. Memory & Personality Stores
-	memoryStore := memory.NewMemoryStore(db.Conn, nil, qdrantClient)
+	var graphStore *memory.GraphStore
+	if neo4jClient != nil {
+		graphStore = memory.NewGraphStore(neo4jClient, cfg)
+		log.Info().Msg("🧠 GraphStore conectado ao Neo4j")
+	}
+	memoryStore := memory.NewMemoryStore(db.Conn, graphStore, qdrantClient)
 	personalitySvc := personality.NewPersonalityService(db.Conn)
+
+	// 6.1 EVA Meta-Cognitive Memory (Neo4j)
+	var evaMemSvc *eva_memory.EvaMemory
+	if neo4jClient != nil {
+		evaMemSvc = eva_memory.New(neo4jClient)
+		if err := evaMemSvc.InitSchema(context.Background()); err != nil {
+			log.Warn().Err(err).Msg("EVA Memory schema init warning")
+		}
+		log.Info().Msg("🧠 EVA Meta-Cognitive Memory inicializada")
+	} else {
+		log.Warn().Msg("⚠️ EVA Memory desabilitada (Neo4j indisponivel)")
+	}
 
 	// 7. Cognitive Services
 	signifierService := lacan.NewSignifierService(neo4jClient)
@@ -110,6 +129,7 @@ func main() {
 		personalityService: personalitySvc,
 		narrativeShift:     narrativeShiftDetector,
 		vsm:                NewVideoSessionManager(),
+		evaMemory:          evaMemSvc,
 	}
 
 	// 9. Router & Servidor HTTP
@@ -121,6 +141,7 @@ func main() {
 	// Rotas WebSocket
 	router.HandleFunc("/ws/pcm", server.voiceHandler.HandleMediaStream)
 	router.HandleFunc("/ws/browser", server.handleBrowserVoice)
+	router.HandleFunc("/ws/eva", server.handleEvaChat)
 	router.HandleFunc("/ws/logs", server.handleLogStream)
 	// Rota legado para Twilio Media Stream
 	router.HandleFunc("/calls/stream/{agendamento_id}", server.voiceHandler.HandleMediaStream)
