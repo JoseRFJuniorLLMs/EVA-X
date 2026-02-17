@@ -62,7 +62,6 @@ nohup.out
 data/*.db
 
 # Folders excluded from GitHub (private, never push)
-MD/
 workflows/
 clients/python/
 data/
