@@ -148,6 +148,9 @@ func (c *Client) SendSetup(instructions string, voiceSettings map[string]interfa
 					return parts
 				}(),
 			},
+			"tools": []interface{}{
+				map[string]interface{}{"google_search": map[string]interface{}{}},
+			},
 		},
 	}
 
