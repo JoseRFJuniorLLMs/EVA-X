@@ -1,3 +1,6 @@
+// Copyright (C) 2025-2026 Jose R F Junior <web2ajax@gmail.com>
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package lacan - Narrative Shift Detection
 // Reference: "Detecting Narrative Shifts through Persistent Structures" (arXiv:2506.14836, 2025)
 // Simplified for single-conversation density: uses embedding-based shift detection

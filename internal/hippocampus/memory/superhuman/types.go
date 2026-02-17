@@ -1,3 +1,6 @@
+// Copyright (C) 2025-2026 Jose R F Junior <web2ajax@gmail.com>
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package superhuman implements the 12 memory systems for EVA
 // PRINCIPLE: EVA has no ego. EVA is a mirror.
 // All memory is about the PATIENT, not about EVA.

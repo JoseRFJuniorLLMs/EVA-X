@@ -1,3 +1,6 @@
+// Copyright (C) 2025-2026 Jose R F Junior <web2ajax@gmail.com>
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package situation - Situational Modulator
 // Detecta contexto situacional e modula pesos de personality em tempo real
 // Baseado em mente.md - Performance-first design (<10ms latency)

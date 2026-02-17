@@ -1,3 +1,6 @@
+// Copyright (C) 2025-2026 Jose R F Junior <web2ajax@gmail.com>
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package memory - Dual Weight System (DHP)
 // Differential Hebbian Plasticity: slow_weight (fixo) + fast_weight (dinâmico)
 // Baseado em Zenke & Gerstner (2017)

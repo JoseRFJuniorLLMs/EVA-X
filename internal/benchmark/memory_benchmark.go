@@ -1,3 +1,6 @@
+// Copyright (C) 2025-2026 Jose R F Junior <web2ajax@gmail.com>
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package benchmark implements a LongMemEval-inspired benchmark framework for EVA-Memory retrieval.
 // Reference: Zep arXiv:2501.13956 (2025) - Temporal Knowledge Graph benchmarks
 package benchmark

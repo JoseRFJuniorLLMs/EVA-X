@@ -1,3 +1,6 @@
+// Copyright (C) 2025-2026 Jose R F Junior <web2ajax@gmail.com>
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package consolidation - Hebbian Strengthening
 // "Neurons that fire together, wire together" — Donald Hebb, 1949
 // Boosts edge weights between co-activated memory nodes during selective replay.
