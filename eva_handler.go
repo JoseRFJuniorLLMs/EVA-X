@@ -67,6 +67,31 @@ func (s *SignalingServer) handleEvaChat(w http.ResponseWriter, r *http.Request) 
 
 	sessionID := "eva-" + time.Now().Format("20060102150405")
 
+	// Espera primeira mensagem do cliente (deve ser tipo "config" com CPF)
+	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	_, configBytes, err := conn.ReadMessage()
+	conn.SetReadDeadline(time.Time{})
+	if err != nil {
+		log.Error().Err(err).Msg("[EVA] Timeout esperando config do cliente")
+		conn.WriteJSON(evaMessage{Type: "status", Text: "error: config timeout"})
+		return
+	}
+
+	var configMsg evaMessage
+	var clientContext string
+	var clientCPF string
+	if err := json.Unmarshal(configBytes, &configMsg); err == nil && configMsg.Type == "config" {
+		clientContext = configMsg.Text
+		clientCPF = configMsg.Data
+	}
+
+	// Se cliente nao enviou contexto, usa generico minimo
+	if clientContext == "" {
+		clientContext = "Voce e a EVA, assistente virtual inteligente. Responda em portugues de forma clara e profissional."
+	}
+
+	log.Info().Str("session", sessionID).Str("cpf", clientCPF).Bool("hasContext", configMsg.Text != "").Msg("[EVA] Config recebida do cliente")
+
 	// Carregar memoria meta-cognitiva do Neo4j
 	var memories []string
 	if s.evaMemory != nil {
@@ -83,49 +108,16 @@ func (s *SignalingServer) handleEvaChat(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	// Contexto medico completo - livro "A Malaria em Angola" Dr. Ketsio Vaz
-	malariaContext := `Voce e a EVA, assistente medica inteligente do Sistema de Gestao de Malaria de Angola.
-Responda em portugues, de forma clara e profissional.
-Voce domina todo o conteudo do livro "A Malaria em Angola" do Dr. Ketsio Vaz.
-Responda perguntas sobre malaria, diagnostico, tratamento, epidemiologia e uso do sistema.
-
-Voce possui memoria meta-cognitiva: lembra de conversas anteriores e reconhece padroes.
-Se tiver memorias de sessoes passadas, use-as para contextualizar suas respostas.
-
-=== ESPECIES EM ANGOLA ===
-P. falciparum: 92% dos casos, incubacao 9-14 dias, mais grave e letal.
-P. vivax: 7%, incubacao 12-18 dias.
-P. malariae: 1%, incubacao 18-40 dias.
-P. ovale: presente mas nao documentado oficialmente.
-Vector principal: complexo Anopheles gambiae e Anopheles funestus.
-
-=== DIAGNOSTICO ===
-Gota Espessa (GE): padrao-ouro, detecta parasitemia baixa, quantifica parasitas.
-Esfregaco Sanguineo: identifica especie de Plasmodium.
-Teste Rapido (TDR): detecta HRP-2 ou pLDH. Resultado em 15-20 min.
-Parasitemia: leve (<1%), moderada (1-5%), grave (>5%).
-
-=== TRATAMENTO NAO COMPLICADO ===
-1a linha: Artemeter + Lumefantrina (AL): 1a escolha em Angola.
-Alternativas: Artesunato + Amodiaquina, DHA + Piperaquina.
-
-=== TRATAMENTO GRAVE ===
-EMERGENCIA MEDICA. Artesunato EV/IM 2.4 mg/kg nos tempos 0h, 12h, 24h.
-Minimo 24h parenteral antes de trocar para ACT oral.
-
-=== FLUXO DO SISTEMA ===
-Tecnico coleta amostra → IA analisa imagem microscopica → Detecta parasitas e especie → Medico revisa → Prescricao de tratamento.`
-
-	// Setup com cortex/gemini (5 params: instructions, voiceSettings, memories, initialAudio, toolsDef)
+	// Setup com cortex/gemini — contexto vem do frontend, memoria do Neo4j
 	err = geminiClient.SendSetup(
-		malariaContext,
+		clientContext,
 		map[string]interface{}{
 			"voiceName":    "Aoede",
 			"languageCode": "pt-BR",
 		},
-		memories, // memoria meta-cognitiva carregada do Neo4j
-		"",       // initialAudio
-		nil,      // toolsDef - futuro: tools de malaria
+		memories,
+		"",
+		nil,
 	)
 	if err != nil {
 		log.Error().Err(err).Msg("Erro ao configurar cortex/gemini para EVA")
