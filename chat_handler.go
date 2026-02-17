@@ -11,6 +11,16 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// ============================================================================
+// geminiSemMemoria — Chat REST Stateless para Malaria-Angolar
+// ============================================================================
+// Consumer:  geminiSemMemoria
+// Rota:      POST /api/chat
+// Client:    internal/cortex/gemini → AnalyzeText() (REST v1beta, nao WebSocket)
+// Frontend:  Malaria-Angolar (qualquer componente)
+// Protocolo: REST HTTP — request/response simples, sem sessao, sem streaming
+// Ver:       GEMINI_ARCHITECTURE.md para documentacao completa
+
 // chatRequest representa o body do POST /api/chat
 type chatRequest struct {
 	CPF     string `json:"cpf"`

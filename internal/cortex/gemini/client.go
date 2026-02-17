@@ -1,6 +1,16 @@
 // Copyright (C) 2025-2026 Jose R F Junior <web2ajax@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+// ============================================================================
+// Package gemini (cortex) — Client Producao (v1beta)
+// ============================================================================
+// Usado por:  geminiWeb (eva_handler.go → /ws/eva)
+//             geminiSemMemoria (chat_handler.go → /api/chat via REST)
+// API:        Gemini v1beta WebSocket + REST
+// Proposito:  Client thread-safe com mutex, callbacks, VAD, tools e memoria
+// SendSetup:  5 params (instructions, voiceSettings, memories, initialAudio, toolsDef)
+// Ver:        GEMINI_ARCHITECTURE.md
+
 package gemini
 
 import (
@@ -11,6 +21,7 @@ import (
 	"eva-mind/internal/tools"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -120,11 +131,22 @@ func (c *Client) SendSetup(instructions string, voiceSettings map[string]interfa
 				"temperature": 0.6,
 			},
 			"system_instruction": map[string]interface{}{
-				"parts": []interface{}{
-					map[string]interface{}{
-						"text": instructions,
-					},
-				},
+				"parts": func() []interface{} {
+					// Instrucoes base
+					parts := []interface{}{
+						map[string]interface{}{
+							"text": instructions,
+						},
+					}
+					// Memoria meta-cognitiva: injeta como parte adicional do system_instruction
+					if len(memories) > 0 {
+						memoryText := strings.Join(memories, "\n")
+						parts = append(parts, map[string]interface{}{
+							"text": memoryText,
+						})
+					}
+					return parts
+				}(),
 			},
 		},
 	}
@@ -167,6 +189,9 @@ func (c *Client) SendSetup(instructions string, voiceSettings map[string]interfa
 	log.Printf("🔧 CONFIGURANDO GEMINI")
 	log.Printf("🎙️ Input: 16kHz PCM16 Mono")
 	log.Printf("🔊 Output: 24kHz PCM16 Mono")
+	if len(memories) > 0 {
+		log.Printf("🧠 Memorias meta-cognitivas: %d blocos injetados", len(memories))
+	}
 	if len(memories) > 0 {
 		log.Printf("🧠 Memórias: %d", len(memories))
 	}

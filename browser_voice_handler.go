@@ -7,15 +7,27 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"eva-mind/internal/gemini"
-	"eva-mind/internal/voice"
+	gemini "eva-mind/internal/cortex/gemini"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	gws "github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
 )
+
+// ============================================================================
+// geminiApp — Voz e Video via WebSocket para App Mobile (EVA-Mobile)
+// ============================================================================
+// Consumer:  geminiApp
+// Rota:      /ws/browser
+// Client:    internal/gemini (v1alpha, simples)
+// Frontend:  App mobile EVA-Mobile
+// Protocolo: WebSocket — audio PCM (16kHz in, 24kHz out) + video JPEG + texto
+// Memoria:   Meta-cognitiva via Neo4j (carrega no inicio, salva transcricoes)
+// CRITICO:   Protocolo WebSocket NAO pode mudar — app mobile depende
+// Ver:       GEMINI_ARCHITECTURE.md para documentacao completa
 
 // browserWSUpgrader permite conexoes de browsers (CORS flexivel)
 var browserWSUpgrader = gws.Upgrader{
@@ -49,16 +61,36 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
-	// Cria sessao Gemini para este browser client
+	// Cria sessao Gemini usando cortex/gemini (v1beta, producao)
 	geminiClient, err := gemini.NewClient(ctx, s.cfg)
 	if err != nil {
-		log.Error().Err(err).Msg("Erro ao criar Gemini client para browser")
+		log.Error().Err(err).Msg("Erro ao criar cortex/gemini client para browser")
 		conn.WriteJSON(browserMessage{Type: "status", Text: "error: " + err.Error()})
 		return
+	}
+	defer geminiClient.Close()
+
+	sessionID := "browser-" + time.Now().Format("20060102150405")
+
+	// Carregar memoria meta-cognitiva do Neo4j
+	var memories []string
+	if s.evaMemory != nil {
+		if err := s.evaMemory.StartSession(ctx, sessionID); err != nil {
+			log.Warn().Err(err).Msg("[BROWSER] Falha ao registrar sessao no Neo4j")
+		}
+		metaCognition, err := s.evaMemory.LoadMetaCognition(ctx)
+		if err != nil {
+			log.Warn().Err(err).Msg("[BROWSER] Falha ao carregar memoria meta-cognitiva")
+		} else if metaCognition != "" {
+			memories = []string{metaCognition}
+			log.Info().Str("session", sessionID).Msg("[BROWSER] Memoria meta-cognitiva injetada")
+		}
 	}
 
 	// Contexto hardcoded baseado no livro "A Malaria em Angola" - Dr. Ketsio Vaz
 	malariaContext := `Voce e a EVA, assistente de voz do Sistema de Gestao de Malaria de Angola.
+Voce possui memoria meta-cognitiva: lembra de conversas anteriores e reconhece padroes.
+Se tiver memorias de sessoes passadas, use-as para contextualizar suas respostas.
 Responda em portugues, de forma breve e conversacional (2-3 frases por resposta).
 Voce domina todo o conteudo do livro "A Malaria em Angola" do Dr. Ketsio Vaz.
 
@@ -159,25 +191,33 @@ Protecao pessoal: repelentes, roupas compridas, telas nas janelas, evitar exposi
 === FLUXO DO SISTEMA ===
 Tecnico coleta amostra de sangue → IA analisa imagem microscopica → Sistema detecta parasitas e especie → Medico revisa resultado → Prescricao de tratamento segundo protocolo.`
 
-	err = geminiClient.SendSetup(malariaContext, nil)
+	// Setup com cortex/gemini (5 params: instructions, voiceSettings, memories, initialAudio, toolsDef)
+	err = geminiClient.SendSetup(
+		malariaContext,
+		map[string]interface{}{
+			"voiceName":    "Aoede",
+			"languageCode": "pt-BR",
+		},
+		memories, // memoria meta-cognitiva carregada do Neo4j
+		"",       // initialAudio
+		nil,      // toolsDef
+	)
 	if err != nil {
 		log.Error().Err(err).Msg("Erro ao configurar Gemini para browser")
 		conn.WriteJSON(browserMessage{Type: "status", Text: "error: setup failed"})
 		return
 	}
 
-	// Armazena sessao para limpeza
-	sessionID := "browser-" + time.Now().Format("20060102150405")
-	voice.StoreSession(sessionID, geminiClient)
-	defer voice.RemoveSession(sessionID)
-
-	log.Info().Str("session", sessionID).Msg("Browser voice session started")
+	log.Info().Str("session", sessionID).Int("memories", len(memories)).Msg("Browser voice session started (cortex/gemini)")
 
 	// Notifica browser que esta pronto
 	conn.WriteJSON(browserMessage{Type: "status", Text: "ready"})
 
 	var writeMu sync.Mutex
 	errChan := make(chan error, 2)
+
+	// Buffer para acumular transcricao da resposta da EVA (para salvar no Neo4j)
+	var responseAccum strings.Builder
 
 	// Goroutine: Gemini -> Browser (audio responses)
 	go func() {
@@ -207,6 +247,7 @@ Tecnico coleta amostra de sangue → IA analisa imagem microscopica → Sistema 
 					writeMu.Lock()
 					conn.WriteJSON(browserMessage{Type: "status", Text: "interrupted"})
 					writeMu.Unlock()
+					responseAccum.Reset()
 					continue
 				}
 
@@ -215,6 +256,12 @@ Tecnico coleta amostra de sangue → IA analisa imagem microscopica → Sistema 
 					writeMu.Lock()
 					conn.WriteJSON(browserMessage{Type: "status", Text: "turn_complete"})
 					writeMu.Unlock()
+
+					// Salvar resposta acumulada no Neo4j
+					if s.evaMemory != nil && responseAccum.Len() > 0 {
+						go s.evaMemory.StoreTurn(ctx, sessionID, "assistant", responseAccum.String())
+					}
+					responseAccum.Reset()
 					continue
 				}
 
@@ -224,6 +271,10 @@ Tecnico coleta amostra de sangue → IA analisa imagem microscopica → Sistema 
 						writeMu.Lock()
 						conn.WriteJSON(browserMessage{Type: "text", Text: text, Data: "user"})
 						writeMu.Unlock()
+						// Salvar transcricao do usuario no Neo4j
+						if s.evaMemory != nil {
+							go s.evaMemory.StoreTurn(ctx, sessionID, "user", text)
+						}
 					}
 				}
 
@@ -233,6 +284,7 @@ Tecnico coleta amostra de sangue → IA analisa imagem microscopica → Sistema 
 						writeMu.Lock()
 						conn.WriteJSON(browserMessage{Type: "text", Text: text})
 						writeMu.Unlock()
+						responseAccum.WriteString(text)
 					}
 				}
 
@@ -311,6 +363,9 @@ Tecnico coleta amostra de sangue → IA analisa imagem microscopica → Sistema 
 				case "text":
 					// Mensagem de texto direta
 					if msg.Text != "" {
+						if s.evaMemory != nil {
+							go s.evaMemory.StoreTurn(ctx, sessionID, "user", msg.Text)
+						}
 						geminiClient.SendText(msg.Text)
 					}
 
@@ -324,5 +379,12 @@ Tecnico coleta amostra de sangue → IA analisa imagem microscopica → Sistema 
 
 	// Espera erro de qualquer goroutine
 	sessionErr := <-errChan
+
+	// Finalizar sessao no Neo4j
+	if s.evaMemory != nil {
+		s.evaMemory.EndSession(ctx, sessionID)
+		go s.evaMemory.DetectPatterns(context.Background())
+	}
+
 	log.Info().Str("session", sessionID).Err(sessionErr).Msg("Browser voice session ended")
 }
