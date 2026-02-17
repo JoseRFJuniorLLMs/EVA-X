@@ -78,6 +78,9 @@ type Config struct {
 	QdrantPort int
 	AppURL     string
 
+	// Speaker Recognition
+	SpeakerModelPath string
+
 	// Feature Flags (V2)
 	EnableGoogleSearch   bool
 	EnableCodeExecution  bool
@@ -165,6 +168,9 @@ func Load() (*Config, error) {
 		QdrantHost: getEnvWithDefault("QDRANT_HOST", "localhost"),
 		QdrantPort: getEnvInt("QDRANT_PORT", 6334),
 		AppURL:     getEnv("APP_URL", "https://eva-mind-fzpn.fly.dev"),
+
+		// Speaker Recognition
+		SpeakerModelPath: getEnvWithDefault("SPEAKER_MODEL_PATH", ""),
 
 		// Load Feature Flags (Default: false for safety/compatibility)
 		EnableGoogleSearch:   getEnvBool("ENABLE_GOOGLE_SEARCH", false),
