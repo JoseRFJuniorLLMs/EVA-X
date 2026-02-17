@@ -1,8 +1,9 @@
 // Copyright (C) 2025-2026 Jose R F Junior <web2ajax@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// index_code indexes all EVA-Mind .go files into Qdrant for semantic search.
-// Run: go run cmd/index_code/main.go
+// index_code indexes all EVA-Mind .go files AND .md docs into Qdrant for semantic search.
+// Uses full Go AST parsing (structs with fields, method signatures, interfaces, constants).
+// Run: go run cmd/index_code/main.go [basePath]
 package main
 
 import (
@@ -41,22 +42,35 @@ func main() {
 
 	svc := selfawareness.NewSelfAwarenessService(nil, qdrantClient, embedSvc, cfg)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
 	defer cancel()
 
-	// Get base path from args or use current directory
 	basePath := "."
 	if len(os.Args) > 1 {
 		basePath = os.Args[1]
 	}
 
-	fmt.Printf("Indexing Go files from: %s\n", basePath)
+	// 1. Index Go source files (AST parsing)
+	fmt.Printf("=== Indexing Go files (AST) from: %s ===\n", basePath)
 	start := time.Now()
 
 	indexed, err := svc.IndexCodebase(ctx, basePath)
 	if err != nil {
-		log.Fatalf("Indexing failed: %v", err)
+		log.Fatalf("Code indexing failed: %v", err)
+	}
+	fmt.Printf("Code: indexed %d .go files in %v\n\n", indexed, time.Since(start).Round(time.Second))
+
+	// 2. Index Markdown documentation
+	fmt.Printf("=== Indexing .md docs from: %s ===\n", basePath)
+	startDocs := time.Now()
+
+	docsIndexed, err := svc.IndexDocs(ctx, basePath)
+	if err != nil {
+		log.Printf("WARNING: Docs indexing failed: %v", err)
+	} else {
+		fmt.Printf("Docs: indexed %d .md chunks in %v\n\n", docsIndexed, time.Since(startDocs).Round(time.Second))
 	}
 
-	fmt.Printf("Done! Indexed %d files in %v\n", indexed, time.Since(start).Round(time.Second))
+	fmt.Printf("=== DONE! Total: %d code + %d docs in %v ===\n",
+		indexed, docsIndexed, time.Since(start).Round(time.Second))
 }

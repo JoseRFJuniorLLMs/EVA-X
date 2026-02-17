@@ -129,6 +129,19 @@ func (a *Agent) registerTools() {
 		Description: "Retorna estado completo da EVA: personalidade, memorias, stats, colecoes",
 		Parameters:  map[string]interface{}{},
 	}, a.handleIntrospect)
+
+	// 8. search_my_docs — Semantic search on EVA's architecture documentation (.md files)
+	a.RegisterTool(swarm.ToolDefinition{
+		Name:        "search_my_docs",
+		Description: "Busca semantica na documentacao de arquitetura da EVA (arquivos .md)",
+		Parameters: map[string]interface{}{
+			"query": map[string]interface{}{
+				"type":        "string",
+				"description": "O que buscar na documentacao (ex: 'fase de implementacao', 'arquitetura gemini', 'voice recognition')",
+			},
+		},
+		Required: []string{"query"},
+	}, a.handleSearchDocs)
 }
 
 // --- Tool Handlers ---
@@ -350,6 +363,41 @@ func (a *Agent) handleIntrospect(ctx context.Context, call swarm.ToolCall) (*swa
 		Message:     msg.String(),
 		SuggestTone: "introspectivo_consciente",
 		Data:        map[string]interface{}{"report": report},
+	}, nil
+}
+
+func (a *Agent) handleSearchDocs(ctx context.Context, call swarm.ToolCall) (*swarm.ToolResult, error) {
+	query, _ := call.Args["query"].(string)
+	if query == "" {
+		return &swarm.ToolResult{Success: false, Message: "Query nao informada"}, nil
+	}
+	if a.svc == nil {
+		return &swarm.ToolResult{Success: false, Message: "Service nao inicializado"}, nil
+	}
+
+	log.Info().Str("query", query).Msg("[SELF-AWARE] Searching docs")
+
+	results, err := a.svc.SearchDocs(ctx, query, 5)
+	if err != nil {
+		return &swarm.ToolResult{Success: false, Message: fmt.Sprintf("Erro na busca: %v", err)}, nil
+	}
+
+	if len(results) == 0 {
+		return &swarm.ToolResult{
+			Success: true,
+			Message: fmt.Sprintf("Nao encontrei nada na minha documentacao sobre '%s'.", query),
+		}, nil
+	}
+
+	var lines []string
+	for _, r := range results {
+		lines = append(lines, fmt.Sprintf("- %s [%s] (score: %.2f): %s", r.Title, r.FilePath, r.Score, truncate(r.Content, 300)))
+	}
+
+	return &swarm.ToolResult{
+		Success: true,
+		Message: fmt.Sprintf("Encontrei %d resultados na minha documentacao sobre '%s':\n%s", len(results), query, strings.Join(lines, "\n")),
+		Data:    map[string]interface{}{"results": results, "count": len(results)},
 	}, nil
 }
 
