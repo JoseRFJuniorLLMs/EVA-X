@@ -61,5 +61,10 @@ nohup.out
 # Data
 data/*.db
 
-# MD documentation folders (private, never push)
+# Folders excluded from GitHub (private, never push)
 MD/
+workflows/
+clients/python/
+data/
+docs/
+migrations/
