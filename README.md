@@ -20,21 +20,29 @@ WHAT IS EVA-MIND
 	EVA-Mind is the brain behind EVA. It handles:
 
 	- Real-time bidirectional voice via WebSocket (Gemini Live API)
-	- Screen and camera analysis for medical assistance
-	- Patient memory graphs (Neo4j)
+	- Real-time camera and screen analysis for medical assistance
+	- Patient memory graphs (Neo4j) with Hebbian learning
 	- Semantic memory search (Qdrant vector database)
+	- Krylov subspace compression (1536D -> 64D, ~97% precision)
 	- Psychoanalytic context modeling (Lacanian framework)
-	- Personality system (Big Five + Enneagram)
-	- Medication scheduling and alerting
-	- Emergency detection and escalation
+	- Personality system (Big Five + Enneagram) with evolution
+	- Clinical scales (PHQ-9, GAD-7, C-SSRS) via voice
+	- Voice prosody analysis (depression, anxiety, Parkinson detection)
+	- Medication scheduling, alerting, and visual identification
+	- Emergency detection, escalation, and crisis prediction
+	- Multi-agent swarm with circuit breaker routing
+	- REM-inspired memory consolidation with selective replay
+	- Global Workspace Theory consciousness model
+	- FHIR R4 interoperability and MCP server
 	- Multi-language support (30+ languages)
 
 	The system currently serves two deployments:
 
 	1. Elderly care (original) - Voice calls via Twilio for
-	   medication reminders and psychological support.
+	   medication reminders, psychological support, and crisis
+	   detection with caregiver escalation.
 
-	2. Malaria detection (Angola) - Real-time voice and screen
+	2. Malaria detection (Angola) - Real-time voice and camera
 	   assistance for healthcare workers diagnosing malaria
 	   from microscope images.
 
@@ -42,18 +50,168 @@ WHAT IS EVA-MIND
 ARCHITECTURE
 ------------
 
-	EVA-Mind follows a neuroscience-inspired architecture:
+	EVA-Mind follows a neuroscience-inspired architecture.
+	Each directory maps to a brain region:
 
-	brainstem/     - Configuration, bootstrap
-	cortex/        - Higher-order processing (Gemini clients, Lacanian
-	               analysis, personality routing, self-memory)
-	hippocampus/   - Knowledge graphs (Neo4j), memory retrieval
-	senses/        - Input processing (WebSocket signaling, audio)
-	motor/         - Output and scheduling (calls, alerts, push)
-	gemini/        - Gemini WebSocket client (v1alpha, voice + video)
-	voice/         - Voice session management, audio processing
-	tools/         - Function calling and tool execution
-	swarm/         - Multi-agent coordination
+	brainstem/     - Configuration, database, auth, push notifications,
+	                 infrastructure (Neo4j, Qdrant, Redis, worker pools)
+
+	cortex/        - Higher-order processing:
+	  gemini/        - Gemini Live API client (v1beta, thread-safe,
+	                   callbacks, VAD, memory, tools)
+	  lacan/         - Lacanian psychoanalytic engine (demand/desire
+	                   analysis, signifier chains, narrative shift
+	                   detection, Grand Autre, transference, FDPN)
+	  personality/   - Big Five traits, Enneagram types, trait relevance
+	                   mapping, situation modulation, trajectory analysis,
+	                   interpretation validation, quality tracking
+	  self/          - Core memory engine, post-session reflection,
+	                   anonymization, semantic deduplication
+	  attention/     - Affect stabilizer, confidence gate, executive
+	                   attention, pattern interrupt, triple attention,
+	                   wavelet attention
+	  consciousness/ - Global Workspace Theory (Baars 1988) with
+	                   cognitive module competition and broadcast
+	  prediction/    - Bayesian networks, crisis prediction,
+	                   trajectory simulation
+	  predictive/    - HMC (Hamiltonian Monte Carlo) sampler,
+	                   trajectory engine for mental health forecasting
+	  ram/           - Retrieval-Augmented Memory with feedback loop,
+	                   historical validation, interpretation generation
+	  scales/        - Clinical scales (PHQ-9, GAD-7, C-SSRS)
+	  ethics/        - Ethical boundary engine
+	  explainability/- Clinical decision explainer, PDF report generation
+	  cognitive/     - Cognitive load orchestrator
+	  learning/      - Continuous learning, meta-learner, self-eval loop
+	  medgemma/      - Medical image analysis (prescriptions, exams)
+	  spectral/      - Community detection, fractal dimension analysis,
+	                   synaptogenesis engine
+	  pattern/       - Behavioral cue detector
+	  veracity/      - Lie detector, inconsistency types, response strategy
+	  voice/         - Prosody analyzer (pitch, rhythm, pauses, tremor)
+	  transnar/      - A/B testing, desire detector, inference engine,
+	                   signifier chain, response generator
+	  kids/          - Kids mode (adapted conversation)
+	  situation/     - Situational modulator (context-aware personality)
+	  orchestration/ - Conversation orchestrator
+	  alert/         - Escalation engine
+	  llm/thinking/  - LLM thinking detector, audit, notification
+	  brain/         - Context builder, memory service
+
+	hippocampus/   - Knowledge graphs and memory:
+	  memory/        - Graph store, retrieval service, FDPN engine,
+	                   Hebbian real-time updates, dual weights,
+	                   edge zones, embeddings, entity resolver,
+	                   pattern miner, priming engine, reflective
+	                   retrieval, context builder zones
+	  memory/superhuman/ - Consciousness service, critical memory,
+	                   deep memory, Enneagram service, Lacanian
+	                   mirror, narrative weaver, self core service
+	  knowledge/     - Context service, embedding cache/service,
+	                   graph reasoning, self knowledge, wisdom service,
+	                   audio analysis
+	  habits/        - Habit tracker
+	  spaced/        - Spaced repetition engine
+	  stories/       - Therapeutic story repository
+	  topology/      - Persistent homology (topological data analysis)
+	  zettelkasten/  - Entity extractor, zettel service
+	  graph/         - Heat kernel page rank
+
+	senses/        - Input processing:
+	  signaling/     - WebSocket handler, personality context
+	  voice/         - Voice client
+	  reconnection/  - Connection manager
+	  telemetry/     - Psychological metrics
+
+	motor/         - Output, actions, and integrations:
+	  scheduler/     - Medication scheduling
+	  actions/       - Action executor
+	  calendar/      - Google Calendar integration
+	  computeruse/   - Computer use service
+	  docs/          - Google Docs integration
+	  drive/         - Google Drive integration
+	  email/         - Email client, sender, templates
+	  gmail/         - Gmail integration
+	  googlefit/     - Google Fit (health data)
+	  maps/          - Google Maps integration
+	  sheets/        - Google Sheets integration
+	  sms/           - SMS client, sender, voice
+	  spotify/       - Spotify integration
+	  uber/          - Uber integration
+	  whatsapp/      - WhatsApp integration
+	  youtube/       - YouTube integration
+	  vision/        - Medication identifier, WebSocket handler
+	  workers/       - Pattern worker, prediction worker
+
+	gemini/        - Lean Gemini WebSocket client (v1alpha, browser
+	                 sessions and alerts, stateless)
+
+	voice/         - Voice session management:
+	  handler/       - Twilio media stream handler
+	  session/       - Session lifecycle management
+	  alert_service/ - Emergency alert service
+	  media_handler/ - Audio DSP and processing
+
+	tools/         - Gemini function calling:
+	  definitions/   - Tool schemas (vitals, agendamentos,
+	                   medication scan, prosody analysis,
+	                   PHQ-9, GAD-7, C-SSRS, user directives)
+	  handlers/      - Tool execution
+	  discovery/     - Dynamic tool discovery
+	  architect/     - Architect override tool
+	  repository/    - Tool registry
+
+	swarm/         - Multi-agent coordination:
+	  orchestrator/  - Routes tool calls to correct agent
+	  registry/      - Agent registration and discovery
+	  circuit_breaker/ - Fault tolerance per agent
+	  cellular_division/ - Agent spawning
+	  Agents:
+	    clinical/      - Clinical decision support
+	    educator/      - Patient education
+	    emergency/     - Emergency protocols
+	    entertainment/ - Entertainment and distraction
+	    external/      - External service calls
+	    google/        - Google services integration
+	    kids/          - Pediatric mode
+	    legal/         - Legal compliance
+	    productivity/  - Task management
+	    wellness/      - Wellness monitoring
+
+	memory/        - Memory consolidation:
+	  consolidation/ - Hebbian strengthening, pruning, REM consolidator,
+	                   selective replay
+	  krylov/        - Krylov subspace compression (Rank-1 updates,
+	                   Gram-Schmidt, sliding window FIFO, 1536D->64D)
+	  importance/    - Memory importance scorer
+	  ingestion/     - Atomic fact extraction, ingestion pipeline
+	  orchestrator/  - Memory orchestration
+	  scheduler/     - Memory consolidation scheduler
+	  grpc_server/   - gRPC interface for memory service
+	  http_bridge/   - HTTP bridge for Krylov compression
+
+	Other modules:
+
+	mcp/           - Model Context Protocol server
+	                 (resources, tools/remember, tools/recall, prompts)
+	integration/   - HL7 FHIR R4 adapter, webhooks, export, serializers
+	security/      - CORS, validation, error handling, multitenancy
+	audit/         - LGPD compliance, data rights
+	research/      - Anonymization, cohort builder, longitudinal
+	                 analysis, statistical methods
+	clinical/      - Crisis protocol, pediatric risk detector,
+	                 silence detector, goals tracker, family tracker,
+	                 clinical notes generator, clinical synthesis
+	monitoring/    - Prometheus metrics (memory, retrieval, Krylov,
+	                 consolidation, FDPN, personality, attention)
+	telemetry/     - Structured logging, metrics
+	persona/       - Persona manager (per-patient personalities)
+	subscription/  - Subscription service
+	legacy/        - Legacy compatibility
+	exit/          - Exit protocol manager
+	multimodal/    - Image processor, video processor, video stream,
+	                 multimodal session
+
 
 	Two Gemini WebSocket clients exist:
 
@@ -62,9 +220,198 @@ ARCHITECTURE
 
 	internal/cortex/gemini/  - Full-featured client for production
 	                          voice calls. Uses v1beta API. Thread-safe
-	                          with callbacks, VAD tuning, memory support.
+	                          with mutex, callbacks, VAD tuning, memory
+	                          injection, and function calling support.
 
 	Both are actively used. They are not duplicates.
+
+
+MEMORY SYSTEM
+-------------
+
+	EVA's memory is inspired by neuroscience. It has multiple layers:
+
+	1. Episodic Memory (PostgreSQL + Qdrant)
+	   - Per-patient conversation history
+	   - Stored as text with vector embeddings (1536D)
+	   - Timestamped, importance-scored, emotion-tagged
+	   - Retrieved by semantic similarity + recency + importance
+
+	2. Semantic Memory (Neo4j knowledge graphs)
+	   - Per-patient knowledge graphs
+	   - Medical conditions, medications, family, preferences
+	   - Entities extracted and linked automatically
+	   - Hebbian edge strengthening on co-activation
+
+	3. FDPN Network (Spreading Activation)
+	   - Anderson (1983) spreading activation model
+	   - Nodes activate neighbors based on edge weights
+	   - Primed by personality weights and situational context
+	   - Redis cache for performance (<10ms latency)
+
+	4. Hebbian Learning
+	   - Real-time: updates weights after every retrieval query
+	     (eta=0.01, lambda=0.001, tau=86400s)
+	   - Consolidation: batch strengthening during REM cycles
+	   - Dual plasticity: Zenke & Gerstner (2017) model
+
+	5. REM Consolidation
+	   - Sleep-inspired memory consolidation pipeline
+	   - Hot episodic memories -> selective replay -> spectral
+	     clustering -> Krylov centroid -> semantic Neo4j node
+	   - Prunes redundant memories, creates abstractions
+	   - Science: Rasch & Born (2013), Tadros et al. (2022)
+
+	6. Krylov Subspace Compression
+	   - Compresses 1536D embeddings to 64D (~97% precision)
+	   - Rank-1 updates with Modified Gram-Schmidt
+	   - Sliding window FIFO for continuous learning
+	   - HTTP bridge on port 50052 for external access
+
+	7. EVA's Own Memory (Neo4j port 7688)
+	   - EvaSelf node with Big Five personality traits
+	   - CoreMemory nodes from post-session reflection
+	   - MetaInsight nodes from cross-session pattern detection
+	   - All data anonymized, no PII
+	   - Personality evolves based on cumulative experience
+
+	8. Synaptogenesis
+	   - Automatic edge creation via preferential attachment
+	   - Triadic closure and homophily
+	   - Science: Bullmore & Sporns (2012), Holtmaat & Svoboda (2009)
+
+	9. Spaced Repetition
+	   - Optimized recall scheduling for important memories
+
+	10. Topological Analysis
+	    - Persistent homology for memory graph structure
+
+
+CONTEXT PIPELINE
+----------------
+
+	For each voice session, EVA's context is assembled from
+	multiple sources in parallel:
+
+	1. Lacanian analysis of the user's speech
+	   - Demand vs. desire detection
+	   - Signifier chain extraction
+	   - Narrative shift detection
+	   - Grand Autre transference analysis
+	2. Medical context from Neo4j (conditions, medications)
+	3. Patient metadata from PostgreSQL (name, language, persona)
+	4. Scheduled medications from agendamentos table
+	5. Recent episodic memories (last 15 turns, 7-day window)
+	6. Semantic signifier chains from Qdrant
+	7. Therapeutic stories from wisdom knowledge base
+	8. Situational context (time of day, recent events, stressors)
+	9. Personality modulation (Big Five + Enneagram + situation)
+	10. EVA's own memories (anonymized cross-patient insights)
+
+	All of this is merged into a single system instruction
+	sent to the Gemini WebSocket API.
+
+
+CLINICAL TOOLS
+--------------
+
+	EVA can execute clinical tools via Gemini function calling:
+
+	get_vitals             - Retrieve patient vital signs
+	                         (blood pressure, glucose, heart rate,
+	                         oxygen saturation, weight, temperature)
+
+	get_agendamentos       - List upcoming medication schedules
+	                         and medical appointments
+
+	scan_medication_visual - Open camera to identify medications
+	                         visually via Gemini Vision
+
+	analyze_voice_prosody  - Analyze vocal biomarkers (pitch,
+	                         rhythm, pauses, tremor) to detect
+	                         signs of depression, anxiety,
+	                         Parkinson's, or dehydration
+
+	apply_phq9             - Apply PHQ-9 depression scale
+	                         conversationally (9 questions)
+
+	apply_gad7             - Apply GAD-7 anxiety scale
+	                         conversationally (7 questions)
+
+	apply_cssrs            - Apply Columbia Suicide Severity
+	                         Rating Scale (critical - triggers
+	                         immediate alerts on positive responses)
+
+	change_user_directive  - Change language, voice, or mode
+	                         in real-time
+
+
+PREDICTION ENGINE
+-----------------
+
+	EVA predicts patient trajectories using:
+
+	- Hamiltonian Monte Carlo (HMC) sampling
+	- Bayesian networks for crisis probability
+	- Monte Carlo trajectory simulation
+
+	Predictions include:
+
+	- 7-day and 30-day crisis probability
+	- 30-day hospitalization probability
+	- 90-day treatment dropout probability
+	- 7-day fall risk probability
+	- Projected PHQ-9 scores
+	- Medication adherence forecasting
+
+	Input features: PHQ-9, GAD-7, medication adherence,
+	sleep hours, social isolation days, voice energy score,
+	days since last crisis.
+
+
+SWARM SYSTEM
+------------
+
+	EVA uses a multi-agent swarm architecture:
+
+	- Orchestrator routes tool calls to specialized agents
+	- Registry maps tool names to responsible agents
+	- Circuit breaker protects against cascading failures
+	  (opens after 5 failures, resets after 30 seconds)
+	- Priority-based timeouts:
+	  Critical: 2s, High: 5s, Medium: 10s, Low: 15s
+
+	Agent types:
+	  clinical      - Medical decision support
+	  educator      - Patient education
+	  emergency     - Crisis protocols and escalation
+	  entertainment - Distraction and leisure
+	  external      - External API calls
+	  google        - Google services (Calendar, Maps, etc.)
+	  kids          - Pediatric conversation mode
+	  legal         - Legal compliance (LGPD, data rights)
+	  productivity  - Task management
+	  wellness      - Wellness monitoring
+
+
+CONSCIOUSNESS MODEL
+-------------------
+
+	EVA implements Baars' Global Workspace Theory (1988):
+
+	- Multiple cognitive modules process input in parallel
+	- Each module bids for attention (confidence score)
+	- Attention spotlight selects the winner
+	- Winner is broadcast to all modules
+	- Integrated insight merges all interpretations
+
+	Attention system has six components:
+	- Affect stabilizer (emotional regulation)
+	- Confidence gate (threshold filtering)
+	- Executive attention (top-down control)
+	- Pattern interrupt (novelty detection)
+	- Triple attention (three-stream processing)
+	- Wavelet attention (multi-scale analysis)
 
 
 BUILDING
@@ -76,6 +423,7 @@ BUILDING
 	- Neo4j 5.x (two instances: patients on 7687, EVA self on 7688)
 	- Qdrant vector database
 	- PostgreSQL 15+
+	- Redis (optional, for caching)
 	- Google Gemini API key
 
 	Build:
@@ -134,44 +482,67 @@ WEBSOCKET PROTOCOL
 		{"type": "status", "text": "ready|interrupted|turn_complete|error"}
 
 
-EVA'S MEMORY SYSTEM
--------------------
+API ENDPOINTS
+-------------
 
-	EVA has two separate memory systems:
+	Voice:
+		GET  /ws/pcm                  - Twilio PCM WebSocket
+		GET  /ws/browser              - Browser WebSocket (voice + video)
+		GET  /calls/stream/{id}       - Twilio Media Stream (legacy)
+		POST /api/chat                - Text chat API
 
-	1. Patient memory (Neo4j port 7687)
-	   - Per-patient knowledge graphs
-	   - Medical context, conditions, medications
-	   - Conversation history (episodic memory)
-	   - Semantic embeddings in Qdrant
+	Video:
+		GET  /video/ws                - Video signaling WebSocket
+		POST /video/create            - Create video session
+		POST /video/candidate         - Add ICE candidate
+		GET  /video/session/{id}      - Get video session
+		POST /video/session/{id}/answer - Save SDP answer
+		GET  /video/session/{id}/answer/poll - Poll for answer
+		GET  /video/candidates/{id}   - Get ICE candidates
+		GET  /video/pending           - List pending sessions
 
-	2. EVA's own memory (Neo4j port 7688)
-	   - EvaSelf node with Big Five personality traits
-	   - CoreMemory nodes from post-session reflection
-	   - MetaInsight nodes from cross-session pattern detection
-	   - All data anonymized, no PII
+	Auth:
+		POST /api/auth/login          - User authentication
 
-	After each session, EVA reflects on what she learned,
-	anonymizes the data, and stores it as her own memory.
-	Her personality evolves based on cumulative experience.
+	Mobile (EVA-Mobile):
+		GET  /api/v1/idosos/by-cpf/{cpf} - Get patient by CPF
+		GET  /api/v1/idosos/{id}         - Get patient by ID
+		PATCH /api/v1/idosos/sync-token-by-cpf - Sync push token
 
+	Self (EVA's own memory):
+		GET  /self/personality         - EVA's Big Five + Enneagram
+		GET  /self/identity            - EVA's context for priming
+		GET  /self/memories            - List EVA's own memories
+		POST /self/memories/search     - Semantic search in EVA's memory
+		GET  /self/memories/stats      - Memory statistics
+		GET  /self/insights            - List meta-insights
+		GET  /self/insights/{id}       - Get specific insight
+		POST /self/teach               - Teach EVA directly
+		POST /self/session/process     - Post-session reflection
+		GET  /self/analytics/diversity - Diversity score
+		GET  /self/analytics/growth    - Personality growth over time
 
-CONTEXT PIPELINE
-----------------
+	MCP (Model Context Protocol):
+		GET  /mcp/resources            - List memory resources
+		GET  /mcp/resources/{id}       - Get specific resource
+		POST /mcp/tools/remember       - Store a memory
+		POST /mcp/tools/recall         - Recall memories
+		GET  /mcp/prompts              - List available prompts
+		GET  /mcp/prompts/{name}       - Get specific prompt
 
-	For each voice session, EVA's context is assembled from
-	multiple sources in parallel:
+	Krylov (port 50052):
+		POST /krylov/compress          - Compress embedding
+		POST /krylov/reconstruct       - Reconstruct from compressed
+		POST /krylov/batch_compress    - Batch compression
+		POST /krylov/update            - Update subspace
+		GET  /krylov/stats             - Compression statistics
+		GET  /krylov/health            - Service health
+		POST /krylov/checkpoint/save   - Save subspace checkpoint
+		POST /krylov/checkpoint/load   - Load subspace checkpoint
 
-	1. Lacanian analysis of the user's speech
-	2. Medical context from Neo4j (conditions, medications)
-	3. Patient metadata from PostgreSQL (name, language, persona)
-	4. Scheduled medications from agendamentos table
-	5. Recent episodic memories (last 15 turns, 7-day window)
-	6. Semantic signifier chains from Qdrant
-	7. Therapeutic stories from wisdom knowledge base
-
-	All of this is merged into a single system instruction
-	sent to the Gemini WebSocket API.
+	Health:
+		GET  /api/health               - Health check
+		GET  /metrics                  - Prometheus metrics
 
 
 DEPLOYMENTS
@@ -188,26 +559,29 @@ DEPLOYMENTS
 		Twilio voice calls -> EVA-Mind WebSocket
 		Scheduled calls via internal scheduler
 		Push notifications via Firebase
+		Video calls with cascade escalation
+		  (Family -> Caregiver -> Doctor -> Emergency)
 
 
-API ENDPOINTS
--------------
+MONITORING
+----------
 
-	Voice:
-		GET  /ws/browser              - Browser WebSocket (voice + video)
-		POST /api/chat                - Text chat API
+	Prometheus metrics exposed at /metrics:
 
-	Self:
-		GET  /self/personality        - EVA's Big Five + Enneagram
-		GET  /self/identity           - EVA's context for priming
-		GET  /self/memories           - List EVA's own memories
-		POST /self/memories/search    - Semantic search in EVA's memory
-		POST /self/teach              - Teach EVA directly
-		POST /self/session/process    - Post-session reflection
+	Memory:
+		eva_memory_total              - Total memories stored
+		eva_memory_importance_avg     - Average importance score
 
-	Health:
-		GET  /health                  - Health check
-		GET  /metrics                 - Prometheus metrics
+	Retrieval:
+		eva_retrieval_latency_seconds - Retrieval operation latency
+		eva_retrieval_total           - Total retrievals (success/error)
+
+	Krylov:
+		eva_krylov_dimension          - Current subspace dimension
+		eva_krylov_compression_ratio  - Compression ratio
+
+	And additional metrics for consolidation, FDPN activation,
+	personality evolution, and attention system performance.
 
 
 SCIENTIFIC FOUNDATIONS
@@ -227,6 +601,21 @@ SCIENTIFIC FOUNDATIONS
 
 	- Lacan, J. Psychoanalytic framework.
 	  Demand/desire analysis for clinical context.
+
+	- Baars, B.J. (1988). A Cognitive Theory of Consciousness.
+	  Global Workspace Theory for cognitive integration.
+
+	- Rasch & Born (2013). About Sleep's Role in Memory.
+	  REM-inspired memory consolidation pipeline.
+
+	- Tadros et al. (2022). Sleep-like Unsupervised Replay.
+	  Selective replay for memory consolidation.
+
+	- Bullmore & Sporns (2012). The Economy of Brain Network
+	  Organization. Synaptogenesis and graph self-organization.
+
+	- Holtmaat & Svoboda (2009). Experience-dependent Structural
+	  Synaptic Plasticity. Fractal connection patterns.
 
 
 CONTRIBUTING
