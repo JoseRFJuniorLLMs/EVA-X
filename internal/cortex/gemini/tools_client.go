@@ -388,6 +388,49 @@ Resposta: {"tool": "kids_story", "args": {"theme": "pirates"}}
 Fala: "Quero uma aventura no espaço"
 Resposta: {"tool": "kids_story", "args": {"theme": "space"}}
 
+🧠 AUTOCONHECIMENTO DA EVA (Introspecao):
+- search_my_code: Buscar no meu proprio codigo-fonte (args: query)
+  - query: O que buscar (ex: "sistema de memoria", "handler de voz", "lacan")
+- query_my_database: Consultar minhas tabelas internas — SELECT only (args: query)
+  - query: Query SQL SELECT (ex: "SELECT * FROM eva_curriculum LIMIT 5")
+- list_my_collections: Ver minhas colecoes de memoria vetorial
+- system_stats: Ver estatisticas dos meus sistemas (bancos, runtime, memorias)
+- update_self_knowledge: Atualizar meu conhecimento sobre mim mesma (args: key, title, summary, content, type)
+  - key: Chave unica (ex: "module:brainstem", "concept:lacan")
+  - title: Titulo do conhecimento
+  - content: Conteudo detalhado
+  - type: module, concept, database, api, architecture, memory_system, tool, agent
+- search_self_knowledge: Buscar no meu conhecimento interno (args: query)
+  - query: O que buscar (ex: "memoria", "lacan", "banco de dados")
+- introspect: Ver meu estado completo (personalidade, memorias, stats, colecoes)
+
+📚 APRENDIZAGEM AUTONOMA:
+- study_topic: Pesquisar e aprender sobre um topico imediatamente (args: topic)
+- add_to_curriculum: Adicionar topico na fila de estudo (args: topic, category, priority)
+- list_curriculum: Listar topicos do curriculum (args: status)
+- search_knowledge: Buscar no conhecimento que ja aprendi (args: query)
+
+Fala: "EVA, como funciona seu sistema de memoria?"
+Resposta: {"tool": "search_my_code", "args": {"query": "sistema de memoria"}}
+
+Fala: "EVA, o que voce sabe sobre si mesma?"
+Resposta: {"tool": "introspect", "args": {}}
+
+Fala: "EVA, quantas memorias voce tem?"
+Resposta: {"tool": "system_stats", "args": {}}
+
+Fala: "EVA, o que e o brainstem?"
+Resposta: {"tool": "search_self_knowledge", "args": {"query": "brainstem"}}
+
+Fala: "EVA, lembra que voce tem 12 sistemas de memoria"
+Resposta: {"tool": "update_self_knowledge", "args": {"key": "concept:superhuman_memory", "title": "12 Sistemas de Memoria", "content": "A EVA possui 12 subsistemas de memoria inspirados no modelo Superhuman Memory", "type": "memory_system"}}
+
+Fala: "EVA, estude sobre meditacao"
+Resposta: {"tool": "study_topic", "args": {"topic": "meditacao mindfulness"}}
+
+Fala: "EVA, o que voce ja aprendeu?"
+Resposta: {"tool": "list_curriculum", "args": {"status": "completed"}}
+
 Fala: "Obrigado"
 Resposta: {"tool": "none"}`
 

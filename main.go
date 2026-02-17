@@ -23,6 +23,8 @@ import (
 	"eva-mind/internal/cortex/lacan"
 	"eva-mind/internal/cortex/learning"
 	"eva-mind/internal/cortex/personality"
+	"eva-mind/internal/cortex/selfawareness"
+	"eva-mind/internal/cortex/voice/speaker"
 	"eva-mind/internal/hippocampus/habits"
 	"eva-mind/internal/hippocampus/knowledge"
 	"eva-mind/internal/hippocampus/memory"
@@ -42,6 +44,7 @@ import (
 	"eva-mind/internal/swarm/legal"
 	"eva-mind/internal/swarm/productivity"
 	"eva-mind/internal/swarm/scholar"
+	swarmself "eva-mind/internal/swarm/selfawareness"
 	"eva-mind/internal/swarm/wellness"
 	"eva-mind/internal/telemetry"
 	"eva-mind/internal/tools"
@@ -77,6 +80,7 @@ type SignalingServer struct {
 	toolsClient        *gemini.ToolsClient
 	swarmOrchestrator  *swarm.Orchestrator
 	autonomousLearner  *learning.AutonomousLearner
+	speakerSvc         *speaker.SpeakerService
 }
 
 func main() {
@@ -204,7 +208,13 @@ func main() {
 	autonomousLearner := learning.NewAutonomousLearner(db.Conn, cfg, qdrantClient, embedSvc)
 	log.Info().Msg("📚 Autonomous Learner inicializado")
 
-	// 7.8 Swarm Orchestrator (11 agentes especializados + circuit breaker)
+	// 7.8 Self-Awareness Service (introspecao — codigo, bancos, memorias)
+	selfAwareSvc := selfawareness.NewSelfAwarenessService(db.Conn, qdrantClient, embedSvc, cfg)
+	selfAwareAgent := swarmself.New()
+	selfAwareAgent.SetService(selfAwareSvc)
+	log.Info().Msg("🪞 Self-Awareness Service inicializado")
+
+	// 7.9 Swarm Orchestrator (12 agentes especializados + circuit breaker)
 	scholarAgent := scholar.New()
 	scholarAgent.SetLearner(autonomousLearner)
 
@@ -229,8 +239,17 @@ func main() {
 		kids.New(),
 		legal.New(),
 		scholarAgent,
+		selfAwareAgent,
 	); err != nil {
 		log.Error().Err(err).Msg("Falha ao inicializar Swarm System")
+	}
+
+	// 7.10 Speaker Recognition Service (Voice Fingerprinting + Timbre Analysis)
+	speakerSvc, err := speaker.NewSpeakerService(db, qdrantClient, cfg.SpeakerModelPath)
+	if err != nil {
+		log.Warn().Err(err).Msg("Speaker service unavailable - voice fingerprinting disabled")
+	} else {
+		log.Info().Msg("Speaker Recognition Service initialized")
 	}
 
 	// 8. SignalingServer
@@ -255,6 +274,7 @@ func main() {
 		toolsClient:        toolsClient,
 		swarmOrchestrator:  orchestrator,
 		autonomousLearner:  autonomousLearner,
+		speakerSvc:         speakerSvc,
 	}
 
 	// 9. Router & Servidor HTTP

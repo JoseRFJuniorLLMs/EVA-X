@@ -10,6 +10,8 @@ import (
 	gemini "eva-mind/internal/cortex/gemini"
 	"eva-mind/internal/cortex/lacan"
 	"eva-mind/internal/cortex/personality"
+	"eva-mind/internal/cortex/voice/speaker"
+	"eva-mind/internal/swarm"
 	"fmt"
 	"net/http"
 	"strings"
@@ -435,6 +437,25 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 									log.Info().Str("tool", tc.Name).Interface("args", tc.Args).Msg("[TOOLS] Tool detectada na fala")
 
 									result, err := s.toolsHandler.ExecuteTool(tc.Name, tc.Args, patientID)
+									if err != nil && strings.Contains(err.Error(), "ferramenta desconhecida") {
+										// Fallthrough: tool nao existe no handlers.go, tentar swarm orchestrator
+										if s.swarmOrchestrator != nil {
+											swarmCall := swarm.ToolCall{
+												Name:   tc.Name,
+												Args:   tc.Args,
+												UserID: patientID,
+											}
+											swarmResult, swarmErr := s.swarmOrchestrator.Route(ctx, swarmCall)
+											if swarmErr == nil && swarmResult != nil {
+												result = map[string]interface{}{
+													"success": swarmResult.Success,
+													"message": swarmResult.Message,
+												}
+												err = nil
+												log.Info().Str("tool", tc.Name).Msg("[SWARM] Tool executada via swarm orchestrator")
+											}
+										}
+									}
 									if err != nil {
 										log.Error().Err(err).Str("tool", tc.Name).Msg("[TOOLS] Erro ao executar tool")
 										continue
@@ -498,6 +519,16 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 
 	startReader(initialClient, 1)
 
+	// --- Speaker Recognition: register callback ---
+	if s.speakerSvc != nil {
+		s.speakerSvc.SetCallback(sessionID, func(sid string, msg speaker.SpeakerMessage) {
+			writeMu.Lock()
+			conn.WriteJSON(msg)
+			writeMu.Unlock()
+		})
+		defer s.speakerSvc.RemoveSession(sessionID)
+	}
+
 	// --- Goroutine: Browser -> Gemini ---
 	// Usa gen=0 no sinal para que o loop principal sempre o processe (e nunca o filtre).
 	go func() {
@@ -537,6 +568,9 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 				pcmData, err := base64.StdEncoding.DecodeString(msg.Data)
 				if err == nil {
 					client.SendAudio(pcmData)
+					if s.speakerSvc != nil {
+						go s.speakerSvc.ProcessAudioChunk(sessionID, clientCPF, pcmData)
+					}
 				}
 			case "video":
 				jpegData, err := base64.StdEncoding.DecodeString(msg.Data)
