@@ -458,66 +458,50 @@ func parseEntries(content string) []string {
 	return entries
 }
 
-// parseNasrudinStories divide o texto do Nasrudin em parágrafos de ~500 palavras
-// O arquivo é prosa contínua dividida em 4 capítulos
+// parseNasrudinStories divide prosa contínua em chunks de ~350 palavras
+// O arquivo é texto corrido com single newlines, sem parágrafos claros
 func parseNasrudinStories(content string) []string {
 	var entries []string
 
-	// Remover headers de capítulo
-	chapterRe := regexp.MustCompile(`CAPÍTULO\s*\d+\s*\n`)
-	content = chapterRe.ReplaceAllString(content, "\n")
+	// Normalizar: remover \r, colapsar whitespace
+	content = strings.ReplaceAll(content, "\r", "")
+	content = regexp.MustCompile(`CAP[ÍI]TULO\s*\d+`).ReplaceAllString(content, "")
+	content = strings.ReplaceAll(content, "Mulla Nasrudin", "")
 
-	// Dividir por parágrafos (double newline)
-	paragraphs := regexp.MustCompile(`\n\s*\n`).Split(content, -1)
+	// Juntar tudo numa linha, colapsar espaços
+	content = regexp.MustCompile(`[\n\t]+`).ReplaceAllString(content, " ")
+	content = regexp.MustCompile(`\s{2,}`).ReplaceAllString(content, " ")
+	content = strings.TrimSpace(content)
 
-	var chunk strings.Builder
-	wordCount := 0
+	// Dividir em palavras e agrupar em chunks
+	words := strings.Fields(content)
+	chunkSize := 350
 
-	for _, para := range paragraphs {
-		para = strings.TrimSpace(para)
-		if len(para) < 20 {
-			continue
+	for i := 0; i < len(words); i += chunkSize {
+		end := i + chunkSize
+		if end > len(words) {
+			end = len(words)
 		}
-		// Limpar whitespace interno
-		para = regexp.MustCompile(`\s+`).ReplaceAllString(para, " ")
-
-		words := len(strings.Fields(para))
-
-		if wordCount+words > 400 && chunk.Len() > 0 {
-			// Salvar chunk atual
-			text := strings.TrimSpace(chunk.String())
-			if len(text) >= 50 {
-				entries = append(entries, text)
-			}
-			chunk.Reset()
-			wordCount = 0
-		}
-
-		if chunk.Len() > 0 {
-			chunk.WriteString(" ")
-		}
-		chunk.WriteString(para)
-		wordCount += words
-	}
-
-	// Último chunk
-	if chunk.Len() > 0 {
-		text := strings.TrimSpace(chunk.String())
-		if len(text) >= 50 {
-			entries = append(entries, text)
+		chunk := strings.Join(words[i:end], " ")
+		if len(chunk) >= 50 {
+			entries = append(entries, chunk)
 		}
 	}
 
 	return entries
 }
 
-// parseAesopFables divide por "Fábula [ROMAN]" incluindo título e moral
+// parseAesopFables divide por "Fábula" seguido de numeral romano
 func parseAesopFables(content string) []string {
 	var entries []string
 
-	// Dividir por "Fábula [ROMAN]"
-	fableRe := regexp.MustCompile(`(?m)^Fábula\s+[IVXLCDM]+\s*$`)
-	parts := fableRe.Split(content, -1)
+	// Normalizar line endings
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	content = strings.ReplaceAll(content, "\r", "\n")
+
+	// Split por "Fábula" + espaço + romano (case insensitive para acentos)
+	// Usar split simples por "Fábula " que é mais robusto
+	parts := regexp.MustCompile(`(?m)\nF[áa]bula\s+[IVXLCDM]+\s*\n`).Split(content, -1)
 
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
@@ -525,20 +509,17 @@ func parseAesopFables(content string) []string {
 			continue
 		}
 
-		// Limpar linhas vazias excessivas e whitespace
-		cleaned := regexp.MustCompile(`\n\s*\n[\s\n]*`).ReplaceAllString(part, "\n")
-		cleaned = strings.TrimSpace(cleaned)
-
 		// Remover códigos de referência (H1865, MW1919, etc.)
-		cleaned = regexp.MustCompile(`(?m)^[A-Z]+\d+\s*$`).ReplaceAllString(cleaned, "")
+		cleaned := regexp.MustCompile(`(?m)^[A-Z]+\d+\s*$`).ReplaceAllString(part, "")
+
+		// Colapsar whitespace e newlines
+		cleaned = regexp.MustCompile(`[\n\r]+`).ReplaceAllString(cleaned, " ")
+		cleaned = regexp.MustCompile(`\s{2,}`).ReplaceAllString(cleaned, " ")
 		cleaned = strings.TrimSpace(cleaned)
 
 		if len(cleaned) < 30 {
 			continue
 		}
-
-		// Colapsar whitespace
-		cleaned = regexp.MustCompile(`\s+`).ReplaceAllString(cleaned, " ")
 
 		entries = append(entries, cleaned)
 	}
