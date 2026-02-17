@@ -98,20 +98,20 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 
 	log.Info().Str("session", sessionID).Str("cpf", clientCPF).Bool("hasContext", configMsg.Text != "").Msg("[BROWSER] Config recebida do cliente")
 
-	// Carregar dados do paciente pelo CPF (PostgreSQL)
+	// Carregar dados da pessoa pelo CPF (PostgreSQL)
 	if clientCPF != "" && s.db != nil {
 		idoso, err := s.db.GetIdosoByCPF(clientCPF)
 		if err != nil {
-			log.Warn().Err(err).Str("cpf", clientCPF).Msg("[BROWSER] Paciente nao encontrado")
+			log.Warn().Err(err).Str("cpf", clientCPF).Msg("[BROWSER] Pessoa nao encontrada")
 		} else {
 			fullIdoso, err := s.db.GetIdoso(idoso.ID)
 			if err == nil && fullIdoso != nil {
-				clientContext += fmt.Sprintf("\n\n[PACIENTE] Nome: %s | CPF: %s | Nascimento: %s",
+				clientContext += fmt.Sprintf("\n\nVoce esta conversando com %s (CPF: %s, nascido em %s). Use o nome dele/dela na conversa.",
 					fullIdoso.Nome, clientCPF, fullIdoso.DataNascimento.Format("02/01/2006"))
-				log.Info().Str("session", sessionID).Str("nome", fullIdoso.Nome).Int64("id", fullIdoso.ID).Msg("[BROWSER] Paciente carregado")
+				log.Info().Str("session", sessionID).Str("nome", fullIdoso.Nome).Int64("id", fullIdoso.ID).Msg("[BROWSER] Pessoa carregada")
 			}
 
-			// Buscar agendamentos/medicamentos do paciente via query direta
+			// Buscar agendamentos/medicamentos da pessoa via query direta
 			rows, err := s.db.Conn.Query(`
 				SELECT tipo, dados_tarefa, status, data_hora_agendada
 				FROM agendamentos
