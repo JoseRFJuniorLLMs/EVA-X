@@ -25,6 +25,7 @@ import (
 type chatRequest struct {
 	CPF     string `json:"cpf"`
 	Message string `json:"message"`
+	Context string `json:"context,omitempty"` // contexto do sistema (vem do frontend)
 }
 
 // chatResponse representa a resposta do POST /api/chat
@@ -55,30 +56,12 @@ func (s *SignalingServer) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// System prompt para o contexto de malaria
-	systemPrompt := `Voce e a EVA Assistente Malaria Angola, uma assistente inteligente do Sistema de Gestao de Malaria de Angola.
-
-Seu papel:
-- Ajudar profissionais de saude a usar o sistema
-- Explicar funcionalidades (pacientes, amostras, deteccao AI, estatisticas, clinicas)
-- Responder duvidas sobre malaria, diagnostico e tratamento
-- Orientar sobre o fluxo de trabalho clinico
-- Responder de forma clara, concisa e profissional em portugues
-
-Funcionalidades do sistema:
-- Dashboard: visao geral de estatisticas, amostras recentes, alertas
-- Pacientes: cadastro e gestao de pacientes com historico
-- Amostras: coleta, analise por IA (YOLOv8 com 99.14% mAP50), revisao medica
-- Deteccao: upload de imagens de laminas para deteccao automatica de parasitas
-- Clinicas: gestao de unidades de saude em Angola
-
-Especies de Plasmodium em Angola:
-- P. falciparum (95% dos casos) - mais grave
-- P. vivax (~2%) - moderado
-- P. malariae (~2%) - leve
-- P. ovale (~1%) - moderado
-
-Mantenha respostas curtas (2-4 frases) a menos que o usuario peca explicacoes detalhadas.` + patientContext
+	// Contexto vem do frontend. Se nao enviou, usa generico minimo.
+	systemPrompt := req.Context
+	if systemPrompt == "" {
+		systemPrompt = "Voce e a EVA, assistente virtual inteligente. Responda em portugues de forma clara e profissional."
+	}
+	systemPrompt += patientContext
 
 	fullPrompt := systemPrompt + "\n\nUsuario: " + req.Message
 
