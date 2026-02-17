@@ -8,6 +8,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	gemini "eva-mind/internal/cortex/gemini"
+	"eva-mind/internal/cortex/lacan"
+	"eva-mind/internal/cortex/personality"
 	"fmt"
 	"net/http"
 	"strings"
@@ -98,8 +100,25 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 
 	log.Info().Str("session", sessionID).Str("cpf", clientCPF).Bool("hasContext", configMsg.Text != "").Msg("[BROWSER] Config recebida do cliente")
 
-	// Carregar dados da pessoa pelo CPF (PostgreSQL)
-	if clientCPF != "" && s.db != nil {
+	// Verificar se e o Criador (Modo Debug / Arquiteto da Matrix)
+	if clientCPF != "" && lacan.IsCreatorCPF(clientCPF) && s.db != nil {
+		log.Info().Str("session", sessionID).Msg("[BROWSER] === MODO CRIADOR ATIVADO ===")
+
+		// Carregar perfil do criador (personalidade, memorias, projeto)
+		creatorSvc := personality.NewCreatorProfileService(s.db.Conn)
+		profile, err := creatorSvc.LoadCreatorProfile(ctx)
+		if err != nil {
+			log.Warn().Err(err).Msg("[BROWSER] Falha ao carregar perfil do criador")
+		} else {
+			clientContext = creatorSvc.GenerateSystemPrompt(profile)
+		}
+
+		// Injetar contexto de debug (metricas, comandos)
+		debugMode := lacan.NewDebugMode(s.db.Conn)
+		clientContext += "\n" + debugMode.BuildDebugPromptSection(ctx)
+
+	} else if clientCPF != "" && s.db != nil {
+		// Carregar dados da pessoa pelo CPF (PostgreSQL)
 		idoso, err := s.db.GetIdosoByCPF(clientCPF)
 		if err != nil {
 			log.Warn().Err(err).Str("cpf", clientCPF).Msg("[BROWSER] Pessoa nao encontrada")
@@ -126,7 +145,7 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 					var dataHora time.Time
 					if err := rows.Scan(&tipo, &dados, &status, &dataHora); err == nil {
 						if count == 0 {
-							medsInfo.WriteString("\n\n[MEDICAMENTOS E AGENDAMENTOS DO PACIENTE]")
+							medsInfo.WriteString("\n\n[MEDICAMENTOS E AGENDAMENTOS]")
 						}
 						medsInfo.WriteString(fmt.Sprintf("\n- %s: %s (Status: %s, Hora: %s)",
 							tipo, dados, status, dataHora.Format("02/01 15:04")))
