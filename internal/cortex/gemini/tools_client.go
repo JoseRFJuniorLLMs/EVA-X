@@ -403,6 +403,8 @@ Resposta: {"tool": "kids_story", "args": {"theme": "space"}}
 - search_self_knowledge: Buscar no meu conhecimento interno (args: query)
   - query: O que buscar (ex: "memoria", "lacan", "banco de dados")
 - introspect: Ver meu estado completo (personalidade, memorias, stats, colecoes)
+- search_my_docs: Buscar na minha documentacao de arquitetura (arquivos .md) (args: query)
+  - query: O que buscar na documentacao (ex: "fase de implementacao", "arquitetura gemini", "voice recognition")
 
 📚 APRENDIZAGEM AUTONOMA:
 - study_topic: Pesquisar e aprender sobre um topico imediatamente (args: topic)
@@ -424,6 +426,12 @@ Resposta: {"tool": "search_self_knowledge", "args": {"query": "brainstem"}}
 
 Fala: "EVA, lembra que voce tem 12 sistemas de memoria"
 Resposta: {"tool": "update_self_knowledge", "args": {"key": "concept:superhuman_memory", "title": "12 Sistemas de Memoria", "content": "A EVA possui 12 subsistemas de memoria inspirados no modelo Superhuman Memory", "type": "memory_system"}}
+
+Fala: "EVA, como foi planejada sua arquitetura?"
+Resposta: {"tool": "search_my_docs", "args": {"query": "arquitetura planejamento fases"}}
+
+Fala: "EVA, o que diz sua documentacao sobre voz?"
+Resposta: {"tool": "search_my_docs", "args": {"query": "voice speaker recognition"}}
 
 Fala: "EVA, estude sobre meditacao"
 Resposta: {"tool": "study_topic", "args": {"topic": "meditacao mindfulness"}}

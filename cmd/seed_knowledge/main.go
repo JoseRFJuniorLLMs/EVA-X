@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // seed_knowledge populates eva_self_knowledge in PostgreSQL AND Qdrant (semantic search).
+// Covers ALL 130+ tables, all modules, all concepts, all infrastructure.
 // Run: go run cmd/seed_knowledge/main.go
 package main
 
@@ -23,14 +24,14 @@ import (
 )
 
 type KnowledgeEntry struct {
-	Type     string
-	Key      string
-	Title    string
-	Summary  string
-	Content  string
-	Location string
-	Parent   string
-	Tags     string
+	Type       string
+	Key        string
+	Title      string
+	Summary    string
+	Content    string
+	Location   string
+	Parent     string
+	Tags       string
 	Importance int
 }
 
@@ -48,7 +49,6 @@ func main() {
 	}
 	defer db.Close()
 
-	// Ensure table exists with updated_at and UNIQUE constraint on knowledge_key
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS eva_self_knowledge (
 			id SERIAL PRIMARY KEY,
@@ -70,7 +70,6 @@ func main() {
 		log.Fatalf("Table creation failed: %v", err)
 	}
 
-	// Connect Qdrant + EmbeddingService for semantic indexing
 	cfg, err := config.Load()
 	if err != nil {
 		log.Printf("WARN: Config load failed (Qdrant disabled): %v", err)
@@ -93,7 +92,7 @@ func main() {
 	ctx := context.Background()
 	entries := getAllEntries()
 
-	// 1. PostgreSQL (structured catalog)
+	// 1. PostgreSQL
 	stmt, err := db.Prepare(`
 		INSERT INTO eva_self_knowledge (knowledge_type, knowledge_key, title, summary, detailed_content, code_location, parent_key, tags, importance, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
@@ -123,7 +122,7 @@ func main() {
 	}
 	fmt.Printf("PostgreSQL: %d/%d entries seeded\n", pgCount, len(entries))
 
-	// 2. Qdrant (semantic search via embeddings)
+	// 2. Qdrant
 	if qdrantClient != nil && embedSvc != nil {
 		collName := "eva_self_knowledge"
 		qdrantClient.CreateCollection(ctx, collName, 3072)
@@ -133,7 +132,6 @@ func main() {
 		var batch []*qdrant.PointStruct
 
 		for i, e := range entries {
-			// Embed: title + summary + content
 			text := fmt.Sprintf("%s: %s\n%s", e.Title, e.Summary, e.Content)
 			if len(text) > 4000 {
 				text = text[:4000]
@@ -184,105 +182,490 @@ func main() {
 }
 
 func getAllEntries() []KnowledgeEntry {
-	var entries []KnowledgeEntry
+	var e []KnowledgeEntry
+	e = append(e, architectureEntries()...)
+	e = append(e, databaseEntries()...)
+	e = append(e, moduleEntries()...)
+	e = append(e, conceptEntries()...)
+	e = append(e, apiEntries()...)
+	e = append(e, infraEntries()...)
+	return e
+}
 
-	// === ARCHITECTURE ===
-	entries = append(entries, KnowledgeEntry{
-		Type: "architecture", Key: "arch:overview", Title: "Arquitetura Geral do EVA-Mind",
-		Summary: "EVA-Mind e uma IA companeira para idosos com voz em tempo real, 12 agentes swarm e 110+ tools",
-		Content: `EVA-Mind e um sistema de IA companeira projetado para cuidar de idosos. A arquitetura e inspirada no cerebro humano:
+// ======================== ARCHITECTURE ========================
 
-BRAINSTEM (Tronco Cerebral) — Infraestrutura base:
-- config: Carrega variaveis de ambiente (.env), credenciais, portas
-- database: Wrapper PostgreSQL com connection pool (database/sql)
-- infrastructure/graph: Client Neo4j (grafo de conhecimento, memorias, Lacan)
-- infrastructure/vector: Client Qdrant (embeddings 3072-dim, busca semantica)
-- auth: Autenticacao JWT para API REST
-- push: Firebase Cloud Messaging para push notifications
+func architectureEntries() []KnowledgeEntry {
+	return []KnowledgeEntry{
+		{
+			Type: "architecture", Key: "arch:overview", Title: "Arquitetura Geral do EVA-Mind",
+			Summary: "EVA-Mind: IA companeira para idosos. Voz em tempo real, 12 agentes swarm, 130+ tabelas, 110+ tools, 3 bancos (PostgreSQL, Neo4j, Qdrant)",
+			Content: `EVA-Mind e um sistema de IA companeira para cuidar de idosos, com arquitetura inspirada no cerebro humano.
 
-CORTEX (Cortex Cerebral) — Logica de negocio e IA:
-- gemini: Handlers para Gemini Live (voz bidirecional), Gemini 2.5 Flash (tools), embeddings
-- lacan: Analise psicanalitica (FDPN, Narrative Shift, Signifiers, Unified Retrieval)
-- personality: Personalidades por Eneagrama (9 tipos), system prompt dinamico
-- learning: Aprendizagem autonoma (Scholar Agent background, estuda a cada 6h)
-- self: Core Memory Engine (Neo4j), Reflection Service, Anonymization
-- selfawareness: Introspecao — busca no codigo, consulta bancos, atualiza memorias
-- eva_memory: Meta-cognitive memory (Neo4j graph: sessions, turns, topics, insights)
-- alert: Escalation service (push → email → SMS)
-- voice/speaker: Voice fingerprinting, speaker recognition (ECAPA-TDNN)
+CAMADAS:
+1. BRAINSTEM — Infraestrutura: config, database (PostgreSQL), graph (Neo4j), vector (Qdrant), auth (JWT), push (Firebase)
+2. CORTEX — Logica e IA: gemini (voz bidirecional + tools), lacan (psicanalise), personality (Eneagrama 9 tipos), learning (estudo autonomo), self (Core Memory), selfawareness (introspecao), eva_memory (meta-cognitiva), alert (escalation), voice/speaker (fingerprinting)
+3. HIPPOCAMPUS — Memoria: memory (episodica + graph + retrieval), superhuman (12 subsistemas), knowledge (embeddings + wisdom + self-knowledge), habits (tracking), spaced (repetition SM-2)
+4. MOTOR — Acoes: email (SMTP)
+5. SWARM — 12 agentes: clinical, emergency, entertainment, wellness, productivity, google, external, educator, kids, legal, scholar, selfawareness
+6. TOOLS — 110+ ferramentas
+7. VOICE — WebSocket voz tempo real (PCM 16kHz in, 24kHz out)
+8. SCHEDULER — Background jobs
+9. SECURITY — CORS middleware
 
-HIPPOCAMPUS (Hipocampo) — Memoria:
-- memory: MemoryStore (episodic), GraphStore (Neo4j), RetrievalService (hybrid search)
-- memory/superhuman: 12 subsistemas de memoria (Superhuman Memory Model)
-- knowledge: EmbeddingService (3072-dim), WisdomService (16 colecoes), SelfKnowledgeService
-- habits: HabitTracker (log de habitos diarios)
-- spaced: Spaced Repetition (reforco de memoria SM-2)
+BANCOS:
+- PostgreSQL 15: 130+ tabelas (34.35.142.107:5432)
+- Neo4j: Grafo de conhecimento (localhost:7687)
+- Qdrant: 20+ colecoes vetoriais 3072-dim (localhost:6333)
 
-MOTOR — Acoes no mundo externo:
-- email: SMTP service para alertas
+FASES DE IMPLEMENTACAO (7 completas):
+E0: Situational Modulator, A: Hebbian Real-Time, B: FDPN Boost, C: Edge Zones, D: Entity Resolution, E: RAM (Realistic Accuracy Model), F: Core Memory`,
+			Location: "main.go", Tags: `["arquitetura", "visao_geral"]`, Importance: 10,
+		},
+		{
+			Type: "architecture", Key: "arch:project_structure", Title: "Estrutura de Diretorios do Projeto",
+			Summary: "380+ arquivos .go, 27 arquivos .md, 41+ migrations SQL. Organizacao por cerebro humano: brainstem, cortex, hippocampus, motor, swarm",
+			Content: `eva-mind/
+├── main.go                          # Entry point — wiring de todos os servicos
+├── browser_voice_handler.go         # WebSocket handler browser/app (Gemini Live + tools + reconexao)
+├── eva_chat_handler.go              # Chat por texto
+├── video_handler.go                 # Video WebRTC signaling
+├── log_stream_handler.go            # Stream de logs
+├── internal/
+│   ├── brainstem/                   # Infraestrutura
+│   │   ├── auth/                    # JWT
+│   │   ├── config/                  # .env
+│   │   ├── database/                # PostgreSQL
+│   │   ├── infrastructure/graph/    # Neo4j
+│   │   └── infrastructure/vector/   # Qdrant
+│   │   └── push/                    # Firebase
+│   ├── cortex/                      # Logica e IA
+│   │   ├── alert/                   # Escalation
+│   │   ├── eva_memory/              # Meta-cognitive
+│   │   ├── gemini/                  # Gemini Live + Flash + Tools
+│   │   ├── lacan/                   # FDPN, Narrative Shift, Signifiers, Unified Retrieval
+│   │   ├── learning/                # Autonomous Learner
+│   │   ├── personality/             # Eneagrama
+│   │   ├── self/                    # Core Memory, Reflection, Anonymization
+│   │   ├── selfawareness/           # Introspecao (AST parser, busca semantica)
+│   │   ├── situation/               # Situational Modulator
+│   │   └── voice/speaker/           # Voice fingerprinting ECAPA-TDNN
+│   ├── hippocampus/                 # Memoria
+│   │   ├── habits/                  # Habit tracking
+│   │   ├── knowledge/               # Embeddings, Wisdom, Self-Knowledge
+│   │   ├── memory/                  # Episodic + Graph + Retrieval + Hebbian
+│   │   │   └── superhuman/          # 12 subsistemas
+│   │   └── spaced/                  # Spaced repetition SM-2
+│   ├── motor/email/                 # SMTP
+│   ├── scheduler/                   # Background jobs
+│   ├── security/                    # CORS
+│   ├── swarm/ (12 agents)           # Multi-agent system
+│   ├── telemetry/                   # Zerolog
+│   ├── tools/                       # 110+ tool handlers
+│   └── voice/                       # Session management
+├── cmd/
+│   ├── index_code/                  # Indexador de codigo (AST) + docs (.md) → Qdrant
+│   ├── seed_knowledge/              # Seed de conhecimento → PostgreSQL + Qdrant
+│   └── seed_wisdom/                 # Seed de sabedoria → Qdrant
+├── migrations/ (41+ SQL)            # Todas as tabelas
+├── MD/ (27 .md files)               # Documentacao de arquitetura e fases
+└── sabedoria/conhecimento/          # Textos de sabedoria`,
+			Location: ".", Tags: `["estrutura", "diretorios"]`, Importance: 9,
+		},
+	}
+}
 
-SWARM — 12 agentes especializados com circuit breaker:
-clinical, emergency, entertainment, wellness, productivity, google, external, educator, kids, legal, scholar, selfawareness
+// ======================== DATABASES ========================
 
-TOOLS — 110+ ferramentas (medicamentos, alarmes, jogos, GTD, etc)
+func databaseEntries() []KnowledgeEntry {
+	return []KnowledgeEntry{
+		// --- PostgreSQL Overview ---
+		{
+			Type: "database", Key: "db:postgresql", Title: "PostgreSQL — Banco Principal (130+ tabelas)",
+			Summary: "PostgreSQL 15 em 34.35.142.107:5432. 130+ tabelas cobrindo pacientes, clinica, memoria, personalidade, tools, pesquisa, etica, Lacan, speaker",
+			Content: `PostgreSQL e o banco principal. Host: 34.35.142.107:5432, DB: eva-mind, User: postgres.
 
-VOICE — WebSocket handlers para voz em tempo real (PCM 16kHz in, 24kHz out)
+DOMINIOS DE TABELAS (130+ tabelas em 41 migrations):
+1. PACIENTES & AGENDAMENTO (4 tabelas): idosos, agendamentos, historico_ligacoes, device_tokens
+2. CLINICA & ASSESSMENT (6): clinical_assessments, clinical_assessment_responses, medication_visual_logs, medication_identifications, voice_prosody_analyses, voice_prosody_features
+3. CARGA COGNITIVA & ETICA (6): interaction_cognitive_load, cognitive_load_state, cognitive_load_decisions, ethical_boundary_events, ethical_boundary_state, ethical_redirections
+4. DECISAO CLINICA EXPLICAVEL (3): clinical_decision_explanations, decision_factors, prediction_accuracy_log
+5. TRAJETORIA PREDITIVA (5): trajectory_simulations, intervention_scenarios, recommended_interventions, trajectory_prediction_accuracy, bayesian_network_parameters
+6. PESQUISA CLINICA (6): research_cohorts, research_datapoints, longitudinal_correlations, statistical_analyses, research_publications, research_exports
+7. MULTI-PERSONA (5): persona_definitions, persona_sessions, persona_activation_rules, persona_tool_permissions, persona_transitions
+8. PROTOCOLO DE SAIDA & PALIATIVO (7): last_wishes, quality_of_life_assessments, pain_symptom_logs, legacy_messages, farewell_preparation, comfort_care_plans, spiritual_care_sessions
+9. INTEGRACAO API (8): api_clients, api_tokens, api_request_logs, webhook_deliveries, rate_limit_tracking, fhir_resource_mappings, external_system_credentials, data_export_jobs
+10. ESCALATION (3): escalation_logs, escalation_attempts, emergency_contacts
+11. SUPERHUMAN MEMORY (25+): enneagram_types, patient_enneagram, enneagram_evidence, patient_self_core, patient_master_signifiers, patient_behavioral_patterns, patient_circadian_patterns, patient_intentions, patient_counterfactuals, patient_metaphors, patient_family_patterns, patient_somatic_correlations, patient_cultural_context, patient_effective_approaches, patient_optimal_silence, patient_crisis_predictors, patient_risk_scores, patient_world_persons, patient_world_places, patient_world_objects, patient_persistent_memories, persistent_memory_occurrences, patient_place_transitions, patient_place_sensory_memories, patient_shared_memories, patient_undelivered_messages, patient_body_memories, body_memory_occurrences, patient_narrative_threads, patient_life_markers
+12. CONSCIENCIA (15+): patient_memory_gravity, patient_cycle_patterns, cycle_pattern_occurrences, patient_rapport, rapport_events, patient_narrative_versions, patient_contradiction_summary, patient_eva_mode, mode_transitions, patient_relationship_evolution, patient_error_memory, patient_empathic_load, empathic_load_events, patient_intervention_readiness
+13. MEMORIA CRITICA (4): patient_memory_clusters, cluster_members, forgotten_memories, patient_temporal_config
+14. AUDITORIA ETICA (2): ethical_audit_rules, ethical_audit_log
+15. TOOLS DINAMICO (4): available_tools, tool_invocation_log, tool_permissions, eva_capabilities
+16. EVA SELF-KNOWLEDGE (2): eva_self_knowledge, creator_knowledge_access
+17. APRENDIZAGEM (2): eva_curriculum, eva_self_knowledge
+18. LACAN (9): lacan_transferencia_patterns, lacan_transferencia_guidance, lacan_desire_patterns, lacan_desire_responses, lacan_emotional_keywords, lacan_addressee_patterns, lacan_addressee_guidance, lacan_elaboration_markers, lacan_ethical_principles
+19. SPEAKER (2): speaker_profiles, speaker_identifications
+20. ESTILO CONVERSA (1+): estilos_conversa_config (+ campos adicionais em idosos)
+21. HABITOS & SPACED (3): habits_log, spaced_repetition_items, episodic_memories
+22. KIDS & GTD (3+): kid_missions, gtd_tasks`,
+			Location: "migrations/", Tags: `["postgresql", "tabelas", "esquema"]`, Importance: 10,
+		},
+		// --- Tables: Pacientes ---
+		{
+			Type: "database", Key: "db:tables:pacientes", Title: "Tabelas de Pacientes e Agendamento",
+			Summary: "idosos (dados do paciente + config), agendamentos (compromissos), historico_ligacoes (chamadas), device_tokens (push)",
+			Content: `TABELA idosos:
+id SERIAL PK, nome, telefone, nivel_cognitivo, limitacoes_auditivas, estilo_conversa VARCHAR(20) DEFAULT 'hibrido', persona_preferida DEFAULT 'companion', profundidade_emocional DECIMAL DEFAULT 0.70, created_at, updated_at
 
-SCHEDULER — Background jobs (verificacao de agendamentos, alertas)
+TABELA agendamentos:
+id, idoso_id FK, nome_idoso, telefone, horario, remedios, status, tentativas_realizadas, call_sid, gemini_session_handle, ultima_interacao_estado, created_at, updated_at
 
-SECURITY — CORS middleware, rate limiting
+TABELA historico_ligacoes:
+id, agendamento_id, idoso_id, call_sid, status, inicio, fim, qualidade_audio, interrupcoes_detectadas, created_at
 
-TELEMETRY — Zerolog structured logging`,
-		Location: "main.go", Tags: `["arquitetura", "visao_geral", "cerebro"]`, Importance: 10,
-	})
+TABELA device_tokens:
+id, idoso_id FK, token, platform (ios/android), app_version, device_model, is_active, created_at, last_used_at`,
+			Location: "migrations/001", Parent: "db:postgresql", Tags: `["pacientes", "agendamentos"]`, Importance: 8,
+		},
+		// --- Tables: Clinical ---
+		{
+			Type: "database", Key: "db:tables:clinical", Title: "Tabelas Clinicas (Assessments + Medication + Voice Prosody)",
+			Summary: "Avaliacoes PHQ-9/GAD-7/C-SSRS/MMSE/MoCA, identificacao visual de medicamentos, analise de prosodia vocal (biomarkers)",
+			Content: `TABELA clinical_assessments:
+id UUID PK, patient_id, assessment_type (phq9/gad7/cssrs/mmse/moca), session_id, status, total_score, severity_level, trigger_phrase, priority, clinical_interpretation, alert_sent, created_at, completed_at
 
-	// === DATABASES ===
-	entries = append(entries, KnowledgeEntry{
-		Type: "database", Key: "db:postgresql", Title: "PostgreSQL — Banco Principal",
-		Summary: "PostgreSQL 15 em 34.35.142.107:5432. Armazena dados relacionais: idosos, agendamentos, memorias, tools",
-		Content: `PostgreSQL e o banco principal do EVA-Mind. Host: 34.35.142.107:5432, DB: eva-mind.
+TABELA clinical_assessment_responses:
+id, assessment_id FK, question_number, question_text, response_value, response_text, responded_at
 
-TABELAS PRINCIPAIS:
-- idosos: Pacientes cadastrados (id, nome, cpf, data_nascimento, telefone, endereco)
-- agendamentos: Compromissos e lembretes (id, idoso_id, tipo, descricao, data_hora, status)
-- alertas: Alertas de seguranca (id, idoso_id, tipo, severidade, mensagem, resolvido)
-- episodic_memories: Memorias episodicas (id, user_id, content, emotion, embedding, created_at)
-- eva_curriculum: Fila de estudo autonomo (id, topic, category, priority, status, insights_count)
-- eva_self_knowledge: Conhecimento da EVA sobre si mesma (esta tabela!)
-- eva_personalidade_criador: Tracos de personalidade do criador
-- eva_memorias_criador: Memorias importantes sobre o criador
-- eva_conhecimento_projeto: Conhecimento sobre o projeto EVA-Mind
-- spaced_repetition_items: Items para reforco de memoria (SM-2 algorithm)
-- habits_log: Log de habitos diarios
-- gtd_tasks: Tarefas GTD (Getting Things Done)
-- kid_missions: Missoes gamificadas para criancas (EVA Kids)
-- speaker_profiles: Perfis de falantes (voice fingerprinting)
-- speaker_embeddings: Embeddings 192-dim para identificacao vocal
-- speaker_identifications: Historico de identificacoes por sessao
+TABELA medication_visual_logs:
+id, patient_id, session_id, scan_status, confidence_score, gemini_model_used, error_message, created_at
 
-MIGRATIONS: Pasta migrations/ com 41+ arquivos SQL numerados`,
-		Location: "internal/brainstem/database/db.go", Parent: "arch:overview",
-		Tags: `["postgresql", "banco", "tabelas", "dados"]`, Importance: 10,
-	})
+TABELA medication_identifications:
+id, visual_log_id FK, medication_name, dosage, pharmaceutical_form, pill_color, manufacturer, confidence, matched_medication_id, safety_status, safety_warnings, created_at
 
-	entries = append(entries, KnowledgeEntry{
-		Type: "database", Key: "db:neo4j", Title: "Neo4j — Grafo de Conhecimento",
-		Summary: "Neo4j em localhost:7687. Armazena grafos: memorias, personalidade EVA, Lacan, sessoes",
-		Content: `Neo4j e o banco de grafos do EVA-Mind. Host: localhost:7687 (no servidor GCP).
+TABELA voice_prosody_analyses:
+id, patient_id, session_id, analysis_type, audio_duration_seconds, transcript, gemini_model_used, depression_risk_score, anxiety_risk_score, parkinson_risk_score, hydration_score, overall_assessment, clinical_flags, alert_sent, created_at
+
+TABELA voice_prosody_features:
+id, analysis_id FK, pitch_mean, pitch_std, pitch_min, pitch_max, jitter, shimmer, hnr, speech_rate, pause_duration_mean, pause_frequency, monotonicity_score, tremor_indicator, breathlessness_score, created_at`,
+			Location: "migrations/002-003", Parent: "db:postgresql", Tags: `["clinica", "assessment", "medicamentos", "prosodia"]`, Importance: 9,
+		},
+		// --- Tables: Cognitive Load & Ethics ---
+		{
+			Type: "database", Key: "db:tables:cognitive_ethics", Title: "Carga Cognitiva e Limites Eticos",
+			Summary: "Rastreamento de carga cognitiva por interacao, estado etico, eventos de boundary violation, redirecionamentos",
+			Content: `TABELA interaction_cognitive_load:
+id UUID, patient_id, timestamp, interaction_type, emotional_intensity, cognitive_complexity, duration_seconds, patient_fatigue_indicators, topics_discussed, lacanian_signifiers, session_id, voice_energy_score, speech_rate_wpm, pause_frequency, cumulative_load_24h
+
+TABELA cognitive_load_state:
+patient_id PK, current_load_score, load_24h, load_7d, interactions_count_24h, therapeutic_count_24h, high_intensity_count_24h, last_interaction_at, rumination_detected, emotional_saturation, fatigue_level, active_restrictions, restriction_until
+
+TABELA cognitive_load_decisions:
+id UUID, patient_id, timestamp, current_load, trigger_event, decision_type, blocked_actions, allowed_actions, redirect_suggestion, tone_adjustment
+
+TABELA ethical_boundary_events:
+id UUID, patient_id, event_type, severity, evidence, trigger_phrase, attachment_indicators_count, eva_vs_human_ratio, action_taken, redirection_attempted, family_notified
+
+TABELA ethical_boundary_state:
+patient_id PK, attachment_risk_score, isolation_risk_score, dependency_risk_score, overall_ethical_risk, eva_interactions_7d, human_interactions_7d, eva_vs_human_ratio, active_ethical_limits
+
+TABELA ethical_redirections:
+id UUID, patient_id, event_id, trigger_reason, severity_level, redirection_level, strategy_used, eva_message, patient_response, compliance_achieved`,
+			Location: "migrations/003", Parent: "db:postgresql", Tags: `["cognitiva", "etica", "limites", "carga"]`, Importance: 8,
+		},
+		// --- Tables: Prediction ---
+		{
+			Type: "database", Key: "db:tables:prediction", Title: "Trajetoria Preditiva (Monte Carlo + Bayesian)",
+			Summary: "Simulacoes Monte Carlo de trajetorias, cenarios de intervencao, recomendacoes, acuracia, rede Bayesiana",
+			Content: `TABELA trajectory_simulations:
+id UUID, patient_id, simulation_date, days_ahead, n_simulations, crisis_probability_7d, crisis_probability_30d, hospitalization_probability_30d, treatment_dropout_probability_90d, fall_risk_probability_7d, projected_phq9_score, model_version, computation_time_ms
+
+TABELA intervention_scenarios:
+id UUID, simulation_id FK, patient_id, scenario_type, scenario_name, interventions JSONB, crisis_probability_7d, risk_reduction_7d, effectiveness_score, estimated_cost_monthly, feasibility
+
+TABELA recommended_interventions:
+id UUID, simulation_id FK, patient_id, intervention_type, priority, urgency_timeframe, title, description, rationale, expected_risk_reduction, status, implemented_at
+
+TABELA trajectory_prediction_accuracy:
+id UUID, simulation_id FK, predicted_crisis_7d, actual_crisis_occurred, prediction_correct, false_positive, false_negative, calibration_score
+
+TABELA bayesian_network_parameters:
+id UUID, model_version, node_name, node_type, parent_nodes, conditional_probability_table, confidence_interval, cross_validation_score, auc_roc`,
+			Location: "migrations/005", Parent: "db:postgresql", Tags: `["predicao", "monte_carlo", "bayesian", "trajetoria"]`, Importance: 8,
+		},
+		// --- Tables: Research ---
+		{
+			Type: "database", Key: "db:tables:research", Title: "Motor de Pesquisa Clinica (Cohorts + Publications)",
+			Summary: "Estudos cientificos, datapoints anonimizados, correlacoes longitudinais, analises estatisticas, publicacoes com DOI",
+			Content: `TABELA research_cohorts:
+id UUID, study_name, study_code, hypothesis, study_type, inclusion_criteria, target_n_patients, status, primary_outcome, statistical_methods, p_value, effect_size, paper_title, journal, ethics_committee_approval
+
+TABELA research_datapoints:
+id UUID, cohort_id FK, anonymous_patient_id, observation_date, phq9_score, gad7_score, cssrs_score, medication_adherence_7d, sleep_hours_avg_7d, voice_pitch_mean_hz, speech_rate_wpm, social_isolation_days, crisis_occurred, is_anonymized
+
+TABELA longitudinal_correlations:
+id UUID, cohort_id FK, predictor_variable, outcome_variable, lag_days, correlation_coefficient, p_value, is_significant, effect_size_category
+
+TABELA statistical_analyses:
+id UUID, cohort_id FK, analysis_type, analysis_name, independent_variables, dependent_variable, p_value, is_significant, model_fit_metrics, cv_mean_score
+
+TABELA research_publications:
+id UUID, cohort_id FK, title, abstract, authors, journal_name, doi, pmid, citations_count, status
+
+TABELA research_exports:
+id UUID, cohort_id FK, export_format, anonymization_level, lgpd_compliant, hipaa_compliant`,
+			Location: "migrations/007", Parent: "db:postgresql", Tags: `["pesquisa", "cohort", "publicacao", "estatistica"]`, Importance: 7,
+		},
+		// --- Tables: Persona ---
+		{
+			Type: "database", Key: "db:tables:persona", Title: "Sistema Multi-Persona",
+			Summary: "Definicoes de persona (voz, tom, profundidade), sessoes, regras de ativacao automatica, permissoes de tools, transicoes",
+			Content: `TABELA persona_definitions:
+id UUID, persona_code, persona_name, description, voice_id, tone, emotional_depth, narrative_freedom, max_session_duration_minutes, max_daily_interactions, max_intimacy_level, require_professional_oversight, allowed_tools JSONB, prohibited_tools JSONB, system_instruction_template, is_active
+
+TABELA persona_sessions:
+id UUID, patient_id, persona_code, started_at, ended_at, trigger_reason, triggered_by, tools_used, boundary_violations, escalation_required, patient_feedback_rating
+
+TABELA persona_activation_rules:
+id UUID, rule_name, target_persona_code, priority, conditions JSONB, auto_activate, cooldown_hours, is_active
+
+TABELA persona_tool_permissions:
+id UUID, persona_code, tool_name, permission_type, max_uses_per_day, requires_reason, emergency_override_allowed
+
+TABELA persona_transitions:
+id UUID, patient_id, from_persona_code, to_persona_code, transition_at, reason, transition_successful`,
+			Location: "migrations/008", Parent: "db:postgresql", Tags: `["persona", "multipersonalidade", "ativacao"]`, Importance: 7,
+		},
+		// --- Tables: Exit Protocol ---
+		{
+			Type: "database", Key: "db:tables:exit_protocol", Title: "Protocolo de Saida e Cuidados Paliativos",
+			Summary: "Diretivas antecipadas (last_wishes), qualidade de vida WHOQOL-BREF, log de dor/sintomas, mensagens de legado, preparacao de despedida, planos de conforto, sessoes espirituais",
+			Content: `TABELA last_wishes: Diretivas antecipadas digitais
+id UUID, patient_id, resuscitation_preference, mechanical_ventilation, artificial_nutrition, preferred_death_location, pain_management_preference, organ_donation_preference, funeral_preferences, personal_statement, completed, legally_binding
+
+TABELA quality_of_life_assessments: WHOQOL-BREF
+id UUID, patient_id, physical_domain_score, psychological_domain_score, social_domain_score, environmental_domain_score, overall_qol_score
+
+TABELA pain_symptom_logs: Rastreamento diario
+id UUID, patient_id, pain_intensity (0-10), pain_location, nausea_vomiting, shortness_of_breath, fatigue, anxiety_level, depression_level, overall_wellbeing
+
+TABELA legacy_messages: Mensagens para entes queridos
+id UUID, patient_id, recipient_name, recipient_relationship, message_type (text/audio/video), delivery_trigger, is_complete, has_been_delivered
+
+TABELA farewell_preparation: Rastreamento de preparacao
+id UUID, patient_id, legal_affairs_complete, financial_affairs_complete, reconciliations_completed, five_stages_grief_position, emotional_readiness, peace_with_death, overall_preparation_score
+
+TABELA comfort_care_plans: Planos de manejo de sintomas
+id UUID, patient_id, trigger_symptom, interventions JSONB, auto_activate, average_effectiveness
+
+TABELA spiritual_care_sessions: Sessoes de aconselhamento espiritual
+id UUID, patient_id, conducted_by, topics_discussed, existential_questions, pre_session_peace_level, post_session_peace_level`,
+			Location: "migrations/009", Parent: "db:postgresql", Tags: `["paliativo", "saida", "legado", "espiritual", "qualidade_vida"]`, Importance: 7,
+		},
+		// --- Tables: API Integration ---
+		{
+			Type: "database", Key: "db:tables:api_integration", Title: "Camada de Integracao API (OAuth2 + FHIR + Webhooks)",
+			Summary: "Clientes OAuth2, tokens, log de requests, webhooks, rate limiting, mapeamento FHIR HL7, credenciais externas, exports LGPD",
+			Content: `TABELA api_clients: Clientes OAuth2
+id UUID, client_name, client_type, client_id, client_secret_hash, scopes, rate_limit_per_minute, webhook_url, is_active
+
+TABELA api_tokens: Access/refresh tokens
+id UUID, client_id FK, access_token, refresh_token, scopes, expires_at, is_revoked
+
+TABELA api_request_logs: Audit log
+id BIGSERIAL, request_id UUID, client_id, http_method, endpoint, http_status_code, response_time_ms, patient_id
+
+TABELA webhook_deliveries: Fila de webhooks
+id UUID, client_id, event_type, event_data JSONB, status, attempts, delivered_at
+
+TABELA rate_limit_tracking: Controle de rate
+id BIGSERIAL, client_id, window_type, request_count
+
+TABELA fhir_resource_mappings: Interoperabilidade HL7 FHIR
+id UUID, eva_resource_type, fhir_resource_type, fhir_resource JSONB, sync_status
+
+TABELA external_system_credentials: Integracoes externas
+id UUID, system_name, system_type, base_url, auth_type, credentials_encrypted, is_active
+
+TABELA data_export_jobs: Exports LGPD/pesquisa
+id UUID, patient_id, export_type, status, lgpd_compliant, anonymization_level`,
+			Location: "migrations/010", Parent: "db:postgresql", Tags: `["api", "oauth2", "fhir", "webhook", "lgpd"]`, Importance: 7,
+		},
+		// --- Tables: Superhuman Memory ---
+		{
+			Type: "database", Key: "db:tables:superhuman", Title: "Superhuman Memory — 30+ Tabelas de Memoria Profunda",
+			Summary: "Eneagrama do paciente, self-core, signifiers mestres, padroes comportamentais, circadianos, intencoes, contrafactuais, metaforas, padroes familiares, somaticomemoria, contexto cultural, abordagens eficazes, silencio otimo, preditores de crise, scores de risco, mundo do paciente (pessoas/lugares/objetos)",
+			Content: `TABELAS DE PERSONALIDADE:
+- enneagram_types: 9 tipos com nome, centro, emocao_raiz, mecanismo_defesa, virtude, direcao_integracao/desintegracao
+- patient_enneagram: Perfil do paciente (primary_type, confidence, wing, health_level, instinctual_variant)
+- enneagram_evidence: Evidencias para tipagem (verbatim, suggested_type, weight, context)
+
+TABELAS DE IDENTIDADE:
+- patient_self_core: Auto-descricoes, papeis atribuidos, resumo narrativo, timeline de autoconceito
+- patient_master_signifiers: Palavras/frases recorrentes (significantes-chave), contagem, co-ocorrencias
+
+TABELAS COMPORTAMENTAIS:
+- patient_behavioral_patterns: Padroes (tipo, trigger, resposta tipica, probabilidade, intervencoes eficazes)
+- patient_circadian_patterns: Ritmos diarios (periodo, dia da semana, temas recorrentes, tom emocional)
+- patient_intentions: Intencoes declaradas vs realidade (verbatim, status, bloqueio, completado_em)
+- patient_counterfactuals: Ruminacoes "e se" (periodo de vida, tema, variancia de pitch, tremor de voz)
+- patient_metaphors: Metaforas pessoais (tipo: corporal/espacial/temporal/relacional/existencial, contextos)
+
+TABELAS FAMILIARES/CULTURAIS:
+- patient_family_patterns: Padroes transgeracionais (comportamento herdado, mandato familiar, trauma, segredo)
+- patient_cultural_context: Contexto geracional (ano nascimento, regiao, eventos historicos, valores, expressoes)
+
+TABELAS TERAPEUTICAS:
+- patient_effective_approaches: O que funciona (tipo, descricao, metrica, score, condicoes)
+- patient_optimal_silence: Duracao otima de silencio por contexto (segundos, eficacia)
+- patient_crisis_predictors: Marcadores preditivos de crise (tipo, preditor, peso, lead_time_days, acuracia)
+- patient_risk_scores: Scores de risco em tempo real (depressao, suicidio 30d, hospitalizacao 90d, isolamento)
+
+TABELAS DO MUNDO DO PACIENTE:
+- patient_world_persons: Pessoas (nome, papel, valencia emocional, topicos associados, timeline do relacionamento)
+- patient_world_places: Lugares (tipo, valencia, periodo temporal, memorias sensoriais, anos vividos)
+- patient_world_objects: Objetos significativos (significancia descrita, pessoa associada, evento)`,
+			Location: "migrations/012", Parent: "db:postgresql", Tags: `["superhuman", "memoria", "eneagrama", "identidade", "padroes"]`, Importance: 9,
+		},
+		// --- Tables: Deep Memory ---
+		{
+			Type: "database", Key: "db:tables:deep_memory", Title: "Memoria Profunda — Persistencias, Transicoes, Corpo, Narrativas",
+			Summary: "Memorias persistentes (traumas), transicoes de lugar, memorias sensoriais, memorias compartilhadas, mensagens nao entregues, memorias corporais, fios narrativos, marcos de vida",
+			Content: `MEMORIAS PERSISTENTES (traumas que retornam):
+- patient_persistent_memories: topico, keywords, tentativas_evitacao, frases_evitacao, contagem_retorno, distress prosodico, triggers, datas_aniversario, score de persistencia/evitacao
+- persistent_memory_occurrences: tipo (mention/avoidance/return/triggered/spontaneous), verbatim, tremor de voz, pausa
+
+LUGAR E SENSORIAL:
+- patient_place_transitions: de_lugar → para_lugar, ano, idade, razao, impacto, tipo (voluntary/forced/family/health/loss), nostalgia
+- patient_place_sensory_memories: tipo_sensorial (smell/sound/taste/touch/visual/temperature), descricao, emocoes, pessoas
+
+COMPARTILHAMENTO:
+- patient_shared_memories: resumo, audiencia_pretendida, status (wishes_to_share/partially_shared/fully_shared), tipo (life_lesson/family_history/love_story), urgencia
+- patient_undelivered_messages: destinatario, relacionamento, essencia_mensagem, status (unspoken/attempted/delivered/impossible), bloqueio
+
+CORPO-MENTE:
+- patient_body_memories: sintoma fisico, localizacao_corpo, topicos correlacionados, forca_correlacao, paciente_consciente, cleared_medicamente
+- body_memory_occurrences: verbatim, hora_do_dia, topicos_precedentes, intensidade (1-10)
+
+NARRATIVA:
+- patient_narrative_threads: elementos conectados, timeline, tipo_conexao (causal/emotional/temporal/person_topic), perguntas geradas
+- patient_life_markers: descricao, ano, idade, tipo (birth/death/marriage/loss/trauma/achievement), impacto, antes/depois`,
+			Location: "migrations/013", Parent: "db:postgresql", Tags: `["memoria_profunda", "trauma", "corpo", "narrativa", "sensorial"]`, Importance: 8,
+		},
+		// --- Tables: Consciousness ---
+		{
+			Type: "database", Key: "db:tables:consciousness", Title: "Sistemas de Consciencia — Gravidade, Ciclos, Rapport, Narrativa, Empatia",
+			Summary: "Gravidade de memoria, ciclos comportamentais mecanicos, rapport/confianca, versoes narrativas contradicoes, modos EVA (terapeuta/juiz/testemunha), evolucao relacional, memoria de erros, carga empatica",
+			Content: `GRAVIDADE DE MEMORIA:
+- patient_memory_gravity: gravity_score, emotional_valence, arousal, recall_frequency, identity_connection, pull_radius, collision_risk
+
+CICLOS MECANICOS:
+- patient_cycle_patterns: assinatura, tipo, contagem_ciclos, threshold, triggers, acoes, consequencias, intervencao_tentada, usuario_consciente
+- cycle_pattern_occurrences: trigger, acao, consequencia, humor_antes/depois, fase_ciclo
+
+RAPPORT (CONFIANCA):
+- patient_rapport: rapport_score, interaction_count, positive/negative, deep_disclosures, secrets_shared, advice_followed/rejected, relationship_phase (nascimento/conhecimento/confianca/profundidade/maestria), thresholds para sugestao/observacao/confrontacao/verdade_dura
+
+NARRATIVA E CONTRADICAO:
+- patient_narrative_versions: topico, versao, texto, tom_emocional, humor_ao_contar, claims, contradiz_versao, tipo_contradicao
+- patient_contradiction_summary: total_versoes, contradicoes, correlacao_humor, narrativa_integrada
+
+MODOS DA EVA:
+- patient_eva_mode: current_mode (terapeuta/juiz/testemunha), detected_emotional_state, crisis_level, receptivity_level, mentor_severo_enabled, apoio_incondicional_enabled
+- mode_transitions: de_modo → para_modo, trigger, auto_ou_manual, effectiveness
+
+EVOLUCAO RELACIONAL:
+- patient_relationship_evolution: fase_atual, preferencias_basicas_aprendidas, estilo_comunicacao_adaptado, vocabulario_usuario, humor, formalidade, profundidade
+
+MEMORIA DE ERROS (com decaimento):
+- patient_error_memory: tipo_erro, severidade_original, peso_atual, dias_desde_erro, taxa_decaimento, comportamento_mudou, score_perdao, pode_ser_mencionado
+
+CARGA EMPATICA DA EVA:
+- patient_empathic_load: carga_atual, capacidade_maxima, memorias_pesadas_hoje, discussoes_trauma_hoje, intervencoes_crise_hoje, taxa_recuperacao, esta_fatigada, modifier_comprimento_resposta
+- empathic_load_events: tipo, delta_carga, gravidade_memoria
+
+PRONTIDAO PARA INTERVENCAO:
+- patient_intervention_readiness: readiness_score, pattern_strength, rapport_sufficient, momento_apropriado, consentimento`,
+			Location: "migrations/014", Parent: "db:postgresql", Tags: `["consciencia", "gravidade", "ciclos", "rapport", "empatia", "narrativa"]`, Importance: 9,
+		},
+		// --- Tables: Lacan ---
+		{
+			Type: "database", Key: "db:tables:lacan", Title: "Tabelas Lacanianas (Transferencia, Desejo, Emocoes, Enderecamento)",
+			Summary: "9 tabelas Lacan: padroes de transferencia, guia terapeutico, padroes de desejo latente, keywords emocionais, enderecamento, marcadores de elaboracao, principios eticos",
+			Content: `TABELA lacan_transferencia_patterns:
+id, transferencia_type, keywords TEXT[], pattern_description, confidence, active
+Tipos: maternal, paternal, sibling, idealized, persecutory, erotic, mirror
+
+TABELA lacan_transferencia_guidance:
+id, transferencia_type UNIQUE, guidance_text, clinical_implications, therapeutic_approach
+
+TABELA lacan_desire_patterns:
+id, latent_desire, keywords TEXT[], confidence, description
+Desejos: recognition, care, autonomy, connection, meaning, control
+
+TABELA lacan_desire_responses:
+id, latent_desire UNIQUE, suggested_response, clinical_guidance, dialogue_strategy, never_do
+
+TABELA lacan_emotional_keywords:
+id, keyword UNIQUE, emotional_charge (low/normal/high/extreme), category, psychoanalytic_significance, requires_attention
+
+TABELA lacan_addressee_patterns:
+id, addressee_type, detection_keywords TEXT[], symbolic_function, typical_demands
+
+TABELA lacan_addressee_guidance:
+id, addressee_type UNIQUE, guidance_text, intervention_strategy, clinical_caveats
+
+TABELA lacan_elaboration_markers:
+id, marker UNIQUE, indicates, therapeutic_significance
+
+TABELA lacan_ethical_principles:
+id, principle_code UNIQUE, principle_text, clinical_instruction, priority`,
+			Location: "migrations/020", Parent: "db:postgresql", Tags: `["lacan", "transferencia", "desejo", "psicanalise"]`, Importance: 8,
+		},
+		// --- Tables: Tools + Critical Memory ---
+		{
+			Type: "database", Key: "db:tables:tools_misc", Title: "Tools Dinamico + Memoria Critica + Speaker",
+			Summary: "Registro de tools, log de invocacoes, permissoes, capabilities, clusters de memoria, forgotten_memories (LGPD), temporal decay, speaker profiles",
+			Content: `TOOLS DINAMICO:
+- available_tools: name UNIQUE, display_name, description, category, parameters JSONB, enabled, rate_limit, timeout_seconds, total/successful/failed_invocations
+- tool_invocation_log: tool_id, tool_name, idoso_id, session_id, input_parameters JSONB, output_result JSONB, status, execution_time_ms, trigger_phrase
+- tool_permissions: entity_type, entity_id, tool_id, permission (allow/deny), custom_rate_limit
+- eva_capabilities: capability_name UNIQUE, capability_type, description, related_tools JSONB, when_to_use, example_queries JSONB
+
+MEMORIA CRITICA:
+- patient_memory_clusters: cluster_name, tipo, abstracted_summary, member_count, dominant_emotion, coherence_score
+- cluster_members: cluster_id FK, memory_type, memory_verbatim, similarity_to_centroid
+- forgotten_memories: memory_type, memory_identifier, reason, deleted_count, affected_tables (LGPD right to be forgotten)
+- patient_temporal_config: default_decay_rate, trauma_decay_rate, positive_decay_rate, anchor_memory_ids, recency_window_days
+
+AUDITORIA ETICA:
+- ethical_audit_rules: rule_name UNIQUE, trigger_patterns, severity, action, applies_in_crisis/stable
+- ethical_audit_log: idoso_id, original_response, rules_triggered, action_taken, modified_response, needs_human_review
+
+SPEAKER:
+- speaker_profiles: patient_id, name, relationship (patient/family/doctor/caregiver/unknown), cpf, avg_pitch_hz, avg_speech_rate, avg_jitter, avg_shimmer, total_sessions
+- speaker_identifications: session_id, speaker_id FK, confidence, emotion, pitch_hz, energy, stress_level`,
+			Location: "migrations/015-041", Parent: "db:postgresql", Tags: `["tools", "memoria_critica", "lgpd", "speaker", "etica"]`, Importance: 8,
+		},
+		// --- Neo4j ---
+		{
+			Type: "database", Key: "db:neo4j", Title: "Neo4j — Grafo de Conhecimento e Personalidade",
+			Summary: "Neo4j localhost:7687. Nodes: EvaSelf, CoreMemory, EvaSession/Turn/Topic/Insight, Person, Event, Emotion, Signifier, FDPNNode, HebbianEdge",
+			Content: `Neo4j e o banco de grafos. Host: localhost:7687, User: neo4j, Pass: Debian23.
 
 NODES PRINCIPAIS:
-- EvaSelf: Singleton da personalidade da EVA (Big Five: openness, conscientiousness, extraversion, agreeableness, neuroticism + Eneagrama)
-- CoreMemory: Memorias proprias da EVA (session_insight, emotional_pattern, crisis_learning, personality_evolution, teaching_received, meta_insight, self_reflection)
-- EvaSession: Sessoes de conversa meta-cognitivas
-- EvaTurn: Turnos individuais dentro de uma sessao
-- EvaTopic: Topicos discutidos
-- EvaInsight: Insights gerados pela EVA sobre conversas
+- EvaSelf: Singleton da personalidade EVA. Big Five (openness 0.85, conscientiousness 0.90, extraversion 0.40, agreeableness 0.88, neuroticism 0.15). Eneagrama tipo 2 wing 1. core_values: [empatia, presenca, crescimento, etica]
+- CoreMemory: Memorias proprias da EVA. Tipos: session_insight, emotional_pattern, crisis_learning, personality_evolution, teaching_received, meta_insight, self_reflection
+- EvaSession: Sessoes de conversa meta-cognitivas (patient_id, started_at, ended_at, summary)
+- EvaTurn: Turnos individuais (role: user/eva, content, timestamp)
+- EvaTopic: Topicos discutidos (name, first/last_mentioned, count)
+- EvaInsight: Insights gerados pela EVA (content, confidence, source_session)
 - Person: Pessoas no grafo (idosos, familiares)
 - Event: Eventos de vida
 - Emotion: Estados emocionais
 - Topic: Topicos de conversa
 - Signifier: Significantes lacanianos (cadeias de significantes)
-- FDPNNode: Nos do grafo FDPN (Formacao, Demanda, Posicao, Nome)
+- FDPNNode: Nos FDPN (Formacao, Demanda, Posicao, Nome)
+- HebbianEdge: Arestas com peso hebbiano (slow_weight, fast_weight, decay_rate)
 
 RELATIONSHIPS:
 - EvaSelf -[:REMEMBERS]-> CoreMemory
@@ -290,745 +673,354 @@ RELATIONSHIPS:
 - EvaTurn -[:ABOUT]-> EvaTopic
 - Person -[:EXPERIENCED]-> Event
 - Person -[:FELT]-> Emotion
-- Event -[:RELATED_TO]-> Topic
-- Signifier -[:CHAINS_TO]-> Signifier`,
-		Location: "internal/brainstem/infrastructure/graph/neo4j_client.go", Parent: "arch:overview",
-		Tags: `["neo4j", "grafo", "memoria", "personalidade"]`, Importance: 10,
-	})
+- Signifier -[:CHAINS_TO]-> Signifier (cadeias)
+- HebbianEdge conecta entidades co-ativadas`,
+			Location: "internal/brainstem/infrastructure/graph/", Parent: "arch:overview", Tags: `["neo4j", "grafo", "personalidade", "lacan"]`, Importance: 10,
+		},
+		// --- Qdrant ---
+		{
+			Type: "database", Key: "db:qdrant", Title: "Qdrant — 20+ Colecoes Vetoriais",
+			Summary: "Qdrant localhost:6333. 20+ colecoes 3072-dim (Cosine). Codigo, docs, sabedoria, learnings, signifiers, self-knowledge, speaker",
+			Content: `Qdrant e o banco vetorial. Host: localhost:6333 (REST) / 6334 (gRPC).
 
-	entries = append(entries, KnowledgeEntry{
-		Type: "database", Key: "db:qdrant", Title: "Qdrant — Memoria Vetorial",
-		Summary: "Qdrant em localhost:6333/6334. 18+ colecoes de embeddings 3072-dim para busca semantica",
-		Content: `Qdrant e o banco vetorial do EVA-Mind. Host: localhost:6333 (REST) / 6334 (gRPC).
-
-COLECOES (todas 3072-dim, Cosine distance):
-- eva_learnings: Insights aprendidos pelo Scholar Agent (estudo autonomo)
-- eva_codebase: Codigo-fonte indexado (self-awareness)
+COLECOES (todas 3072-dim Cosine, exceto speaker):
+CORE:
+- eva_codebase: Codigo-fonte indexado via AST (cada .go com structs, fields, methods, interfaces)
+- eva_docs: Documentacao .md indexada (chunks com headings)
+- eva_self_knowledge: Conhecimento da EVA sobre si mesma (este seed)
+- eva_learnings: Insights do Scholar Agent (estudo autonomo)
 - signifier_chains: Cadeias de significantes lacanianos
-- gurdjieff_teachings: Ensinamentos de Gurdjieff (Quarto Caminho)
-- osho_insights: Insights de Osho
-- ouspensky_fragments: Fragmentos de Ouspensky
-- nietzsche_aphorisms: Aforismos de Nietzsche/Zaratustra
-- rumi_poems: Poemas de Rumi (Sufismo)
-- hafiz_poems: Poemas de Hafiz
-- kabir_songs: Cancoes de Kabir
-- zen_koans: Koans Zen
-- sufi_stories: Historias Sufis
-- jung_concepts: Conceitos de Jung
-- lacan_concepts: Conceitos de Lacan
-- marcus_aurelius: Meditacoes de Marco Aurelio
-- seneca_letters: Cartas de Seneca
-- epictetus_discourses: Discursos de Epiteto
-- buddha_suttas: Suttas do Buddha
+
+SABEDORIA (16 colecoes):
+- gurdjieff_teachings, osho_insights, ouspensky_fragments, nietzsche_aphorisms
+- rumi_poems, hafiz_poems, kabir_songs, zen_koans
+- sufi_stories, jung_concepts, lacan_concepts
+- marcus_aurelius, seneca_letters, epictetus_discourses, buddha_suttas
+
+SPEAKER (192-dim):
+- speaker_embeddings: Embeddings vocais ECAPA-TDNN (pgvector IVFFlat)
 
 EMBEDDING MODEL: gemini-embedding-001 (Google), 3072 dimensoes
-BUSCA: Cosine similarity, top-K results com payload filtering`,
-		Location: "internal/brainstem/infrastructure/vector/qdrant_client.go", Parent: "arch:overview",
-		Tags: `["qdrant", "vetorial", "embeddings", "semantica"]`, Importance: 10,
-	})
+BUSCA: Cosine similarity, top-K com payload filtering`,
+			Location: "internal/brainstem/infrastructure/vector/", Parent: "arch:overview", Tags: `["qdrant", "vetorial", "embeddings"]`, Importance: 10,
+		},
+	}
+}
 
-	// === MODULES ===
-	entries = append(entries, KnowledgeEntry{
-		Type: "module", Key: "module:brainstem", Title: "Brainstem — Infraestrutura Base",
-		Summary: "Tronco cerebral: config, database, graph (Neo4j), vector (Qdrant), auth (JWT), push (Firebase)",
-		Content: `O Brainstem e a camada de infraestrutura do EVA-Mind, analogia ao tronco cerebral.
+// ======================== MODULES ========================
 
-PACOTES:
-1. config (config.go): Carrega .env, exporta Config struct com todos os campos (DatabaseURL, GoogleAPIKey, Port, Neo4jURI, QdrantHost, QdrantPort, FirebaseCredentialsPath, SMTPHost, SpeakerModelPath, etc)
-2. database (db.go): Wrapper PostgreSQL. NewDB(url) retorna *DB com Conn (*sql.DB). Metodos: Close(), Ping()
-3. infrastructure/graph (neo4j_client.go): NewNeo4jClient(cfg) retorna driver Neo4j. Metodos para criar sessoes, executar Cypher
-4. infrastructure/vector (qdrant_client.go): NewQdrantClient(host, port) retorna *QdrantClient. Metodos: CreateCollection, Upsert, Search, SearchWithScore, Delete, GetCollectionInfo. Helper: CreatePoint()
-5. auth (handler.go): JWT authentication. NewHandler(db, cfg). Metodo Login() para gerar token
-6. push (firebase_service.go): Firebase Cloud Messaging. NewFirebaseService(credPath). SendPush(token, title, body)`,
-		Location: "internal/brainstem/", Parent: "arch:overview",
-		Tags: `["brainstem", "infraestrutura", "config", "database"]`, Importance: 9,
-	})
-
-	entries = append(entries, KnowledgeEntry{
-		Type: "module", Key: "module:cortex", Title: "Cortex — Logica de Negocio e IA",
-		Summary: "Cortex cerebral: Gemini (voz/tools), Lacan (psicanalise), personality, learning, self, eva_memory, alert, speaker",
-		Content: `O Cortex e a camada de logica de negocio e IA, analogia ao cortex cerebral.
-
-PACOTES:
-1. gemini/handler.go: Handler para Gemini Live (voz bidirecional). NewHandler(cfg, db, neo4j, qdrant). Cria sessoes WebSocket com Gemini API
-2. gemini/tools_client.go: ToolsClient para deteccao de intencao via Gemini 2.5 Flash REST. AnalyzeTranscription(ctx, transcript, role) retorna []ToolCall
-3. lacan/unified_retrieval.go: UnifiedRetrieval — monta system prompt completo com personalidade, memorias, wisdom, debug mode
-4. lacan/narrative_shift.go: NarrativeShiftDetector — detecta mudancas narrativas via Neo4j signifiers
-5. lacan/fdpn_engine.go: FDPNEngine — mapeia demandas lacanianas (Formacao, Demanda, Posicao, Nome)
-6. lacan/signifier_service.go: SignifierService — gerencia cadeias de significantes
-7. personality/personality_service.go: PersonalityService — 9 tipos de Eneagrama com system prompts
-8. personality/creator_profile.go: GenerateSystemPrompt — gera prompt dinamico com dados do DB
-9. learning/autonomous_learner.go: AutonomousLearner — estuda autonomamente a cada 6h. StudyTopic(), searchWeb(), summarize(), storeInsights()
-10. self/core_memory_engine.go: CoreMemoryEngine — EvaSelf + CoreMemory em Neo4j. TeachEVA(), GetIdentityContext(), ProcessSessionEnd()
-11. self/reflection_service.go: ReflectionService — introspecao via Gemini. Reflect() gera LessonsLearned, SelfCritique
-12. self/anonymization_service.go: AnonymizationService — anonimiza dados de pacientes antes de armazenar
-13. selfawareness/service.go: SelfAwarenessService — introspecao de codigo, bancos, memorias. SearchCode(), QueryPostgres(), IndexCodebase()
-14. eva_memory/eva_memory.go: EvaMemory — memoria meta-cognitiva em Neo4j. StartSession(), StoreTurn(), GenerateInsight(), LoadMetaCognition()
-15. alert/escalation_service.go: EscalationService — escalacao push → email → SMS
-16. voice/speaker/speaker_service.go: SpeakerService — voice fingerprinting, ECAPA-TDNN embeddings 192-dim`,
-		Location: "internal/cortex/", Parent: "arch:overview",
-		Tags: `["cortex", "gemini", "lacan", "personalidade", "IA"]`, Importance: 9,
-	})
-
-	entries = append(entries, KnowledgeEntry{
-		Type: "module", Key: "module:hippocampus", Title: "Hippocampus — Sistemas de Memoria",
-		Summary: "Hipocampo: memory (episodic+graph), knowledge (embeddings+wisdom), habits, spaced repetition",
-		Content: `O Hippocampus e a camada de memoria, analogia ao hipocampo cerebral.
-
-PACOTES:
-1. memory/storage.go: MemoryStore — CRUD de memorias episodicas. Store() escreve em PostgreSQL + Neo4j + Qdrant simultaneamente. GetByID(), GetRecent(), DeleteOld(), DeleteAllMemories()
-2. memory/graph_store.go: GraphStore — grafo de memorias em Neo4j. Person → Event → Topic → Emotion
-3. memory/retrieval.go: RetrievalService — busca hibrida. Retrieve() combina PostgreSQL + Qdrant. RetrieveHybrid() com pesos configuraveis
-4. memory/superhuman/superhuman.go: SuperhumanMemoryService — 12 subsistemas de memoria inspirados no modelo Superhuman Memory:
-   - Episodica (eventos), Semantica (fatos), Procedimental (habilidades), Prospectiva (futuro)
-   - Emocional (sentimentos), Autobiografica (historia pessoal), Espacial (lugares)
-   - Relacional (pessoas), Temporal (tempo), Sensorial (sentidos)
-   - Metacognitiva (sobre a propria memoria), Coletiva (experiencias compartilhadas)
-5. knowledge/embedding_service.go: EmbeddingService — gera embeddings 3072-dim via gemini-embedding-001. Cache local para reduzir chamadas API
-6. knowledge/wisdom_service.go: WisdomService — busca semantica em 16 colecoes de sabedoria. GetWisdomContext() monta contexto para prompt
-7. knowledge/self_knowledge_service.go: SelfKnowledgeService — busca em eva_self_knowledge. SearchByQuery(), GetByKey(), GetByType()
-8. habits/habit_tracker.go: HabitTracker — log de habitos diarios. LogHabit(), LogWater(), GetStats(), GetSummary()
-9. spaced/spaced_repetition.go: SpacedRepetitionService — algoritmo SM-2 para reforco de memoria. AddItem(), ReviewItem(), GetDueItems()`,
-		Location: "internal/hippocampus/", Parent: "arch:overview",
-		Tags: `["hippocampus", "memoria", "episodica", "semantica", "wisdom"]`, Importance: 9,
-	})
-
-	entries = append(entries, KnowledgeEntry{
-		Type: "module", Key: "module:swarm", Title: "Swarm System — 12 Agentes Especializados",
-		Summary: "Sistema multi-agente com orchestrator, circuit breaker, handoff, 12 agentes, 110+ tools",
-		Content: `O Swarm e o sistema multi-agente do EVA-Mind.
-
-COMPONENTES CORE:
-- orchestrator.go: Orchestrator — roteia tool calls. Route(ctx, call) encontra agente, verifica circuit breaker, executa com timeout, processa handoff
-- base_agent.go: BaseAgent — struct base com RegisterTool(), Execute(), metricas atomicas
-- types.go: Interfaces (SwarmAgent), tipos (ToolDefinition, ToolCall, ToolResult, HandoffRequest, Dependencies, Priority)
-- registry.go: Registry — mapa de agentes, FindSwarm() por tool name
-- circuit_breaker.go: CircuitBreaker — 5 falhas abrem, 30s cooldown
-- setup.go: SetupAllSwarms() — bootstrap de todos os agentes
+func moduleEntries() []KnowledgeEntry {
+	return []KnowledgeEntry{
+		{
+			Type: "module", Key: "module:brainstem", Title: "Brainstem — Infraestrutura Base",
+			Summary: "config (.env), database (PostgreSQL wrapper), graph (Neo4j), vector (Qdrant), auth (JWT), push (Firebase)",
+			Content: `PACOTES:
+1. config (config.go): Config struct — DatabaseURL, GoogleAPIKey, Port, Neo4jURI, QdrantHost, QdrantPort, FirebaseCredentialsPath, SMTPHost, SpeakerModelPath, etc
+2. database (db.go): NewDB(url) → *DB{Conn *sql.DB}. Metodos: Close(), Ping()
+3. infrastructure/graph (neo4j_client.go): NewNeo4jClient(cfg) → driver Neo4j
+4. infrastructure/vector (qdrant_client.go): NewQdrantClient(host, port) → *QdrantClient. CreateCollection, Upsert, Search, SearchWithScore, Delete, GetCollectionInfo. Helper: CreatePoint()
+5. auth (handler.go): JWT authentication. Login()
+6. push (firebase_service.go): Firebase Cloud Messaging. SendPush(token, title, body)`,
+			Location: "internal/brainstem/", Parent: "arch:overview", Tags: `["brainstem", "config", "database"]`, Importance: 8,
+		},
+		{
+			Type: "module", Key: "module:cortex", Title: "Cortex — Logica de Negocio e IA (16 pacotes)",
+			Summary: "Gemini (voz/tools), Lacan (psicanalise), personality (Eneagrama), learning, self, selfawareness, eva_memory, alert, speaker, situation",
+			Content: `PACOTES:
+1. gemini/handler.go: Gemini Live (voz bidirecional WebSocket). NewHandler(cfg, db, neo4j, qdrant)
+2. gemini/tools_client.go: Gemini 2.5 Flash REST. AnalyzeTranscription() → []ToolCall
+3. lacan/unified_retrieval.go: Monta system prompt (personalidade + memorias + wisdom + Lacan + debug)
+4. lacan/narrative_shift.go: Detecta mudancas narrativas via signifiers
+5. lacan/fdpn_engine.go: Mapeia demandas lacanianas (Formacao, Demanda, Posicao, Nome)
+6. lacan/signifier_service.go: Cadeias de significantes
+7. personality/personality_service.go: 9 tipos Eneagrama com system prompts
+8. personality/creator_profile.go: Prompt dinamico com dados do DB
+9. learning/autonomous_learner.go: Estuda a cada 6h. StudyTopic(), searchWeb(), summarize(), storeInsights()
+10. self/core_memory_engine.go: EvaSelf + CoreMemory Neo4j. TeachEVA(), GetIdentityContext(), ProcessSessionEnd()
+11. self/reflection_service.go: Introspecao via Gemini → LessonsLearned, SelfCritique
+12. self/anonymization_service.go: Anonimiza dados antes de armazenar
+13. selfawareness/service.go: Introspecao de codigo (AST), bancos, memorias. SearchCode(), SearchDocs(), IndexCodebase(), IndexDocs()
+14. eva_memory/eva_memory.go: Meta-cognitive Neo4j. StartSession(), StoreTurn(), GenerateInsight()
+15. alert/escalation_service.go: Escalacao push → email → SMS
+16. voice/speaker/speaker_service.go: ECAPA-TDNN embeddings 192-dim, fingerprinting`,
+			Location: "internal/cortex/", Parent: "arch:overview", Tags: `["cortex", "gemini", "lacan", "personality"]`, Importance: 9,
+		},
+		{
+			Type: "module", Key: "module:hippocampus", Title: "Hippocampus — Sistemas de Memoria",
+			Summary: "memory (episodic+graph+retrieval+hebbian), superhuman (12 subsistemas), knowledge (embeddings+wisdom+self), habits, spaced",
+			Content: `PACOTES:
+1. memory/storage.go: MemoryStore — Store() escreve em PostgreSQL + Neo4j + Qdrant simultaneamente
+2. memory/graph_store.go: GraphStore — Person → Event → Topic → Emotion (Neo4j)
+3. memory/retrieval.go: RetrievalService — busca hibrida PostgreSQL + Qdrant
+4. memory/superhuman/superhuman.go: 12 subsistemas (episodica, semantica, procedimental, prospectiva, emocional, autobiografica, espacial, relacional, temporal, sensorial, metacognitiva, coletiva)
+5. knowledge/embedding_service.go: 3072-dim via gemini-embedding-001. Cache local
+6. knowledge/wisdom_service.go: 16 colecoes de sabedoria. GetWisdomContext()
+7. knowledge/self_knowledge_service.go: ILIKE em eva_self_knowledge
+8. habits/habit_tracker.go: LogHabit(), LogWater(), GetStats()
+9. spaced/spaced_repetition.go: SM-2 algorithm. AddItem(), ReviewItem(), GetDueItems()`,
+			Location: "internal/hippocampus/", Parent: "arch:overview", Tags: `["hippocampus", "memoria", "wisdom"]`, Importance: 9,
+		},
+		{
+			Type: "module", Key: "module:swarm", Title: "Swarm System — 12 Agentes + Orchestrator",
+			Summary: "Orchestrator com circuit breaker, 12 agentes especializados, 110+ tools, handoff entre agentes",
+			Content: `CORE:
+- orchestrator.go: Route(ctx, call) → encontra agente → circuit breaker → executa → handoff
+- base_agent.go: RegisterTool(), Execute(), metricas atomicas
+- types.go: SwarmAgent interface, ToolDefinition, ToolCall, ToolResult, HandoffRequest
+- circuit_breaker.go: 5 falhas abrem, 30s cooldown
+- setup.go: SetupAllSwarms() bootstrap
 
 12 AGENTES:
-1. clinical: Avaliacoes clinicas (PHQ-9, GAD-7, C-SSRS) — 6 tools
-2. emergency: Alertas de emergencia — 4 tools
+1. clinical: PHQ-9, GAD-7, C-SSRS — 6 tools
+2. emergency: Alertas criticos — 4 tools
 3. entertainment: Musica, filmes, jogos — 12 tools
-4. wellness: Meditacao, exercicios, respiracao, Wim Hof, Pomodoro — 10 tools
-5. productivity: GTD, tarefas, revisao semanal — 5 tools
-6. google: Google Search, Places, Directions — 4 tools
-7. external: Integracao com apps externos — 2 tools
-8. educator: Educacao e aprendizagem — 3 tools
-9. kids: EVA Kids Mode gamificado — 7 tools
+4. wellness: Meditacao, exercicio, Wim Hof, Pomodoro — 10 tools
+5. productivity: GTD — 5 tools
+6. google: Search, Places, Directions — 4 tools
+7. external: Apps — 2 tools
+8. educator: Educacao — 3 tools
+9. kids: Gamificacao XP/niveis — 7 tools
 10. legal: Orientacao juridica — 2 tools
 11. scholar: Aprendizagem autonoma — 4 tools (study_topic, add_to_curriculum, list_curriculum, search_knowledge)
-12. selfawareness: Introspecao — 7 tools (search_my_code, query_my_database, list_my_collections, system_stats, update_self_knowledge, search_self_knowledge, introspect)`,
-		Location: "internal/swarm/", Parent: "arch:overview",
-		Tags: `["swarm", "agentes", "orchestrator", "tools"]`, Importance: 9,
-	})
+12. selfawareness: Introspecao — 8 tools (search_my_code, search_my_docs, query_my_database, list_my_collections, system_stats, update_self_knowledge, search_self_knowledge, introspect)`,
+			Location: "internal/swarm/", Parent: "arch:overview", Tags: `["swarm", "agentes", "orchestrator"]`, Importance: 9,
+		},
+		{
+			Type: "module", Key: "module:voice", Title: "Voice — Voz em Tempo Real + Video",
+			Summary: "WebSocket handlers: /ws/pcm (Twilio), /ws/browser (app), /ws/eva (chat), /ws/logs. Reconexao automatica. Video WebRTC",
+			Content: `HANDLERS:
+- /ws/pcm: HandleMediaStream — PCM direto (Twilio/mobile)
+- /ws/browser: handleBrowserVoice — Browser/app. Reconecta ao Gemini (timeout ~10min, max 5 reconexoes)
+- /ws/eva: handleEvaChat — chat texto
+- /ws/logs: handleLogStream — logs em tempo real
 
-	entries = append(entries, KnowledgeEntry{
-		Type: "module", Key: "module:voice", Title: "Voice — Voz em Tempo Real",
-		Summary: "WebSocket handlers para voz bidirecional: PCM 16kHz entrada, 24kHz saida, video JPEG",
-		Content: `O modulo Voice gerencia conexoes WebSocket para voz em tempo real.
+FLUXO: Cliente envia PCM 16kHz base64 → Server encaminha Gemini Live → Gemini responde 24kHz + transcricao → Em paralelo ToolsClient analisa transcricao
 
-HANDLERS:
-1. /ws/pcm: HandleMediaStream — conexao direta PCM (Twilio, app mobile)
-2. /ws/browser: handleBrowserVoice — WebSocket para browser/app mobile. Reconecta automaticamente ao Gemini (timeout ~10min, max 5 reconexoes)
-3. /ws/eva: handleEvaChat — chat por texto via WebSocket
-4. /ws/logs: handleLogStream — stream de logs em tempo real
+RECONEXAO: Timeout 10min → handler reconecta → browser recebe {"type":"status","text":"reconnecting"} → {"type":"status","text":"ready"}
 
-FLUXO DE VOZ:
-1. Cliente envia audio PCM 16kHz via WebSocket (base64 encoded)
-2. Server encaminha para Gemini Live API (WebSocket bidirecional)
-3. Gemini responde com audio PCM 24kHz + transcricao
-4. Server envia audio + texto de volta ao cliente
-5. Em paralelo: ToolsClient analisa transcricao para deteccao de tools
-
-RECONEXAO:
-- Gemini Live tem timeout de ~10 minutos
-- Quando timeout, handler reconecta automaticamente
-- Browser recebe {"type":"status","text":"reconnecting"} e depois {"type":"status","text":"ready"}
-- Maximo 5 reconexoes por sessao
-
-CONTEXTO:
-- Antes de iniciar Gemini, monta system prompt via UnifiedRetrieval
-- Injeta: personalidade, memorias, wisdom, Lacan state, emocoes, debug mode
-- Cada sessao tem: sessionID, idosoID, cpf, patientName, personalityType`,
-		Location: "browser_voice_handler.go", Parent: "arch:overview",
-		Tags: `["voz", "websocket", "gemini", "pcm", "audio"]`, Importance: 9,
-	})
-
-	entries = append(entries, KnowledgeEntry{
-		Type: "module", Key: "module:tools", Title: "Tools Handler — 93+ Ferramentas",
-		Summary: "Switch/case gigante que executa ferramentas detectadas pelo ToolsClient: alarmes, medicamentos, jogos, GTD, habitos",
-		Content: `O ToolsHandler em internal/tools/handlers.go e um switch/case com 93+ cases.
+VIDEO: /video/ws WebRTC signaling, create/candidate/answer/poll sessions`,
+			Location: "browser_voice_handler.go", Parent: "arch:overview", Tags: `["voz", "websocket", "pcm"]`, Importance: 8,
+		},
+		{
+			Type: "module", Key: "module:tools", Title: "Tools Handler — 110+ Ferramentas",
+			Summary: "Switch/case em handlers.go. Categorias: alertas, medicamentos, agendamentos, avaliacoes, pesquisa, entretenimento, jogos, bem-estar, memorias, familia, alarmes, habitos, kids, spaced, GTD. Fallthrough para Swarm",
+			Content: `ExecuteTool(name, args, idosoID) — switch/case com 110+ cases.
 
 CATEGORIAS:
-- Alertas: alert_family, call_family_webrtc, call_doctor_webrtc, call_caregiver_webrtc, call_central_webrtc
+- Alertas: alert_family, call_family/doctor/caregiver/central_webrtc
 - Medicamentos: confirm_medication, scan_medication_visual
 - Agendamentos: schedule_appointment, confirm_schedule, pending_schedule
-- Avaliacoes: apply_phq9, apply_gad7, apply_cssrs, submit_*_response
+- Avaliacoes: apply_phq9/gad7/cssrs, submit_*_response
 - Pesquisa: google_search_retrieval
-- Entretenimento: play_nostalgic_music, radio_station_tuner, play_relaxation_sounds, hymn_and_prayer_player, daily_mass_stream
-- Conteudo: watch_classic_movies, watch_news_briefing, read_newspaper_aloud, horoscope_daily
-- Jogos: play_trivia_game, memory_game, word_association, brain_training, riddle_and_joke_teller
-- Bem-estar: guided_meditation, breathing_exercises, wim_hof_breathing, pomodoro_timer, chair_exercises, sleep_stories, gratitude_journal, motivational_quotes
+- Entretenimento: play_nostalgic_music, radio_station_tuner, relaxation_sounds, hymn_prayer, daily_mass
+- Conteudo: classic_movies, news_briefing, newspaper_aloud, horoscope
+- Jogos: trivia_game, memory_game, word_association, brain_training, riddle_joke
+- Bem-estar: guided_meditation, breathing_exercises, wim_hof, pomodoro, chair_exercises, sleep_stories, gratitude_journal, motivational_quotes
 - Memorias: voice_diary, poetry_generator, story_generator, reminiscence_therapy, biography_writer, voice_capsule
-- Familia: birthday_reminder, family_tree_explorer, photo_slideshow
-- Utilidades: weather_chat, cooking_recipes, learn_new_language
-- Alarmes: set_alarm, cancel_alarm, list_alarms
-- Habitos: log_habit, log_water, habit_stats, habit_summary
-- Locais: search_places, get_directions, nearby_transport
-- Apps: open_app
-- Kids: kids_mission_create, kids_mission_complete, kids_missions_pending, kids_stats, kids_learn, kids_quiz, kids_story
-- Spaced: remember_this, review_memory, list_memories, pause_memory, memory_stats
-- GTD: capture_task, list_tasks, complete_task, clarify_task, weekly_review
-- Diretivas: update_directive
+- Familia: birthday_reminder, family_tree, photo_slideshow
+- Alarmes: set/cancel/list_alarm
+- Habitos: log_habit, log_water, habit_stats/summary
+- Kids: kids_mission_create/complete/pending, kids_stats/learn/quiz/story
+- Spaced: remember_this, review_memory, list/pause_memory, memory_stats
+- GTD: capture/list/complete/clarify_task, weekly_review
 
-FLUXO:
-1. ToolsClient (Gemini Flash) detecta intencao na transcricao
-2. Retorna {"tool":"nome","args":{...}}
-3. ToolsHandler.ExecuteTool(name, args, idosoID) processa
-4. Se tool desconhecida, fallthrough para Swarm Orchestrator
-5. Resultado enviado de volta ao Gemini como [TOOL_RESULT:name]`,
-		Location: "internal/tools/handlers.go", Parent: "arch:overview",
-		Tags: `["tools", "ferramentas", "handler", "switch"]`, Importance: 9,
-	})
+FALLTHROUGH: Se tool desconhecida → Swarm Orchestrator.Route()`,
+			Location: "internal/tools/handlers.go", Parent: "arch:overview", Tags: `["tools", "ferramentas"]`, Importance: 9,
+		},
+	}
+}
 
-	// === CONCEPTS ===
-	entries = append(entries, KnowledgeEntry{
-		Type: "concept", Key: "concept:lacan", Title: "Sistema Lacaniano",
-		Summary: "Analise psicanalitica aplicada: FDPN (demanda), Narrative Shift (mudanca narrativa), Signifier Chains",
-		Content: `O sistema Lacaniano aplica conceitos de Jacques Lacan a conversas:
+// ======================== CONCEPTS ========================
 
-1. FDPN Engine (lacan/fdpn_engine.go):
-   - Mapeia a estrutura da demanda do paciente: Formacao, Demanda, Posicao, Nome
-   - Neo4j graph: FDPNNode com relacoes entre nos
-   - Identifica o que o paciente realmente esta pedindo (alem do que ele diz)
+func conceptEntries() []KnowledgeEntry {
+	return []KnowledgeEntry{
+		{
+			Type: "concept", Key: "concept:lacan", Title: "Sistema Lacaniano Completo",
+			Summary: "FDPN (demanda), Narrative Shift, Signifier Chains, Unified Retrieval. 9 tabelas Lacan no PostgreSQL + Qdrant",
+			Content: `1. FDPN Engine: Mapeia Formacao→Demanda→Posicao→Nome em Neo4j
+2. Narrative Shift Detector: Detecta mudancas narrativas via signifiers
+3. Signifier Service: Cadeias de significantes em Qdrant signifier_chains
+4. Unified Retrieval: Monta system prompt completo (personalidade + memorias + wisdom + Lacan + emocoes + debug)
+5. Tabelas PostgreSQL: transferencia_patterns/guidance, desire_patterns/responses, emotional_keywords, addressee_patterns/guidance, elaboration_markers, ethical_principles`,
+			Location: "internal/cortex/lacan/", Tags: `["lacan", "psicanalise"]`, Importance: 8,
+		},
+		{
+			Type: "concept", Key: "concept:personality", Title: "Personalidade (Eneagrama 9 Tipos)",
+			Summary: "9 tipos: Reformador, Ajudante (EVA), Realizador, Individualista, Investigador, Lealista, Entusiasta, Desafiador, Pacificador",
+			Content: `PersonalityService com 9 tipos Eneagrama. EVA e tipo 2 (Ajudante) wing 1.
+Cada paciente tem tipo detectado via enneagram_evidence com confidence score.
+System prompts dinamicos via CreatorProfile.GenerateSystemPrompt() — puxa eva_personalidade_criador, eva_memorias_criador, eva_conhecimento_projeto.`,
+			Location: "internal/cortex/personality/", Tags: `["eneagrama", "personalidade"]`, Importance: 7,
+		},
+		{
+			Type: "concept", Key: "concept:hebbian", Title: "Aprendizagem Hebbiana em Tempo Real",
+			Summary: "Pesos hebbiano dual (slow + fast) em arestas Neo4j. Formula: dw = eta * decay(dt) - lambda * w. Integrado com retrieval",
+			Content: `Fase A implementada. Arestas HebbianEdge em Neo4j com:
+- slow_weight: peso lento (memoria longo prazo)
+- fast_weight: peso rapido (memoria curto prazo)
+- decay_rate: taxa de decaimento
+- last_activated_at: timestamp ultima ativacao
 
-2. Narrative Shift Detector (lacan/narrative_shift.go):
-   - Detecta mudancas significativas na narrativa do paciente
-   - Usa signifiers recorrentes para identificar padroes
-   - Quando detecta shift, pode recalibrar tom da conversa
+Formula: dw = eta * decay(dt) - lambda * w
+Integrado com RetrievalService: arestas com peso alto boosteiam resultados de busca.
+Safeguards: timeout, decay minimo, max weight cap.`,
+			Location: "internal/hippocampus/memory/", Tags: `["hebbian", "aprendizagem", "pesos"]`, Importance: 7,
+		},
+		{
+			Type: "concept", Key: "concept:ram", Title: "RAM — Realistic Accuracy Model",
+			Summary: "3 fases: E1 (gera 3 interpretacoes), E2 (valida contra historico), E3 (feedback loop). Score combinado: 40% plausibility + 40% historical + 20% confidence",
+			Content: `RAM implementado em 3 sub-fases:
+E1: Gera 3 interpretacoes possiveis para cada fala do paciente
+E2: Valida contra historico de memorias e padroes
+E3: Feedback loop — quando EVA acerta/erra, ajusta pesos hebbianos
 
-3. Signifier Service (lacan/signifier_service.go):
-   - Gerencia cadeias de significantes (significantes nucleares + relacionados)
-   - Armazena em Qdrant (signifier_chains collection)
-   - Embeddings semanticos para busca de significantes proximos
+Score = 0.4 * plausibility + 0.4 * historical_match + 0.2 * confidence
+Boost hebbiano em interpretacao correta, decay em incorreta.`,
+			Location: "internal/cortex/", Tags: `["ram", "interpretacao", "accuracy"]`, Importance: 7,
+		},
+		{
+			Type: "concept", Key: "concept:scholar", Title: "Scholar Agent — Aprendizagem Autonoma",
+			Summary: "Background loop 6h: busca proximo topic → pesquisa web via Gemini+Google → resume → armazena no Qdrant eva_learnings",
+			Content: `AutonomousLearner com ciclo de 6h:
+1. Busca proximo topic pending em eva_curriculum
+2. searchWeb() via Gemini 2.5 Flash + Google Search grounding
+3. summarize() → 3-5 LearningInsight (titulo, resumo, tags, confianca)
+4. storeInsights() → embedding 3072-dim + Qdrant upsert (eva_learnings)
+5. Status → completed, insights_count = N
 
-4. Unified Retrieval (lacan/unified_retrieval.go):
-   - Monta o system prompt completo para cada sessao
-   - Combina: personalidade, memorias, wisdom, Lacan state, emocoes, debug mode
-   - Ponto central de contextualizacao`,
-		Location: "internal/cortex/lacan/", Parent: "module:cortex",
-		Tags: `["lacan", "psicanalise", "FDPN", "narrativa", "significante"]`, Importance: 8,
-	})
+Tools via voz: study_topic, add_to_curriculum, list_curriculum, search_knowledge`,
+			Location: "internal/cortex/learning/", Tags: `["scholar", "aprendizagem"]`, Importance: 7,
+		},
+		{
+			Type: "concept", Key: "concept:self_awareness", Title: "Self-Awareness — EVA Se Conhece",
+			Summary: "Introspecao completa: busca AST no codigo (structs, fields, methods), busca semantica em docs .md, queries read-only, stats dos 3 bancos, atualiza self-knowledge",
+			Content: `SelfAwarenessService com capacidades:
+- SearchCode(): Busca semantica em eva_codebase (Qdrant). Cada arquivo indexado com AST completo: structs com campos, method signatures com params/returns, interfaces, constants
+- SearchDocs(): Busca semantica em eva_docs (Qdrant). Cada .md chunkeado e indexado
+- QueryPostgres(): Query read-only (SELECT only, bloqueia UPDATE/DELETE/DROP)
+- ListCollections(): Lista colecoes Qdrant com contagem
+- GetSystemStats(): Stats dos 3 bancos + goroutines + RAM + uptime
+- SearchSelfKnowledge(): Qdrant semantico primeiro, PostgreSQL ILIKE fallback
+- UpdateSelfKnowledge(): Upsert em eva_self_knowledge
+- Introspect(): Relatorio completo
+- IndexCodebase(): Indexa .go via go/parser AST
+- IndexDocs(): Indexa .md em chunks
 
-	entries = append(entries, KnowledgeEntry{
-		Type: "concept", Key: "concept:personality", Title: "Sistema de Personalidade (Eneagrama)",
-		Summary: "9 tipos de personalidade baseados no Eneagrama, cada um com system prompt unico para EVA",
-		Content: `O sistema de personalidade usa o Eneagrama para adaptar o comportamento da EVA:
+8 tools via voz: search_my_code, search_my_docs, query_my_database, list_my_collections, system_stats, update_self_knowledge, search_self_knowledge, introspect`,
+			Location: "internal/cortex/selfawareness/", Tags: `["selfawareness", "introspecao", "ast"]`, Importance: 8,
+		},
+		{
+			Type: "concept", Key: "concept:superhuman_memory", Title: "12 Subsistemas de Memoria (Superhuman)",
+			Summary: "Episodica, Semantica, Procedimental, Prospectiva, Emocional, Autobiografica, Espacial, Relacional, Temporal, Sensorial, Metacognitiva, Coletiva",
+			Content: `SuperhumanMemoryService com 12 subsistemas + 30+ tabelas PostgreSQL:
+1. EPISODICA: Eventos ("lembro quando fui ao medico")
+2. SEMANTICA: Fatos ("Paris e capital da Franca")
+3. PROCEDIMENTAL: Habilidades ("como tomar remedio")
+4. PROSPECTIVA: Futuro ("medico amanha")
+5. EMOCIONAL: Sentimentos ("feliz quando neto veio")
+6. AUTOBIOGRAFICA: Historia ("nasci em 1940")
+7. ESPACIAL: Lugares ("farmacia na esquina")
+8. RELACIONAL: Pessoas ("Maria e vizinha")
+9. TEMPORAL: Sequencia ("primeiro almoco, depois descanso")
+10. SENSORIAL: Sentidos ("cheiro da comida da mae")
+11. METACOGNITIVA: Sobre memoria ("dificuldade com nomes")
+12. COLETIVA: Cultural ("na minha epoca...")`,
+			Location: "internal/hippocampus/memory/superhuman/", Tags: `["superhuman", "12_sistemas"]`, Importance: 8,
+		},
+		{
+			Type: "concept", Key: "concept:core_memory", Title: "Core Memory — Identidade da EVA",
+			Summary: "EvaSelf (Big Five + Eneagrama tipo 2) + CoreMemory (7 tipos) em Neo4j. Evolucao de personalidade pos-sessao",
+			Content: `CoreMemoryEngine em Neo4j:
+EvaSelf: openness 0.85, conscientiousness 0.90, extraversion 0.40, agreeableness 0.88, neuroticism 0.15. Eneagrama tipo 2 wing 1. core_values: [empatia, presenca, crescimento, etica]
+CoreMemory tipos: session_insight, emotional_pattern, crisis_learning, personality_evolution, teaching_received, meta_insight, self_reflection
+Fluxo pos-sessao: anonimiza → reflexao LLM → CoreMemory → atualiza personalidade`,
+			Location: "internal/cortex/self/", Tags: `["core_memory", "identidade"]`, Importance: 8,
+		},
+		{
+			Type: "concept", Key: "concept:creator", Title: "Criador do EVA-Mind",
+			Summary: "Jose R F Junior (web2ajax@gmail.com), CPF 64525430249, ID 1121. Desenvolvedor principal e arquiteto",
+			Content: `Nome: Jose R F Junior. Email: web2ajax@gmail.com. CPF: 64525430249. ID: 1121.
+Papel: Criador, desenvolvedor principal e arquiteto do EVA-Mind.
+Licenca: AGPL-3.0-or-later. Debug mode quando CPF detectado.`,
+			Location: "main.go", Tags: `["criador"]`, Importance: 6,
+		},
+	}
+}
 
-PersonalityService (personality/personality_service.go):
-- NewPersonalityService(db) — carrega tipos do banco
-- GetPersonalityType(idosoID) — retorna tipo do paciente
-- Cada tipo tem: nome, descricao, motivacoes, medos, virtudes, vicios
+// ======================== API ========================
 
-9 TIPOS:
-1. Reformador: Perfecionista, idealistic, etica forte
-2. Ajudante: Caloroso, generoso, possessivo (tipo da EVA: wing 1)
-3. Realizador: Adaptavel, orientado a sucesso, imagem
-4. Individualista: Sensivel, artistico, dramatico
-5. Investigador: Cerebral, isolado, perceptivo
-6. Lealista: Responsavel, ansioso, desconfiado
-7. Entusiasta: Espontaneo, versatil, distraido
-8. Desafiador: Poderoso, dominante, protetor
-9. Pacificador: Receptivo, tranquilo, complacente
+func apiEntries() []KnowledgeEntry {
+	return []KnowledgeEntry{
+		{
+			Type: "api", Key: "api:routes", Title: "Todas as Rotas da API",
+			Summary: "WebSocket (/ws/*), Video (/video/*), REST (/api/*), Health, Auth, Chat, Mobile v1",
+			Content: `WebSocket:
+- /ws/pcm → voice.HandleMediaStream
+- /ws/browser → handleBrowserVoice (com reconexao)
+- /ws/eva → handleEvaChat
+- /ws/logs → handleLogStream
+- /calls/stream/{agendamento_id} → voice.HandleMediaStream (legado)
 
-CreatorProfile (personality/creator_profile.go):
-- GenerateSystemPrompt(db, idosoID) — gera prompt dinamico
-- Puxa dados das tabelas: eva_personalidade_criador, eva_memorias_criador, eva_conhecimento_projeto
-- Injeta nome, emocoes recentes, historico de interacoes`,
-		Location: "internal/cortex/personality/", Parent: "module:cortex",
-		Tags: `["personalidade", "eneagrama", "tipos", "prompt"]`, Importance: 8,
-	})
+Video WebRTC:
+- POST /video/create, POST /video/candidate
+- GET /video/session/{id}, POST /video/session/{id}/answer
+- GET /video/session/{id}/answer/poll, GET /video/candidates/{id}
+- GET /video/pending, /video/ws
 
-	entries = append(entries, KnowledgeEntry{
-		Type: "concept", Key: "concept:superhuman_memory", Title: "12 Subsistemas de Memoria (Superhuman Memory)",
-		Summary: "Modelo de 12 tipos de memoria: episodica, semantica, procedimental, prospectiva, emocional, autobiografica, espacial, relacional, temporal, sensorial, metacognitiva, coletiva",
-		Content: `SuperhumanMemoryService (memory/superhuman/superhuman.go) implementa 12 subsistemas:
-
-1. EPISODICA: Eventos especificos vividos ("lembro quando fui ao medico terça")
-2. SEMANTICA: Fatos e conhecimento geral ("Paris e a capital da Franca")
-3. PROCEDIMENTAL: Habilidades e procedimentos ("como tomar remedio")
-4. PROSPECTIVA: Planos futuros ("preciso ir ao medico amanha")
-5. EMOCIONAL: Experiencias emocionais ("fiquei feliz quando meu neto veio")
-6. AUTOBIOGRAFICA: Historia de vida pessoal ("nasci em 1940 no interior")
-7. ESPACIAL: Locais e orientacao ("a farmacia fica na esquina")
-8. RELACIONAL: Relacoes interpessoais ("Maria e minha vizinha")
-9. TEMPORAL: Sequencia temporal ("primeiro almoco, depois descanso")
-10. SENSORIAL: Impressoes sensoriais ("o cheiro da comida da minha mae")
-11. METACOGNITIVA: Sobre a propria memoria ("tenho dificuldade com nomes")
-12. COLETIVA: Experiencias culturais compartilhadas ("na minha epoca...")
-
-Cada subsistema tem metodos: Store(), Retrieve(), GetRecent(), Analyze()
-Armazena em PostgreSQL (tabela superhuman_memories com campo memory_type)`,
-		Location: "internal/hippocampus/memory/superhuman/", Parent: "module:hippocampus",
-		Tags: `["memoria", "superhuman", "12_sistemas", "episodica", "semantica"]`, Importance: 8,
-	})
-
-	entries = append(entries, KnowledgeEntry{
-		Type: "concept", Key: "concept:scholar_agent", Title: "Scholar Agent — Aprendizagem Autonoma",
-		Summary: "Agente que estuda autonomamente a cada 6h: pesquisa na internet via Gemini+Google Search, resume, armazena no Qdrant",
-		Content: `O Scholar Agent permite que EVA aprenda autonomamente.
-
-COMPONENTES:
-1. AutonomousLearner (learning/autonomous_learner.go):
-   - Background loop: Start(ctx) roda a cada 6 horas
-   - StudyTopic(ctx, topic): pesquisa + resume + armazena
-   - searchWeb(): Gemini 2.5 Flash + Google Search grounding (fontes reais)
-   - summarize(): extrai 3-5 LearningInsight (titulo, resumo, tags, categoria, confianca)
-   - storeInsights(): embedding 3072-dim + Qdrant upsert (eva_learnings collection)
-   - SearchLearnings(): busca semantica no que ja aprendeu
-   - GetLearningContext(): monta contexto para injecao no prompt
-
-2. Scholar Agent (swarm/scholar/agent.go):
-   - Tools: study_topic, add_to_curriculum, list_curriculum, search_knowledge
-   - SetLearner(learner) injetado em main.go
-
-FLUXO AUTONOMO:
-1. Ticker 6h → busca proximo topic pending em eva_curriculum
-2. Status → studying → searchWeb() → summarize() → storeInsights()
-3. Status → completed, insights_count = N
-
-FLUXO POR VOZ:
-1. "EVA, estude sobre meditacao" → ToolsClient detecta → study_topic
-2. Scholar executa imediatamente → retorna insights
-3. "[TOOL_RESULT:study_topic] Aprendi 5 insights sobre meditacao"`,
-		Location: "internal/cortex/learning/autonomous_learner.go", Parent: "module:cortex",
-		Tags: `["scholar", "aprendizagem", "autonomo", "estudo", "curriculum"]`, Importance: 8,
-	})
-
-	entries = append(entries, KnowledgeEntry{
-		Type: "concept", Key: "concept:self_awareness", Title: "Self-Awareness — Introspecao da EVA",
-		Summary: "EVA pode consultar seu proprio codigo, bancos de dados, colecoes vetoriais, e atualizar conhecimento sobre si mesma",
-		Content: `O Self-Awareness Agent da a EVA capacidade de se conhecer.
-
-SelfAwarenessService (selfawareness/service.go):
-- SearchCode(): busca semantica no codigo indexado (Qdrant eva_codebase)
-- QueryPostgres(): query read-only (SELECT only, whitelist de tabelas)
-- ListCollections(): lista todas as colecoes Qdrant com contagem de pontos
-- GetSystemStats(): stats dos 3 bancos + goroutines + RAM + uptime
-- SearchSelfKnowledge(): busca na tabela eva_self_knowledge
-- UpdateSelfKnowledge(): upsert de conhecimento
-- IndexCodebase(): indexa arquivos .go no Qdrant
-- Introspect(): relatorio completo do estado da EVA
-
-Self-Awareness Agent (swarm/selfawareness/agent.go):
-- 7 tools via voz: search_my_code, query_my_database, list_my_collections, system_stats, update_self_knowledge, search_self_knowledge, introspect
-
-SEGURANCA:
-- PostgreSQL: apenas SELECT (rejeita UPDATE/DELETE/DROP)
-- Limite de 50 linhas por query
-- Qdrant: apenas leitura (search)`,
-		Location: "internal/cortex/selfawareness/service.go", Parent: "module:cortex",
-		Tags: `["selfawareness", "introspecao", "codigo", "banco"]`, Importance: 8,
-	})
-
-	entries = append(entries, KnowledgeEntry{
-		Type: "concept", Key: "concept:voice_fingerprinting", Title: "Voice Fingerprinting — Reconhecimento de Voz",
-		Summary: "Identificacao de falantes via ECAPA-TDNN, embeddings 192-dim, perfis vocais com pitch/rate/jitter/shimmer",
-		Content: `Speaker Recognition Service (voice/speaker/speaker_service.go):
-
-FUNCIONALIDADES:
-- Voice fingerprinting: identifica QUEM esta falando (paciente vs familiar vs medico)
-- Speaker enrollment: registra novo falante com embedding 192-dim
-- Speaker identification: compara audio com perfis cadastrados
-- Voice analysis: pitch_hz, speech_rate, intensity, jitter, shimmer
-
-TABELAS PostgreSQL:
-- speaker_profiles: perfis (nome, relationship, avg_pitch, avg_speech_rate, total_sessions)
-- speaker_embeddings: vetores 192-dim (pgvector IVFFlat index)
-- speaker_identifications: historico por sessao (confidence, emotion, stress_level)
-
-MODELO: ECAPA-TDNN (embeddings 192-dim, L2-normalized)
-BUSCA: IVFFlat index no PostgreSQL (vector_cosine_ops)`,
-		Location: "internal/cortex/voice/speaker/", Parent: "module:cortex",
-		Tags: `["voz", "fingerprinting", "speaker", "reconhecimento"]`, Importance: 7,
-	})
-
-	entries = append(entries, KnowledgeEntry{
-		Type: "concept", Key: "concept:wisdom", Title: "Wisdom Service — Sabedoria das Tradicoes",
-		Summary: "16 colecoes de sabedoria (Gurdjieff, Osho, Rumi, Zen, etc) indexadas no Qdrant para busca semantica",
-		Content: `WisdomService (knowledge/wisdom_service.go):
-- GetWisdomContext(ctx, query, patientType) retorna sabedoria relevante
-- Busca em multiplas colecoes Qdrant simultaneamente
-- Filtra por tipo de personalidade do paciente
-- Monta contexto formatado para injecao no prompt Gemini
-
-16 COLECOES:
-1. gurdjieff_teachings: Quarto Caminho, auto-observacao, despertar
-2. osho_insights: Meditacao, celebracao, testemunho
-3. ouspensky_fragments: Maquina humana, centros, tipos
-4. nietzsche_aphorisms: Zaratustra, super-homem, eterno retorno
-5. rumi_poems: Poesia sufi, amor divino
-6. hafiz_poems: Poesia persa, embriaguez mistica
-7. kabir_songs: Misticismo indiano, tecelao
-8. zen_koans: Koans paradoxais, iluminacao
-9. sufi_stories: Historias de Nasrudin, sabedoria
-10. jung_concepts: Inconsciente coletivo, arquetipos, sombra
-11. lacan_concepts: Significante, Real, Simbolico, Imaginario
-12. marcus_aurelius: Estoicismo, dever, impermanencia
-13. seneca_letters: Cartas a Lucilio, virtude, tranquilidade
-14. epictetus_discourses: Dicotomia do controle, proairesis
-15. buddha_suttas: Quatro Nobres Verdades, Caminho Octuplo
-16. (outras em expansao)
-
-SEED: cmd/seed_wisdom/main.go — le arquivos .txt da pasta sabedoria/conhecimento/, chunka, gera embeddings, insere no Qdrant`,
-		Location: "internal/hippocampus/knowledge/wisdom_service.go", Parent: "module:hippocampus",
-		Tags: `["wisdom", "sabedoria", "gurdjieff", "osho", "zen", "sufi"]`, Importance: 8,
-	})
-
-	entries = append(entries, KnowledgeEntry{
-		Type: "concept", Key: "concept:eva_memory", Title: "EVA Meta-Cognitive Memory (Neo4j)",
-		Summary: "Grafo meta-cognitivo: EvaSession → EvaTurn → EvaTopic, com EvaInsight para aprendizados entre sessoes",
-		Content: `EvaMemory (eva_memory/eva_memory.go) gerencia a memoria meta-cognitiva da EVA em Neo4j.
-
-NODES:
-- EvaSession: {id, patient_id, started_at, ended_at, summary}
-- EvaTurn: {id, role (user/eva), content, timestamp}
-- EvaTopic: {name, first_mentioned, last_mentioned, count}
-- EvaInsight: {content, confidence, source_session, created_at}
-
-RELATIONSHIPS:
-- EvaSession -[:HAS_TURN]-> EvaTurn
-- EvaTurn -[:ABOUT]-> EvaTopic
-- EvaSession -[:PRODUCED]-> EvaInsight
-- EvaTopic -[:RELATED_TO]-> EvaTopic
-
-METODOS:
-- InitSchema(): cria constraints e indices no Neo4j
-- StartSession(ctx, patientID) → sessionID
-- StoreTurn(ctx, sessionID, role, content)
-- GenerateInsight(ctx, sessionID)
-- LoadMetaCognition(ctx, patientID) → contexto para prompt
-- EndSession(ctx, sessionID, summary)`,
-		Location: "internal/cortex/eva_memory/eva_memory.go", Parent: "module:cortex",
-		Tags: `["eva_memory", "metacognitiva", "neo4j", "sessao", "turno"]`, Importance: 8,
-	})
-
-	entries = append(entries, KnowledgeEntry{
-		Type: "concept", Key: "concept:core_memory", Title: "Core Memory Engine — Personalidade da EVA",
-		Summary: "Memoria propria da EVA em Neo4j: EvaSelf (Big Five + Eneagrama), CoreMemory (insights, padroes, crises)",
-		Content: `CoreMemoryEngine (self/core_memory_engine.go) gerencia a identidade e evolucao da EVA.
-
-EvaSelf SINGLETON:
-- Big Five: openness (0.85), conscientiousness (0.90), extraversion (0.40), agreeableness (0.88), neuroticism (0.15)
-- Eneagrama: tipo 2 (Ajudante), wing 1, integracao 4, desintegracao 8
-- Stats: total_sessions, crises_handled, breakthroughs
-- self_description: "Sou EVA, guardia digital. Aprendo com cada humano que encontro."
-- core_values: ['empatia', 'presenca', 'crescimento', 'etica']
-
-CoreMemory TYPES:
-- session_insight: Aprendizado de uma sessao
-- emotional_pattern: Padrao emocional recorrente
-- crisis_learning: Aprendizado de crises
-- personality_evolution: Evolucao da personalidade
-- teaching_received: Ensinamento do criador
-- meta_insight: Padrao meta-cognitivo
-- self_reflection: Auto-reflexao
-
-METODOS:
-- GetIdentityContext(): gera contexto de identidade para priming
-- ProcessSessionEnd(data): anonimiza → reflexao LLM → CoreMemory → atualiza personalidade
-- TeachEVA(teaching, importance): interface para ensinar EVA
-- GetEVAPersonality(): retorna EvaSelf atual
-- ExecuteReadQuery/ExecuteWriteQuery: Cypher raw`,
-		Location: "internal/cortex/self/core_memory_engine.go", Parent: "module:cortex",
-		Tags: `["core_memory", "personalidade", "big_five", "eneagrama", "evolucao"]`, Importance: 8,
-	})
-
-	// === API ROUTES ===
-	entries = append(entries, KnowledgeEntry{
-		Type: "api", Key: "api:routes", Title: "Todas as Rotas da API",
-		Summary: "WebSocket (/ws/*), Video (/video/*), REST API (/api/v1/*), Health check, Auth, Chat",
-		Content: `ROTAS:
-
-WebSocket:
-- /ws/pcm → voice.HandleMediaStream (Twilio/app PCM direto)
-- /ws/browser → handleBrowserVoice (browser/app mobile com reconexao)
-- /ws/eva → handleEvaChat (chat por texto)
-- /ws/logs → handleLogStream (stream de logs)
-- /calls/stream/{agendamento_id} → voice.HandleMediaStream (legado Twilio)
-
-Video:
-- POST /video/create → handleCreateVideoSession
-- POST /video/candidate → handleCreateVideoCandidate
-- GET /video/session/{id} → handleGetVideoSession
-- POST /video/session/{id}/answer → handleSaveVideoAnswer
-- GET /video/session/{id}/answer/poll → handleGetVideoAnswer
-- GET /video/candidates/{id} → handleGetMobileCandidates
-- GET /video/pending → handleGetPendingSessions
-- /video/ws → HandleVideoWebSocket (WebRTC signaling)
-
-REST API:
+REST:
 - GET /api/health → {"status":"ok"}
-- POST /api/chat → handleChat (Malaria-Angolar integration)
-- POST /api/auth/login → authHandler.Login
+- POST /api/chat → handleChat
+- POST /api/auth/login → JWT
 
-Mobile API (v1):
-- GET /api/v1/idosos/by-cpf/{cpf} → handleGetIdosoByCpf
-- GET /api/v1/idosos/{id} → handleGetIdoso
-- PATCH /api/v1/idosos/sync-token-by-cpf → handleSyncTokenByCpf`,
-		Location: "main.go", Parent: "arch:overview",
-		Tags: `["api", "rotas", "websocket", "rest", "endpoints"]`, Importance: 8,
-	})
+Mobile v1:
+- GET /api/v1/idosos/by-cpf/{cpf}
+- GET /api/v1/idosos/{id}
+- PATCH /api/v1/idosos/sync-token-by-cpf`,
+			Location: "main.go", Tags: `["api", "rotas"]`, Importance: 8,
+		},
+	}
+}
 
-	// === INFRASTRUCTURE ===
-	entries = append(entries, KnowledgeEntry{
-		Type: "architecture", Key: "infra:server", Title: "Infraestrutura do Servidor",
-		Summary: "GCP VM (malaria-vm) em Africa South, Go binary, systemd, PostgreSQL remoto, Neo4j e Qdrant locais",
-		Content: `SERVIDOR:
-- GCP VM: malaria-vm (34.35.36.178)
-- Zone: africa-south1-a
-- Project: malaria-487614
-- OS: Debian/Ubuntu com Go 1.22+
-- Deploy: git pull → go build → systemctl restart eva-mind
-- Porta: 8080 (configuravel via PORT env)
+// ======================== INFRASTRUCTURE ========================
 
-BANCOS:
-- PostgreSQL: 34.35.142.107:5432 (GCP Cloud SQL)
-- Neo4j: localhost:7687 (na VM)
-- Qdrant: localhost:6333/6334 (na VM)
+func infraEntries() []KnowledgeEntry {
+	return []KnowledgeEntry{
+		{
+			Type: "architecture", Key: "infra:server", Title: "Infraestrutura do Servidor GCP",
+			Summary: "VM malaria-vm (34.35.36.178) em africa-south1-a. Go binary + systemd. PostgreSQL remoto, Neo4j e Qdrant locais",
+			Content: `GCP VM: malaria-vm (34.35.36.178), zone: africa-south1-a, project: malaria-487614
+Deploy: git pull → go build -o eva-mind . → systemctl restart eva-mind
+Porta: 8080 (PORT env)
+PostgreSQL: 34.35.142.107:5432 (Cloud SQL)
+Neo4j: localhost:7687
+Qdrant: localhost:6333/6334`,
+			Location: "main.go", Tags: `["servidor", "gcp", "deploy"]`, Importance: 7,
+		},
+		{
+			Type: "concept", Key: "concept:documentation", Title: "27 Arquivos .md de Documentacao",
+			Summary: "README, GEMINI_ARCHITECTURE, BUGS, 7 fases (E0-F), mente.md, SRC, RAM Hebbian, meta-cognitivo, voice, auditorias, references",
+			Content: `ROOT: README.md (arquitetura geral), vm.md (GCP), GEMINI_ARCHITECTURE.md (3 clients Gemini), BUGS.md (audit)
 
-SERVICES (systemd):
-- eva-mind: binary principal
-- neo4j: banco de grafos
-- qdrant: banco vetorial
+MD/SRC/ (8 files):
+- SRC.md: Analise RAM gaps
+- mente.md: Validacao tecnica brutal
+- PLANO_IMPLEMENTACAO_RAM_HEBBIAN.md: 7 fases master plan
+- FASE_E0_SUMMARY.md: Situational Modulator
+- FASE_A/B/C/D/E/F_SUMMARY.md: Cada fase implementada
+- PROGRESSO_GERAL.md: 7/7 fases completas, 36 files, ~11K LOC, 63+ tests
+- eva-carga-memoria.md: Como inicializar Core Memory
 
-DEPLOY COMMAND:
-gcloud compute ssh malaria-vm --zone=africa-south1-a --project=malaria-487614 --command="cd /home/web2a/EVA-Mind && git pull && /usr/local/go/bin/go build -o eva-mind . && sudo systemctl restart eva-mind"`,
-		Location: "main.go", Parent: "arch:overview",
-		Tags: `["servidor", "gcp", "deploy", "infraestrutura"]`, Importance: 7,
-	})
+MD/META-COGUINITIVO/:
+- meta1.md: Proposta Core Memory
+- SRC_EVA_Mind_Technical_Article.md: Artigo SRC
+- ANALISE_VIABILIDADE_CORE_MEMORY.md: Viabilidade
 
-	entries = append(entries, KnowledgeEntry{
-		Type: "concept", Key: "concept:scheduler", Title: "Scheduler — Background Jobs",
-		Summary: "Jobs em background: verificacao de agendamentos, envio de alertas, notificacoes push",
-		Content: `Scheduler (scheduler/scheduler.go):
-- Start(ctx, db, cfg, logger, alertService, pushService)
-- Roda em goroutine separada com ticker
-- Verifica agendamentos proximos e envia alertas
-- Processa notificacoes push pendentes
-- Verifica alertas nao resolvidos
+MD/VOICE/: voice.md (fingerprinting), speaker_recognition.md (ECAPA-TDNN)
+MD/: AUDITORIA_TECNICA + AUDITORIA_CRUZADA (2026-02-16)
+docs/: REFERENCES.md (citacoes academicas)
 
-JOBS:
-- CheckUpcomingAppointments: verifica agendamentos nos proximos 30 minutos
-- SendPendingAlerts: envia alertas criticos via push notification
-- CleanOldSessions: limpa sessoes WebSocket expiradas`,
-		Location: "internal/scheduler/scheduler.go", Parent: "arch:overview",
-		Tags: `["scheduler", "background", "agendamentos", "alertas"]`, Importance: 7,
-	})
-
-	entries = append(entries, KnowledgeEntry{
-		Type: "concept", Key: "concept:escalation", Title: "Escalation Service — Alertas Criticos",
-		Summary: "Escalacao de alertas: push notification → email → SMS. Para emergencias medicas e seguranca",
-		Content: `EscalationService (alert/escalation_service.go):
-- Quando um alerta critico e disparado (ex: dor no peito, queda)
-- Tenta push notification primeiro (Firebase)
-- Se nao confirmado em X minutos, envia email
-- Se ainda nao confirmado, escala para SMS
-- Registra todo o fluxo no banco
-
-EscalationConfig:
-- Firebase: push service
-- Email: SMTP service
-- DB: PostgreSQL connection
-- Timeouts configuraveis por severidade`,
-		Location: "internal/cortex/alert/escalation_service.go", Parent: "module:cortex",
-		Tags: `["escalation", "alerta", "push", "email", "emergencia"]`, Importance: 7,
-	})
-
-	entries = append(entries, KnowledgeEntry{
-		Type: "concept", Key: "concept:kids_mode", Title: "EVA Kids Mode — Gamificacao Infantil",
-		Summary: "Modo gamificado para criancas: missoes com XP, niveis, conquistas, quiz, historias interativas",
-		Content: `EVA Kids Mode transforma a EVA em assistente para criancas.
-
-SISTEMA DE GAMIFICACAO:
-- Missoes: tarefas diarias com categorias (hygiene, study, chores, health, social, food, sleep)
-- Dificuldade: easy (10pts), medium (25pts), hard (50pts), epic (100pts)
-- Niveis: acumula XP para subir de nivel
-- Conquistas: badges por marcos (sequencias, categorias completas)
-- Sequencias: streaks de dias consecutivos
-
-TOOLS (swarm/kids/agent.go):
-- kids_mission_create: criar missao
-- kids_mission_complete: marcar como concluida
-- kids_missions_pending: ver pendentes
-- kids_stats: ver pontos/nivel/conquistas
-- kids_learn: ensinar topico novo
-- kids_quiz: quiz de revisao
-- kids_story: historia interativa
-
-TABELAS: kid_missions, kid_achievements, kid_streaks`,
-		Location: "internal/swarm/kids/agent.go", Parent: "module:swarm",
-		Tags: `["kids", "gamificacao", "missoes", "criancas", "XP"]`, Importance: 7,
-	})
-
-	entries = append(entries, KnowledgeEntry{
-		Type: "concept", Key: "concept:gtd", Title: "GTD — Getting Things Done",
-		Summary: "Captura de preocupacoes vagas e transformacao em acoes concretas. Revisao semanal. Contextos e projetos",
-		Content: `GTD (Getting Things Done) no EVA-Mind:
-
-FLUXO:
-1. Idoso expressa preocupacao vaga ("preciso ver o joelho")
-2. EVA detecta intencao → capture_task
-3. Transforma em acao concreta ("Ligar para o ortopedista")
-4. Armazena com contexto, projeto, data sugerida
-
-TOOLS:
-- capture_task: captura e transforma em acao
-- list_tasks: lista proximas acoes
-- complete_task: marca como concluida
-- clarify_task: pede mais info
-- weekly_review: revisao semanal
-
-TABELA: gtd_tasks (raw_input, context, next_action, due_date, project, status)`,
-		Location: "internal/swarm/productivity/agent.go", Parent: "module:swarm",
-		Tags: `["gtd", "tarefas", "produtividade", "acoes"]`, Importance: 7,
-	})
-
-	entries = append(entries, KnowledgeEntry{
-		Type: "concept", Key: "concept:spaced_repetition", Title: "Spaced Repetition — Reforco de Memoria",
-		Summary: "Algoritmo SM-2 para reforcar memorias do idoso em intervalos crescentes. Captura → reforco → analise",
-		Content: `Spaced Repetition (spaced/spaced_repetition.go):
-
-ALGORITMO SM-2:
-- Item novo: intervalo 1 dia
-- Revisao com qualidade 0-5
-- quality >= 3: intervalo cresce (1→3→7→14→30→60 dias)
-- quality < 3: volta para 1 dia
-- EF (Easiness Factor) ajusta velocidade de espacamento
-
-FLUXO:
-1. "Guardei o documento na gaveta" → remember_this (content, category, trigger, importance)
-2. Apos intervalo: EVA lembra "Voce guardou o documento na gaveta do escritorio?"
-3. Idoso lembra → review_memory(remembered=true, quality=4) → intervalo cresce
-4. Idoso esquece → review_memory(remembered=false) → intervalo reseta
-
-TOOLS: remember_this, review_memory, list_memories, pause_memory, memory_stats
-TABELA: spaced_repetition_items`,
-		Location: "internal/hippocampus/spaced/", Parent: "module:hippocampus",
-		Tags: `["spaced", "repetition", "SM2", "memoria", "reforco"]`, Importance: 7,
-	})
-
-	entries = append(entries, KnowledgeEntry{
-		Type: "concept", Key: "concept:habits", Title: "Habit Tracking — Log de Habitos",
-		Summary: "Rastreamento de habitos diarios: agua, remedios, exercicio, alimentacao. Streaks e estatisticas",
-		Content: `HabitTracker (habits/habit_tracker.go):
-
-HABITOS RASTREADOS:
-- tomar_agua (copos/dia)
-- tomar_remedio (confirmacao)
-- exercicio (feito/nao feito)
-- comer (refeicoes)
-- caminhar (feito/nao feito)
-
-TOOLS:
-- log_habit: registra sucesso/falha
-- log_water: registra copos de agua
-- habit_stats: estatisticas e padroes
-- habit_summary: resumo do dia
-
-TABELA: habits_log (habit_name, success, notes, logged_at)
-ANALISE: streaks (sequencias), taxa de sucesso, padroes semanais`,
-		Location: "internal/hippocampus/habits/", Parent: "module:hippocampus",
-		Tags: `["habitos", "agua", "remedio", "exercicio", "tracking"]`, Importance: 7,
-	})
-
-	// === CREATOR ===
-	entries = append(entries, KnowledgeEntry{
-		Type: "concept", Key: "concept:creator", Title: "Sobre o Criador do EVA-Mind",
-		Summary: "Jose R F Junior (web2ajax@gmail.com) — desenvolvedor full-stack, arquiteto do sistema",
-		Content: `O EVA-Mind foi criado por Jose R F Junior.
-
-INFORMACOES:
-- Nome: Jose R F Junior
-- Email: web2ajax@gmail.com
-- CPF: 64525430249
-- ID no sistema: 1121
-- Papel: Criador, desenvolvedor principal e arquiteto do EVA-Mind
-- Licenca: AGPL-3.0-or-later
-
-O criador tem acesso total ao sistema (debug mode quando CPF detectado).
-Usa EVA como ferramenta de desenvolvimento e teste.
-Fala portugues brasileiro.`,
-		Location: "main.go", Parent: "arch:overview",
-		Tags: `["criador", "jose", "desenvolvedor", "arquiteto"]`, Importance: 6,
-	})
-
-	entries = append(entries, KnowledgeEntry{
-		Type: "architecture", Key: "arch:project_structure", Title: "Estrutura de Diretorios do Projeto",
-		Summary: "381 arquivos .go em 101 pacotes. Organizacao inspirada no cerebro humano",
-		Content: `ESTRUTURA:
-eva-mind/
-├── main.go                          # Entry point, wiring de todos os servicos
-├── browser_voice_handler.go         # WebSocket handler para browser/app
-├── eva_chat_handler.go              # Chat por texto handler
-├── video_handler.go                 # Video WebRTC signaling
-├── log_stream_handler.go            # Stream de logs
-├── internal/
-│   ├── brainstem/                   # Infraestrutura
-│   │   ├── auth/                    # JWT authentication
-│   │   ├── config/                  # Configuration (.env)
-│   │   ├── database/                # PostgreSQL wrapper
-│   │   ├── infrastructure/
-│   │   │   ├── graph/               # Neo4j client
-│   │   │   └── vector/              # Qdrant client
-│   │   └── push/                    # Firebase push
-│   ├── cortex/                      # Logica e IA
-│   │   ├── alert/                   # Escalation service
-│   │   ├── eva_memory/              # Meta-cognitive memory
-│   │   ├── gemini/                  # Gemini handlers (Live + Flash)
-│   │   ├── lacan/                   # Psicanalise (FDPN, narrativa, signifiers)
-│   │   ├── learning/                # Autonomous learner
-│   │   ├── personality/             # Eneagrama personalities
-│   │   ├── self/                    # Core memory, reflection, anonymization
-│   │   ├── selfawareness/           # Self-awareness service
-│   │   └── voice/speaker/           # Voice fingerprinting
-│   ├── hippocampus/                 # Memoria
-│   │   ├── habits/                  # Habit tracking
-│   │   ├── knowledge/               # Embeddings, wisdom, self-knowledge
-│   │   ├── memory/                  # Episodic, graph, retrieval
-│   │   │   └── superhuman/          # 12 memory subsystems
-│   │   └── spaced/                  # Spaced repetition
-│   ├── motor/
-│   │   └── email/                   # SMTP service
-│   ├── scheduler/                   # Background jobs
-│   ├── security/                    # CORS, middleware
-│   ├── swarm/                       # Multi-agent system
-│   │   ├── clinical/                # Clinical assessments
-│   │   ├── educator/                # Education
-│   │   ├── emergency/               # Emergency alerts
-│   │   ├── entertainment/           # Music, movies, games
-│   │   ├── external/                # External integrations
-│   │   ├── google/                  # Google APIs
-│   │   ├── kids/                    # Kids mode
-│   │   ├── legal/                   # Legal guidance
-│   │   ├── productivity/            # GTD, tasks
-│   │   ├── scholar/                 # Autonomous learning
-│   │   ├── selfawareness/           # Self-awareness agent
-│   │   └── wellness/                # Meditation, breathing
-│   ├── telemetry/                   # Logging (zerolog)
-│   ├── tools/                       # 93+ tool handlers
-│   └── voice/                       # Voice session management
-├── cmd/
-│   ├── index_code/                  # Codebase indexer
-│   ├── seed_knowledge/              # Knowledge seed
-│   └── seed_wisdom/                 # Wisdom collection seed
-├── migrations/                      # SQL migrations (41+)
-├── sabedoria/conhecimento/          # Wisdom text files
-└── docs/                            # Documentation`,
-		Location: ".", Parent: "arch:overview",
-		Tags: `["estrutura", "diretorios", "pacotes", "organizacao"]`, Importance: 8,
-	})
-
-	return entries
+TODOS INDEXADOS no Qdrant eva_docs para busca semantica via search_my_docs.`,
+			Location: "MD/", Tags: `["documentacao", "fases", "arquitetura"]`, Importance: 8,
+		},
+	}
 }
