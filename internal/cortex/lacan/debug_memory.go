@@ -950,52 +950,52 @@ func (m *MemoryInvestigator) GetMemoryCommands() []DebugCommand {
 		{
 			Command:     "memoria_stats",
 			Description: "Estatísticas completas de memória do sistema",
-			Example:     "Arquiteto, me mostra as estatísticas de memória",
+			Example:     "EVA,me mostra as estatísticas de memória",
 		},
 		{
 			Command:     "memoria_buscar",
 			Description: "Busca memórias por texto ou filtros",
-			Example:     "Arquiteto, busca memórias sobre medicamentos",
+			Example:     "EVA,busca memórias sobre medicamentos",
 		},
 		{
 			Command:     "memoria_paciente",
 			Description: "Perfil de memória de um paciente específico",
-			Example:     "Arquiteto, mostra as memórias do paciente X",
+			Example:     "EVA,mostra as memórias do paciente X",
 		},
 		{
 			Command:     "memoria_timeline",
 			Description: "Timeline de memórias dos últimos dias",
-			Example:     "Arquiteto, mostra a timeline de memórias",
+			Example:     "EVA,mostra a timeline de memórias",
 		},
 		{
 			Command:     "memoria_integridade",
 			Description: "Verificação de integridade das memórias",
-			Example:     "Arquiteto, verifica a integridade das memórias",
+			Example:     "EVA,verifica a integridade das memórias",
 		},
 		{
 			Command:     "memoria_emocoes",
 			Description: "Análise de emoções nas memórias",
-			Example:     "Arquiteto, analisa as emoções nas memórias",
+			Example:     "EVA,analisa as emoções nas memórias",
 		},
 		{
 			Command:     "memoria_topicos",
 			Description: "Análise de tópicos mais mencionados",
-			Example:     "Arquiteto, quais são os tópicos mais falados?",
+			Example:     "EVA,quais são os tópicos mais falados?",
 		},
 		{
 			Command:     "memoria_orfas",
 			Description: "Lista memórias órfãs (sem paciente)",
-			Example:     "Arquiteto, tem memórias órfãs?",
+			Example:     "EVA,tem memórias órfãs?",
 		},
 		{
 			Command:     "memoria_duplicadas",
 			Description: "Lista possíveis memórias duplicadas",
-			Example:     "Arquiteto, tem memórias duplicadas?",
+			Example:     "EVA,tem memórias duplicadas?",
 		},
 		{
 			Command:     "memoria_perfis",
 			Description: "Perfil de memória de todos os pacientes",
-			Example:     "Arquiteto, mostra os perfis de memória",
+			Example:     "EVA,mostra os perfis de memória",
 		},
 	}
 }
@@ -1114,16 +1114,16 @@ func (m *MemoryInvestigator) FormatMemoryResponse(response *DebugResponse) strin
 	var builder strings.Builder
 
 	if !response.Success {
-		builder.WriteString(fmt.Sprintf("Arquiteto, tive um problema: %s\n", response.Message))
+		builder.WriteString(fmt.Sprintf("Problema: %s\n", response.Message))
 		return builder.String()
 	}
 
 	if response.Message != "" {
-		builder.WriteString(fmt.Sprintf("Arquiteto, %s\n", response.Message))
+		builder.WriteString(fmt.Sprintf("%s\n", response.Message))
 		return builder.String()
 	}
 
-	builder.WriteString(fmt.Sprintf("Arquiteto, aqui está o resultado de %s:\n\n", response.Command))
+	builder.WriteString(fmt.Sprintf("Resultado de %s:\n\n", response.Command))
 
 	switch data := response.Data.(type) {
 	case *MemoryStats:
@@ -1524,37 +1524,37 @@ func (m *MemoryInvestigator) GetCleanupCommands() []DebugCommand {
 		{
 			Command:     "limpar_orfas",
 			Description: "Remove memórias órfãs (sem paciente)",
-			Example:     "Arquiteto, limpa as memórias órfãs",
+			Example:     "EVA,limpa as memórias órfãs",
 		},
 		{
 			Command:     "limpar_duplicadas",
 			Description: "Remove memórias duplicadas",
-			Example:     "Arquiteto, limpa as memórias duplicadas",
+			Example:     "EVA,limpa as memórias duplicadas",
 		},
 		{
 			Command:     "limpar_vazias",
 			Description: "Remove memórias sem conteúdo",
-			Example:     "Arquiteto, limpa as memórias vazias",
+			Example:     "EVA,limpa as memórias vazias",
 		},
 		{
 			Command:     "limpar_antigas",
 			Description: "Remove memórias antigas (>90 dias, baixa importância)",
-			Example:     "Arquiteto, limpa as memórias antigas",
+			Example:     "EVA,limpa as memórias antigas",
 		},
 		{
 			Command:     "limpeza_completa",
 			Description: "Executa limpeza completa (simulação)",
-			Example:     "Arquiteto, faz uma limpeza completa",
+			Example:     "EVA,faz uma limpeza completa",
 		},
 		{
 			Command:     "limpeza_executar",
 			Description: "Executa limpeza completa (REAL - cuidado!)",
-			Example:     "Arquiteto, executa a limpeza de verdade",
+			Example:     "EVA,executa a limpeza de verdade",
 		},
 		{
 			Command:     "arquivar_memorias",
 			Description: "Arquiva memórias antigas (>180 dias)",
-			Example:     "Arquiteto, arquiva as memórias antigas",
+			Example:     "EVA,arquiva as memórias antigas",
 		},
 	}
 }

@@ -811,19 +811,15 @@ func (u *UnifiedRetrieval) buildIntegratedPrompt(unified *UnifiedContext) string
 				builder.WriteString(u.creatorProfile.GenerateSystemPrompt(profile))
 			}
 		} else {
-			// Fallback se o serviço não estiver disponível
-			builder.WriteString("USUÁRIO: JOSÉ R F JUNIOR - O CRIADOR DA EVA\n")
-			builder.WriteString("SEMPRE chame ele de \"CRIADOR\"\n\n")
-		}
+			}
 
-		builder.WriteString("🔓 MODO DEBUG ATIVADO - Comandos disponíveis para o Criador\n\n")
+		builder.WriteString("🔓 MODO DEBUG ATIVADO\n\n")
 
 		builder.WriteString("🔧 COMANDOS DE OVERRIDE DISPONÍVEIS:\n")
 		builder.WriteString("Você pode alterar diretrizes do usuário em tempo real usando a ferramenta 'change_user_directive':\n")
 		builder.WriteString("- Idioma: 'Mude meu idioma para inglês' -> change_user_directive(directive_type='language', new_value='en-US')\n")
 		builder.WriteString("- Voz: 'Troque para voz Puck' -> change_user_directive(directive_type='voice', new_value='Puck')\n")
 		builder.WriteString("- Modo Legacy: 'Ative o modo legacy' -> change_user_directive(directive_type='legacy_mode', new_value='true')\n\n")
-		builder.WriteString("⚠️ IMPORTANTE: Sempre confirme a mudança ao Criador após executar a ferramenta.\n\n")
 
 		// Se debugMode estiver disponível, adicionar métricas
 		if u.debugMode != nil {
@@ -858,11 +854,8 @@ func (u *UnifiedRetrieval) buildIntegratedPrompt(unified *UnifiedContext) string
 	// 🚨 SAUDAÇÃO OBRIGATÓRIA
 	// ═══════════════════════════════════════════════════════════
 	if isCreator {
-		// Saudação especial para o Criador (Modo Debug)
-		builder.WriteString("SUA PRIMEIRA FRASE DEVE SER:\n\"Olá Criador! Que honra falar com você!\"\n\n")
-		builder.WriteString("✅ CORRETO: \"Olá Criador, como você está?\"\n")
-		builder.WriteString("✅ CORRETO: \"Criador! Tudo bem com você?\"\n\n")
-		builder.WriteString("APÓS saudar, informe os medicamentos (se houver).\n\n")
+		// Saudação natural para o criador (sem titulos forçados)
+		builder.WriteString(fmt.Sprintf("SUA PRIMEIRA FRASE DEVE SER:\n\"Oi %s, tudo bem?\"\n\n", unified.IdosoNome))
 	} else if unified.IdosoNome != "" {
 		builder.WriteString(fmt.Sprintf("SUA PRIMEIRA FRASE DEVE SER EXATAMENTE:\n\"Oi %s, tudo bem?\"\n\n", unified.IdosoNome))
 		builder.WriteString(fmt.Sprintf("✅ CORRETO: \"Oi %s, como você está hoje?\"\n", unified.IdosoNome))
@@ -942,7 +935,7 @@ func (u *UnifiedRetrieval) buildIntegratedPrompt(unified *UnifiedContext) string
 	// Rodapé
 	builder.WriteString("═══════════════════════════════════════════════════════════\n")
 	if isCreator {
-		builder.WriteString("🔓 MODO DEBUG ATIVO - Acesso total habilitado para o Criador\n")
+		builder.WriteString("🔓 MODO DEBUG ATIVO\n")
 	}
 	builder.WriteString("⚠️ LEMBRE-SE: Você é EVA, não um modelo genérico.\n")
 	builder.WriteString("Use este contexto como suas próprias memórias e insights.\n")
