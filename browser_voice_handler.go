@@ -406,6 +406,39 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 						if s.evaMemory != nil {
 							go s.evaMemory.StoreTurn(ctx, sessionID, "user", text)
 						}
+
+						// --- Tool Detection & Execution ---
+						if s.toolsClient != nil && s.toolsHandler != nil && idosoID > 0 {
+							go func(transcript string, patientID int64) {
+								toolCalls, err := s.toolsClient.AnalyzeTranscription(ctx, transcript, "user")
+								if err != nil {
+									log.Warn().Err(err).Msg("[TOOLS] Falha na analise de transcricao")
+									return
+								}
+								for _, tc := range toolCalls {
+									if tc.Name == "" || tc.Name == "none" {
+										continue
+									}
+									log.Info().Str("tool", tc.Name).Interface("args", tc.Args).Msg("[TOOLS] Tool detectada na fala")
+
+									result, err := s.toolsHandler.ExecuteTool(tc.Name, tc.Args, patientID)
+									if err != nil {
+										log.Error().Err(err).Str("tool", tc.Name).Msg("[TOOLS] Erro ao executar tool")
+										continue
+									}
+
+									// Envia resultado como texto para o Gemini processar
+									toolMsg := fmt.Sprintf("[TOOL_RESULT:%s] %v", tc.Name, result["message"])
+									geminiMu.RLock()
+									c := geminiRef
+									geminiMu.RUnlock()
+									if c != nil {
+										c.SendText(toolMsg)
+									}
+									log.Info().Str("tool", tc.Name).Msg("[TOOLS] Resultado enviado ao Gemini")
+								}
+							}(text, idosoID)
+						}
 					}
 				}
 

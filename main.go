@@ -17,6 +17,7 @@ import (
 	"eva-mind/internal/brainstem/infrastructure/graph"
 	"eva-mind/internal/brainstem/infrastructure/vector"
 	"eva-mind/internal/brainstem/push"
+	"eva-mind/internal/cortex/alert"
 	"eva-mind/internal/cortex/eva_memory"
 	"eva-mind/internal/cortex/gemini"
 	"eva-mind/internal/cortex/lacan"
@@ -26,12 +27,23 @@ import (
 	"eva-mind/internal/hippocampus/memory"
 	"eva-mind/internal/hippocampus/memory/superhuman"
 	"eva-mind/internal/hippocampus/spaced"
+	"eva-mind/internal/motor/email"
 	"eva-mind/internal/scheduler"
 	"eva-mind/internal/security"
+	"eva-mind/internal/swarm"
+	"eva-mind/internal/swarm/clinical"
+	"eva-mind/internal/swarm/educator"
+	"eva-mind/internal/swarm/emergency"
+	"eva-mind/internal/swarm/entertainment"
+	"eva-mind/internal/swarm/external"
+	swarmgoogle "eva-mind/internal/swarm/google"
+	"eva-mind/internal/swarm/kids"
+	"eva-mind/internal/swarm/legal"
+	"eva-mind/internal/swarm/productivity"
+	"eva-mind/internal/swarm/wellness"
 	"eva-mind/internal/telemetry"
+	"eva-mind/internal/tools"
 	"eva-mind/internal/voice"
-
-	// Importações necessárias para rotas
 
 	"github.com/gorilla/mux"
 	"github.com/rs/zerolog/log"
@@ -59,6 +71,9 @@ type SignalingServer struct {
 	habitTracker       *habits.HabitTracker
 	spacedRepetition   *spaced.SpacedRepetitionService
 	superhumanMemory   *superhuman.SuperhumanMemoryService
+	toolsHandler       *tools.ToolsHandler
+	toolsClient        *gemini.ToolsClient
+	swarmOrchestrator  *swarm.Orchestrator
 }
 
 func main() {
@@ -154,6 +169,57 @@ func main() {
 	superhumanSvc := superhuman.NewSuperhumanMemoryService(db.Conn)
 	log.Info().Msg("🌟 Superhuman Memory Service inicializado")
 
+	// 7.4 Email Service (SMTP para alertas)
+	emailSvc, err := email.NewEmailService(cfg)
+	if err != nil {
+		log.Warn().Err(err).Msg("EmailService indisponivel - alertas por email desabilitados")
+	} else {
+		log.Info().Msg("📧 Email Service inicializado")
+	}
+
+	// 7.5 Tools Handler (93 tools — medicamentos, alarmes, jogos, GTD, etc)
+	toolsHandler := tools.NewToolsHandler(db, pushService, emailSvc)
+	toolsHandler.SetSpacedService(spacedSvc)
+	toolsHandler.SetHabitTracker(habitTracker)
+
+	// EscalationService (escalation de alertas: push → email → SMS)
+	escalationSvc := alert.NewEscalationService(alert.EscalationConfig{
+		Firebase: pushService,
+		Email:    emailSvc,
+		DB:       db.Conn,
+	})
+	toolsHandler.SetEscalationService(escalationSvc)
+	log.Info().Msg("🛠️ Tools Handler inicializado (93 tools)")
+
+	// 7.6 Tools Client (Gemini 2.5 Flash REST — deteccao de intencao de tool)
+	toolsClient := gemini.NewToolsClient(cfg)
+	log.Info().Msg("🔍 Tools Client inicializado (Gemini Flash)")
+
+	// 7.7 Swarm Orchestrator (10 agentes especializados + circuit breaker)
+	swarmDeps := &swarm.Dependencies{
+		DB:           db,
+		Neo4j:        neo4jClient,
+		Qdrant:       qdrantClient,
+		Push:         pushService,
+		Config:       cfg,
+		GoogleAPIKey: cfg.GoogleAPIKey,
+	}
+	orchestrator := swarm.NewOrchestrator(swarmDeps)
+	if err := swarm.SetupAllSwarms(orchestrator,
+		clinical.New(),
+		emergency.New(),
+		entertainment.New(),
+		wellness.New(),
+		productivity.New(),
+		swarmgoogle.New(),
+		external.New(),
+		educator.New(),
+		kids.New(),
+		legal.New(),
+	); err != nil {
+		log.Error().Err(err).Msg("Falha ao inicializar Swarm System")
+	}
+
 	// 8. SignalingServer
 	server := &SignalingServer{
 		db:                 db,
@@ -172,6 +238,9 @@ func main() {
 		habitTracker:       habitTracker,
 		spacedRepetition:   spacedSvc,
 		superhumanMemory:   superhumanSvc,
+		toolsHandler:       toolsHandler,
+		toolsClient:        toolsClient,
+		swarmOrchestrator:  orchestrator,
 	}
 
 	// 9. Router & Servidor HTTP
