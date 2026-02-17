@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	gemini "eva-mind/internal/cortex/gemini"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -96,6 +97,49 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 	}
 
 	log.Info().Str("session", sessionID).Str("cpf", clientCPF).Bool("hasContext", configMsg.Text != "").Msg("[BROWSER] Config recebida do cliente")
+
+	// Carregar dados do paciente pelo CPF (PostgreSQL)
+	if clientCPF != "" && s.db != nil {
+		idoso, err := s.db.GetIdosoByCPF(clientCPF)
+		if err != nil {
+			log.Warn().Err(err).Str("cpf", clientCPF).Msg("[BROWSER] Paciente nao encontrado")
+		} else {
+			fullIdoso, err := s.db.GetIdoso(idoso.ID)
+			if err == nil && fullIdoso != nil {
+				clientContext += fmt.Sprintf("\n\n[PACIENTE] Nome: %s | CPF: %s | Nascimento: %s",
+					fullIdoso.Nome, clientCPF, fullIdoso.DataNascimento.Format("02/01/2006"))
+				log.Info().Str("session", sessionID).Str("nome", fullIdoso.Nome).Int64("id", fullIdoso.ID).Msg("[BROWSER] Paciente carregado")
+			}
+
+			// Buscar agendamentos/medicamentos do paciente via query direta
+			rows, err := s.db.Conn.Query(`
+				SELECT tipo, dados_tarefa, status, data_hora_agendada
+				FROM agendamentos
+				WHERE idoso_id = $1 AND status IN ('agendado','ativo','pendente')
+				ORDER BY data_hora_agendada ASC LIMIT 20`, idoso.ID)
+			if err == nil {
+				defer rows.Close()
+				var medsInfo strings.Builder
+				count := 0
+				for rows.Next() {
+					var tipo, dados, status string
+					var dataHora time.Time
+					if err := rows.Scan(&tipo, &dados, &status, &dataHora); err == nil {
+						if count == 0 {
+							medsInfo.WriteString("\n\n[MEDICAMENTOS E AGENDAMENTOS DO PACIENTE]")
+						}
+						medsInfo.WriteString(fmt.Sprintf("\n- %s: %s (Status: %s, Hora: %s)",
+							tipo, dados, status, dataHora.Format("02/01 15:04")))
+						count++
+					}
+				}
+				if count > 0 {
+					clientContext += medsInfo.String()
+					log.Info().Str("session", sessionID).Int("count", count).Msg("[BROWSER] Agendamentos carregados")
+				}
+			}
+		}
+	}
 
 	// Carregar memoria meta-cognitiva do Neo4j
 	var memories []string
