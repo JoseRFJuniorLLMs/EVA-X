@@ -60,3 +60,6 @@ nohup.out
 
 # Data
 data/*.db
+
+# MD documentation folders (private, never push)
+MD/
