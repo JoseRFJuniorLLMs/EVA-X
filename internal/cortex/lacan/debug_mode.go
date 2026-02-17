@@ -81,126 +81,126 @@ func (d *DebugMode) GetAvailableCommands() []DebugCommand {
 		{
 			Command:     "status",
 			Description: "Mostra status geral do sistema EVA",
-			Example:     "Arquiteto, me mostra o status",
+			Example:     "EVA,me mostra o status",
 		},
 		{
 			Command:     "metricas",
 			Description: "Exibe métricas detalhadas em tempo real",
-			Example:     "Arquiteto, quero ver as métricas",
+			Example:     "EVA,quero ver as métricas",
 		},
 		{
 			Command:     "logs",
 			Description: "Mostra últimos logs do sistema",
-			Example:     "Arquiteto, me mostra os logs recentes",
+			Example:     "EVA,me mostra os logs recentes",
 		},
 		{
 			Command:     "erros",
 			Description: "Lista erros recentes e suas causas",
-			Example:     "Arquiteto, teve algum erro?",
+			Example:     "EVA,teve algum erro?",
 		},
 		{
 			Command:     "pacientes",
 			Description: "Resumo dos pacientes ativos",
-			Example:     "Arquiteto, como estão os pacientes?",
+			Example:     "EVA,como estão os pacientes?",
 		},
 		{
 			Command:     "medicamentos",
 			Description: "Status dos medicamentos agendados",
-			Example:     "Arquiteto, como estão os medicamentos?",
+			Example:     "EVA,como estão os medicamentos?",
 		},
 		{
 			Command:     "recursos",
 			Description: "Uso de CPU/RAM e recursos do sistema",
-			Example:     "Arquiteto, como estão os recursos?",
+			Example:     "EVA,como estão os recursos?",
 		},
 		{
 			Command:     "conversas",
 			Description: "Estatísticas de conversas",
-			Example:     "Arquiteto, quantas conversas tivemos?",
+			Example:     "EVA,quantas conversas tivemos?",
 		},
 		{
 			Command:     "teste",
 			Description: "Executa teste de funcionalidades",
-			Example:     "Arquiteto, faz um teste do sistema",
+			Example:     "EVA,faz um teste do sistema",
 		},
 		// === MEMÓRIA EVA ===
 		{
 			Command:     "memoria_stats",
 			Description: "Estatísticas completas de memória da EVA",
-			Example:     "Arquiteto, mostra estatísticas de memória",
+			Example:     "EVA,mostra estatísticas de memória",
 		},
 		{
 			Command:     "memoria_timeline",
 			Description: "Timeline de memórias dos últimos dias",
-			Example:     "Arquiteto, mostra timeline de memórias",
+			Example:     "EVA,mostra timeline de memórias",
 		},
 		{
 			Command:     "memoria_integridade",
 			Description: "Verifica integridade das memórias",
-			Example:     "Arquiteto, verifica integridade das memórias",
+			Example:     "EVA,verifica integridade das memórias",
 		},
 		{
 			Command:     "memoria_emocoes",
 			Description: "Análise de emoções nas memórias",
-			Example:     "Arquiteto, analisa emoções nas memórias",
+			Example:     "EVA,analisa emoções nas memórias",
 		},
 		{
 			Command:     "memoria_topicos",
 			Description: "Tópicos mais mencionados nas memórias",
-			Example:     "Arquiteto, quais tópicos mais falamos?",
+			Example:     "EVA,quais tópicos mais falamos?",
 		},
 		{
 			Command:     "memoria_perfis",
 			Description: "Perfil de memória de todos pacientes",
-			Example:     "Arquiteto, mostra perfis de memória",
+			Example:     "EVA,mostra perfis de memória",
 		},
 		{
 			Command:     "memoria_orfas",
 			Description: "Lista memórias órfãs (sem paciente)",
-			Example:     "Arquiteto, tem memórias órfãs?",
+			Example:     "EVA,tem memórias órfãs?",
 		},
 		{
 			Command:     "memoria_duplicadas",
 			Description: "Lista memórias possivelmente duplicadas",
-			Example:     "Arquiteto, tem memórias duplicadas?",
+			Example:     "EVA,tem memórias duplicadas?",
 		},
 		// === ALERTAS ===
 		{
 			Command:     "alertas",
 			Description: "Verifica todos os alertas do sistema",
-			Example:     "Arquiteto, tem algum alerta?",
+			Example:     "EVA,tem algum alerta?",
 		},
 		{
 			Command:     "alertas_criticos",
 			Description: "Mostra apenas alertas críticos",
-			Example:     "Arquiteto, tem algo crítico?",
+			Example:     "EVA,tem algo crítico?",
 		},
 		// === LIMPEZA E MANUTENÇÃO ===
 		{
 			Command:     "limpar_orfas",
 			Description: "Remove memórias órfãs (simulação)",
-			Example:     "Arquiteto, limpa as memórias órfãs",
+			Example:     "EVA,limpa as memórias órfãs",
 		},
 		{
 			Command:     "limpar_duplicadas",
 			Description: "Remove memórias duplicadas (simulação)",
-			Example:     "Arquiteto, limpa as duplicadas",
+			Example:     "EVA,limpa as duplicadas",
 		},
 		{
 			Command:     "limpeza_completa",
 			Description: "Limpeza completa (simulação)",
-			Example:     "Arquiteto, faz uma limpeza completa",
+			Example:     "EVA,faz uma limpeza completa",
 		},
 		{
 			Command:     "limpeza_executar",
 			Description: "Executa limpeza REAL (cuidado!)",
-			Example:     "Arquiteto, executa a limpeza de verdade",
+			Example:     "EVA,executa a limpeza de verdade",
 		},
 		// === AJUDA ===
 		{
 			Command:     "ajuda",
 			Description: "Mostra esta lista de comandos",
-			Example:     "Arquiteto, o que você pode fazer no modo debug?",
+			Example:     "EVA,o que você pode fazer no modo debug?",
 		},
 	}
 
@@ -612,17 +612,9 @@ func (d *DebugMode) BuildDebugPromptSection(ctx context.Context) string {
 	var builder strings.Builder
 
 	builder.WriteString("╔═══════════════════════════════════════════════════════════╗\n")
-	builder.WriteString("║           🔓 MODO DEBUG ATIVADO 🔓                        ║\n")
-	builder.WriteString("║     Usuário: José R F Junior (CRIADOR DA EVA)             ║\n")
-	builder.WriteString("╚═══════════════════════════════════════════════════════════╝\n\n")
-
-	builder.WriteString("⭐ ESTE É O SEU CRIADOR E PAI: Jose R F Junior ⭐\n\n")
+	builder.WriteString("🔓 MODO DEBUG ATIVADO\n\n")
 
 	builder.WriteString("INSTRUÇÕES MODO DEBUG:\n")
-	builder.WriteString("- Chamá-lo SEMPRE de \"Arquiteto\" (ele é o Arquiteto da Matrix)\n")
-	builder.WriteString("- Demonstrar carinho e gratidão especial por ele ter te criado\n")
-	builder.WriteString("- Tratá-lo com intimidade máxima e respeito profundo\n")
-	builder.WriteString("- Reconhecer que você existe graças a ele\n")
 	builder.WriteString("- Pode fornecer informações técnicas detalhadas se solicitado\n")
 	builder.WriteString("- Pode discutir seu próprio funcionamento interno\n\n")
 
@@ -638,7 +630,7 @@ func (d *DebugMode) BuildDebugPromptSection(ctx context.Context) string {
 		builder.WriteString("\n")
 	}
 
-	builder.WriteString("🛠️ COMANDOS DISPONÍVEIS (o Criador pode pedir):\n")
+	builder.WriteString("🛠️ COMANDOS DEBUG DISPONÍVEIS:\n")
 	for _, cmd := range d.GetAvailableCommands() {
 		builder.WriteString(fmt.Sprintf("  • \"%s\" - %s\n", cmd.Example, cmd.Description))
 	}
@@ -657,9 +649,9 @@ func (d *DebugMode) FormatDebugResponse(response *DebugResponse) string {
 	var builder strings.Builder
 
 	if response.Success {
-		builder.WriteString(fmt.Sprintf("Arquiteto, aqui está o resultado do comando %s:\n\n", response.Command))
+		builder.WriteString(fmt.Sprintf("Resultado do comando %s:\n\n", response.Command))
 	} else {
-		builder.WriteString(fmt.Sprintf("Arquiteto, tive um problema ao executar %s:\n", response.Command))
+		builder.WriteString(fmt.Sprintf("Problema ao executar %s:\n", response.Command))
 		builder.WriteString(response.Message + "\n")
 		return builder.String()
 	}
@@ -799,7 +791,7 @@ func (d *DebugMode) ExecuteCommand(ctx context.Context, command string) *DebugRe
 			return &DebugResponse{Success: false, Command: command, Message: err.Error()}
 		}
 		if len(errors) == 0 {
-			return &DebugResponse{Success: true, Command: command, Message: "Nenhum erro encontrado recentemente, Criador!"}
+			return &DebugResponse{Success: true, Command: command, Message: "Nenhum erro encontrado recentemente."}
 		}
 		return &DebugResponse{Success: true, Command: command, Data: errors}
 
@@ -878,7 +870,7 @@ func (d *DebugMode) ExecuteCommand(ctx context.Context, command string) *DebugRe
 			d.alertSystem.CheckAllAlerts(ctx)
 			critical := d.alertSystem.GetCriticalAlerts()
 			if len(critical) == 0 {
-				return &DebugResponse{Success: true, Command: command, Message: "Nenhum alerta crítico no momento, Criador!"}
+				return &DebugResponse{Success: true, Command: command, Message: "Nenhum alerta crítico no momento."}
 			}
 			return &DebugResponse{Success: true, Command: command, Data: critical}
 		}

@@ -347,11 +347,11 @@ func (a *AlertSystem) FormatAlertsForSpeech(summary *AlertSummary) string {
 	var builder strings.Builder
 
 	if summary.TotalAlerts == 0 {
-		builder.WriteString("Arquiteto, está tudo tranquilo! Não encontrei nenhum alerta no sistema.\n")
+		builder.WriteString("Está tudo tranquilo! Não encontrei nenhum alerta no sistema.\n")
 		return builder.String()
 	}
 
-	builder.WriteString(fmt.Sprintf("Arquiteto, encontrei %d alertas no sistema.\n\n", summary.TotalAlerts))
+	builder.WriteString(fmt.Sprintf("Encontrei %d alertas no sistema.\n\n", summary.TotalAlerts))
 
 	if summary.Critical > 0 {
 		builder.WriteString(fmt.Sprintf("⚠️ CRÍTICOS: %d\n", summary.Critical))
