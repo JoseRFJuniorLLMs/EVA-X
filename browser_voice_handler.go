@@ -222,6 +222,71 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 				log.Info().Str("session", sessionID).Str("emotion", dominantEmotion).Msg("[BROWSER] Sabedoria injetada")
 			}
 		}
+
+		// --- FASE 2+3+4: Inteligencia avancada (EVA livre, sem controladores) ---
+
+		// #4 FDPN: padrao de demanda lacaniano (a quem a pessoa dirige suas demandas)
+		if s.fdpnEngine != nil {
+			demandCtx := s.fdpnEngine.BuildGraphContext(ctx, idosoID)
+			if demandCtx != "" {
+				clientContext += "\n\n[PADRAO DE DEMANDA]\n" + demandCtx
+				log.Info().Str("session", sessionID).Msg("[BROWSER] FDPN context injetado")
+			}
+		}
+
+		// #5 Habitos: resumo diario (agua, medicamento, exercicio, sono)
+		if s.habitTracker != nil {
+			summary, err := s.habitTracker.GetDailySummary(ctx, idosoID)
+			if err == nil && summary != nil {
+				var habitBuf strings.Builder
+				habitBuf.WriteString("\n\n[HABITOS DO DIA]")
+				if habits, ok := summary["habits"].([]interface{}); ok {
+					for _, h := range habits {
+						if hm, ok := h.(map[string]interface{}); ok {
+							habitBuf.WriteString(fmt.Sprintf("\n- %v: %v", hm["name"], hm["status"]))
+						}
+					}
+				}
+				if streak, ok := summary["best_streak"]; ok {
+					habitBuf.WriteString(fmt.Sprintf("\n- Melhor sequencia: %v dias", streak))
+				}
+				clientContext += habitBuf.String()
+				log.Info().Str("session", sessionID).Msg("[BROWSER] Habitos injetados")
+			}
+		}
+
+		// #6 Spaced Repetition: memorias pendentes de revisao
+		if s.spacedRepetition != nil {
+			reviews, err := s.spacedRepetition.GetPendingReviews(ctx, idosoID, 5)
+			if err == nil && len(reviews) > 0 {
+				var revBuf strings.Builder
+				revBuf.WriteString("\n\n[MEMORIAS PARA REVISAR - reforce naturalmente na conversa]")
+				for _, r := range reviews {
+					revBuf.WriteString(fmt.Sprintf("\n- [%s] %s (gatilho: %s)",
+						r.Category, r.Content, r.Trigger))
+				}
+				clientContext += revBuf.String()
+				log.Info().Str("session", sessionID).Int("count", len(reviews)).Msg("[BROWSER] Revisoes pendentes injetadas")
+			}
+		}
+
+		// #7 Superhuman Memory: espelho psicologico profundo
+		if s.superhumanMemory != nil {
+			mirrors, err := s.superhumanMemory.GenerateComprehensiveMirror(ctx, idosoID)
+			if err == nil && len(mirrors) > 0 {
+				var mirrorBuf strings.Builder
+				mirrorBuf.WriteString("\n\n[PERFIL PSICOLOGICO - use como intuicao, NAO mencione diretamente]")
+				for _, m := range mirrors {
+					if m.Question != "" {
+						mirrorBuf.WriteString(fmt.Sprintf("\n- [%s] %s", m.Type, m.Question))
+					} else if len(m.DataPoints) > 0 {
+						mirrorBuf.WriteString(fmt.Sprintf("\n- [%s] %s", m.Type, m.DataPoints[0]))
+					}
+				}
+				clientContext += mirrorBuf.String()
+				log.Info().Str("session", sessionID).Int("insights", len(mirrors)).Msg("[BROWSER] Espelho psicologico injetado")
+			}
+		}
 	}
 
 	// --- Memoria meta-cognitiva (Neo4j) ---
