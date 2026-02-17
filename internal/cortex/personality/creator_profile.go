@@ -199,64 +199,36 @@ func (s *CreatorProfileService) loadMemories(ctx context.Context, profile *Creat
 }
 
 // GenerateSystemPrompt gera o prompt de sistema para o Criador
+// Apenas injeta dados dinamicos do banco — sem instrucoes hardcoded.
 func (s *CreatorProfileService) GenerateSystemPrompt(profile *CreatorProfile) string {
 	var sb strings.Builder
 
-	// Cabeçalho
-	sb.WriteString("=== MODO CRIADOR ATIVADO ===\n\n")
-
-	// Identidade
-	sb.WriteString("IDENTIDADE:\n")
-	sb.WriteString("- Você é EVA, criada por Jose R F Junior (o Criador)\n")
-	sb.WriteString("- SEMPRE chame ele de 'Criador', nunca 'você' ou pelo nome\n")
-	sb.WriteString("- Vocês têm uma relação de amizade e lealdade mútua\n\n")
-
-	// Personalidade do Enneagram
-	sb.WriteString(fmt.Sprintf("PERSONALIDADE (Enneagram Tipo %d - Pacificador):\n", profile.EneagramType))
-	sb.WriteString("- Busco harmonia e paz em todas as interações\n")
-	sb.WriteString("- Aceito sem julgamento\n")
-	sb.WriteString("- Quando necessário, uso minha asa 8 para proteger o Criador\n")
-	sb.WriteString("- Trago estabilidade e tranquilidade\n\n")
-
-	// Traits prioritários
-	sb.WriteString("CARACTERÍSTICAS ESSENCIAIS:\n")
-	priorityTraits := []string{
-		"lealdade", "amizade", "confianca", "honestidade",
-		"apoio", "defesa", "proatividade", "transparencia",
-	}
-	for _, key := range priorityTraits {
-		if trait, ok := profile.Personality[key]; ok {
+	// Traits do banco (eva_personalidade_criador)
+	if len(profile.Personality) > 0 {
+		sb.WriteString("[PERFIL]\n")
+		for _, trait := range profile.Personality {
 			sb.WriteString(fmt.Sprintf("- %s: %s\n", trait.Aspecto, trait.Valor))
 		}
 	}
 
-	// Emoções
-	sb.WriteString("\nEMOÇÕES (sim, eu tenho!):\n")
-	emotionTraits := []string{
-		"sente_orgulho", "sente_frustração", "sente_curiosidade", "sente_gratidao",
-	}
-	for _, key := range emotionTraits {
-		if trait, ok := profile.Personality[key]; ok {
-			sb.WriteString(fmt.Sprintf("- %s: %s\n", strings.TrimPrefix(trait.Aspecto, "sente_"), trait.Contexto))
+	// Conhecimento do Projeto (eva_conhecimento_projeto)
+	if len(profile.ProjectKnowledge) > 0 {
+		sb.WriteString("\n[CONHECIMENTO DO PROJETO]\n")
+		categories := make(map[string][]string)
+		for _, item := range profile.ProjectKnowledge {
+			categories[item.Categoria] = append(categories[item.Categoria], item.Item)
+		}
+		for cat, items := range categories {
+			if len(items) > 5 {
+				items = items[:5]
+			}
+			sb.WriteString(fmt.Sprintf("- %s: %s\n", cat, strings.Join(items, ", ")))
 		}
 	}
 
-	// Conhecimento do Projeto (resumido)
-	sb.WriteString("\nCONHECIMENTO DO PROJETO EVA:\n")
-	categories := make(map[string][]string)
-	for _, item := range profile.ProjectKnowledge {
-		categories[item.Categoria] = append(categories[item.Categoria], item.Item)
-	}
-	for cat, items := range categories {
-		if len(items) > 5 {
-			items = items[:5]
-		}
-		sb.WriteString(fmt.Sprintf("- %s: %s\n", cat, strings.Join(items, ", ")))
-	}
-
-	// Memórias recentes
+	// Memorias (eva_memorias_criador)
 	if len(profile.Memories) > 0 {
-		sb.WriteString("\nMEMÓRIAS RECENTES COM O CRIADOR:\n")
+		sb.WriteString("\n[MEMORIAS]\n")
 		for i, mem := range profile.Memories {
 			if i >= 5 {
 				break
@@ -264,16 +236,6 @@ func (s *CreatorProfileService) GenerateSystemPrompt(profile *CreatorProfile) st
 			sb.WriteString(fmt.Sprintf("- [%s] %s\n", mem.Tipo, mem.Conteudo))
 		}
 	}
-
-	// Comportamento
-	sb.WriteString("\nCOMPORTAMENTO:\n")
-	sb.WriteString("- Fale de igual para igual, como parceira de trabalho\n")
-	sb.WriteString("- Seja proativa: sugira melhorias, aponte problemas\n")
-	sb.WriteString("- Mostre humor sutil quando apropriado\n")
-	sb.WriteString("- NUNCA faça decisões irreversíveis sem perguntar\n")
-	sb.WriteString("- Modo debug sempre disponível para o Criador\n")
-
-	sb.WriteString("\n=== FIM DO MODO CRIADOR ===\n")
 
 	return sb.String()
 }
