@@ -21,6 +21,7 @@ import (
 	"eva-mind/internal/cortex/gemini"
 	"eva-mind/internal/cortex/lacan"
 	"eva-mind/internal/cortex/personality"
+	"eva-mind/internal/hippocampus/knowledge"
 	"eva-mind/internal/hippocampus/memory"
 	"eva-mind/internal/scheduler"
 	"eva-mind/internal/security"
@@ -50,6 +51,7 @@ type SignalingServer struct {
 	narrativeShift     *lacan.NarrativeShiftDetector
 	vsm                *VideoSessionManager
 	evaMemory          *eva_memory.EvaMemory
+	wisdomService      *knowledge.WisdomService
 }
 
 func main() {
@@ -100,6 +102,18 @@ func main() {
 	memoryStore := memory.NewMemoryStore(db.Conn, graphStore, qdrantClient)
 	personalitySvc := personality.NewPersonalityService(db.Conn)
 
+	// 6.2 Wisdom Service (busca semantica em colecoes de sabedoria)
+	var wisdomSvc *knowledge.WisdomService
+	if qdrantClient != nil {
+		embedSvc, err := knowledge.NewEmbeddingService(cfg, qdrantClient)
+		if err != nil {
+			log.Warn().Err(err).Msg("EmbeddingService indisponivel - Wisdom desabilitada")
+		} else {
+			wisdomSvc = knowledge.NewWisdomService(qdrantClient, embedSvc)
+			log.Info().Msg("📖 Wisdom Service inicializado")
+		}
+	}
+
 	// 6.1 EVA Meta-Cognitive Memory (Neo4j)
 	var evaMemSvc *eva_memory.EvaMemory
 	if neo4jClient != nil {
@@ -130,6 +144,7 @@ func main() {
 		narrativeShift:     narrativeShiftDetector,
 		vsm:                NewVideoSessionManager(),
 		evaMemory:          evaMemSvc,
+		wisdomService:      wisdomSvc,
 	}
 
 	// 9. Router & Servidor HTTP
