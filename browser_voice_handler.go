@@ -287,6 +287,19 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 				log.Info().Str("session", sessionID).Int("insights", len(mirrors)).Msg("[BROWSER] Espelho psicologico injetado")
 			}
 		}
+
+		// #8 Conhecimento aprendido autonomamente (Scholar Agent)
+		if s.autonomousLearner != nil {
+			searchQuery := dominantEmotion
+			if searchQuery == "" || searchQuery == "neutro" {
+				searchQuery = "bem-estar saude mental"
+			}
+			learningCtx := s.autonomousLearner.GetLearningContext(ctx, searchQuery)
+			if learningCtx != "" {
+				clientContext += "\n\n[CONHECIMENTO APRENDIDO]\n" + learningCtx
+				log.Info().Str("session", sessionID).Msg("[BROWSER] Conhecimento aprendido injetado")
+			}
+		}
 	}
 
 	// --- Memoria meta-cognitiva (Neo4j) ---

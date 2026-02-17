@@ -21,6 +21,7 @@ import (
 	"eva-mind/internal/cortex/eva_memory"
 	"eva-mind/internal/cortex/gemini"
 	"eva-mind/internal/cortex/lacan"
+	"eva-mind/internal/cortex/learning"
 	"eva-mind/internal/cortex/personality"
 	"eva-mind/internal/hippocampus/habits"
 	"eva-mind/internal/hippocampus/knowledge"
@@ -40,6 +41,7 @@ import (
 	"eva-mind/internal/swarm/kids"
 	"eva-mind/internal/swarm/legal"
 	"eva-mind/internal/swarm/productivity"
+	"eva-mind/internal/swarm/scholar"
 	"eva-mind/internal/swarm/wellness"
 	"eva-mind/internal/telemetry"
 	"eva-mind/internal/tools"
@@ -74,6 +76,7 @@ type SignalingServer struct {
 	toolsHandler       *tools.ToolsHandler
 	toolsClient        *gemini.ToolsClient
 	swarmOrchestrator  *swarm.Orchestrator
+	autonomousLearner  *learning.AutonomousLearner
 }
 
 func main() {
@@ -126,10 +129,12 @@ func main() {
 
 	// 6.2 Wisdom Service (busca semantica em colecoes de sabedoria)
 	var wisdomSvc *knowledge.WisdomService
+	var embedSvc *knowledge.EmbeddingService
 	if qdrantClient != nil {
-		embedSvc, err := knowledge.NewEmbeddingService(cfg, qdrantClient)
-		if err != nil {
-			log.Warn().Err(err).Msg("EmbeddingService indisponivel - Wisdom desabilitada")
+		var embedErr error
+		embedSvc, embedErr = knowledge.NewEmbeddingService(cfg, qdrantClient)
+		if embedErr != nil {
+			log.Warn().Err(embedErr).Msg("EmbeddingService indisponivel - Wisdom desabilitada")
 		} else {
 			wisdomSvc = knowledge.NewWisdomService(qdrantClient, embedSvc)
 			log.Info().Msg("📖 Wisdom Service inicializado")
@@ -195,7 +200,14 @@ func main() {
 	toolsClient := gemini.NewToolsClient(cfg)
 	log.Info().Msg("🔍 Tools Client inicializado (Gemini Flash)")
 
-	// 7.7 Swarm Orchestrator (10 agentes especializados + circuit breaker)
+	// 7.7 Autonomous Learner (aprendizagem autonoma — pesquisa, estuda e memoriza)
+	autonomousLearner := learning.NewAutonomousLearner(db.Conn, cfg, qdrantClient, embedSvc)
+	log.Info().Msg("📚 Autonomous Learner inicializado")
+
+	// 7.8 Swarm Orchestrator (11 agentes especializados + circuit breaker)
+	scholarAgent := scholar.New()
+	scholarAgent.SetLearner(autonomousLearner)
+
 	swarmDeps := &swarm.Dependencies{
 		DB:           db,
 		Neo4j:        neo4jClient,
@@ -216,6 +228,7 @@ func main() {
 		educator.New(),
 		kids.New(),
 		legal.New(),
+		scholarAgent,
 	); err != nil {
 		log.Error().Err(err).Msg("Falha ao inicializar Swarm System")
 	}
@@ -241,6 +254,7 @@ func main() {
 		toolsHandler:       toolsHandler,
 		toolsClient:        toolsClient,
 		swarmOrchestrator:  orchestrator,
+		autonomousLearner:  autonomousLearner,
 	}
 
 	// 9. Router & Servidor HTTP
@@ -298,6 +312,16 @@ func main() {
 			}
 		}()
 		scheduler.Start(ctx, db, cfg, log.Logger, alertService, pushService)
+	}()
+
+	// Autonomous Learner (background — estuda a cada 6h)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().Interface("panic", r).Msg("CRITICO: Autonomous Learner panic")
+			}
+		}()
+		autonomousLearner.Start(ctx)
 	}()
 
 	// 8. Start Server
