@@ -121,6 +121,7 @@ func main() {
 	// Rotas WebSocket
 	router.HandleFunc("/ws/pcm", server.voiceHandler.HandleMediaStream)
 	router.HandleFunc("/ws/browser", server.handleBrowserVoice)
+	router.HandleFunc("/ws/logs", server.handleLogStream)
 	// Rota legado para Twilio Media Stream
 	router.HandleFunc("/calls/stream/{agendamento_id}", server.voiceHandler.HandleMediaStream)
 
