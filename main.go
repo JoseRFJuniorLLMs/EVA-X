@@ -21,8 +21,11 @@ import (
 	"eva-mind/internal/cortex/gemini"
 	"eva-mind/internal/cortex/lacan"
 	"eva-mind/internal/cortex/personality"
+	"eva-mind/internal/hippocampus/habits"
 	"eva-mind/internal/hippocampus/knowledge"
 	"eva-mind/internal/hippocampus/memory"
+	"eva-mind/internal/hippocampus/memory/superhuman"
+	"eva-mind/internal/hippocampus/spaced"
 	"eva-mind/internal/scheduler"
 	"eva-mind/internal/security"
 	"eva-mind/internal/telemetry"
@@ -52,6 +55,10 @@ type SignalingServer struct {
 	vsm                *VideoSessionManager
 	evaMemory          *eva_memory.EvaMemory
 	wisdomService      *knowledge.WisdomService
+	fdpnEngine         *lacan.FDPNEngine
+	habitTracker       *habits.HabitTracker
+	spacedRepetition   *spaced.SpacedRepetitionService
+	superhumanMemory   *superhuman.SuperhumanMemoryService
 }
 
 func main() {
@@ -131,6 +138,22 @@ func main() {
 	narrativeShiftDetector := lacan.NewNarrativeShiftDetector(neo4jClient, signifierService)
 	log.Info().Msg("📊 Narrative Shift Detector initialized")
 
+	// 7.1 FDPN Engine (Lacan demand address mapping)
+	var fdpnEng *lacan.FDPNEngine
+	if neo4jClient != nil {
+		fdpnEng = lacan.NewFDPNEngine(neo4jClient)
+		log.Info().Msg("🧩 FDPN Engine inicializado")
+	}
+
+	// 7.2 Habit Tracker + Spaced Repetition
+	habitTracker := habits.NewHabitTracker(db.Conn)
+	spacedSvc := spaced.NewSpacedRepetitionService(db.Conn)
+	log.Info().Msg("📊 Habit Tracker + Spaced Repetition inicializados")
+
+	// 7.3 Superhuman Memory Service (12 subsistemas de memoria)
+	superhumanSvc := superhuman.NewSuperhumanMemoryService(db.Conn)
+	log.Info().Msg("🌟 Superhuman Memory Service inicializado")
+
 	// 8. SignalingServer
 	server := &SignalingServer{
 		db:                 db,
@@ -145,6 +168,10 @@ func main() {
 		vsm:                NewVideoSessionManager(),
 		evaMemory:          evaMemSvc,
 		wisdomService:      wisdomSvc,
+		fdpnEngine:         fdpnEng,
+		habitTracker:       habitTracker,
+		spacedRepetition:   spacedSvc,
+		superhumanMemory:   superhumanSvc,
 	}
 
 	// 9. Router & Servidor HTTP
