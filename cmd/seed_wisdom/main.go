@@ -329,8 +329,16 @@ func seedSource(ctx context.Context, qClient *vector.QdrantClient, embedder *mem
 		log.Printf("⚠️ [%s] Coleção já existe ou erro: %v", ws.Name, err)
 	}
 
-	// Parsear entradas
-	entries := parseEntries(string(content))
+	// Parsear entradas (parser customizado por fonte)
+	var entries []string
+	switch ws.Name {
+	case "nasrudin":
+		entries = parseNasrudinStories(string(content))
+	case "esopo":
+		entries = parseAesopFables(string(content))
+	default:
+		entries = parseEntries(string(content))
+	}
 	log.Printf("📚 [%s] Encontradas %d entradas", ws.Name, len(entries))
 
 	if len(entries) == 0 {
@@ -445,6 +453,94 @@ func parseEntries(content string) []string {
 		if len(text) >= 10 {
 			entries = append(entries, text)
 		}
+	}
+
+	return entries
+}
+
+// parseNasrudinStories divide o texto do Nasrudin em parágrafos de ~500 palavras
+// O arquivo é prosa contínua dividida em 4 capítulos
+func parseNasrudinStories(content string) []string {
+	var entries []string
+
+	// Remover headers de capítulo
+	chapterRe := regexp.MustCompile(`CAPÍTULO\s*\d+\s*\n`)
+	content = chapterRe.ReplaceAllString(content, "\n")
+
+	// Dividir por parágrafos (double newline)
+	paragraphs := regexp.MustCompile(`\n\s*\n`).Split(content, -1)
+
+	var chunk strings.Builder
+	wordCount := 0
+
+	for _, para := range paragraphs {
+		para = strings.TrimSpace(para)
+		if len(para) < 20 {
+			continue
+		}
+		// Limpar whitespace interno
+		para = regexp.MustCompile(`\s+`).ReplaceAllString(para, " ")
+
+		words := len(strings.Fields(para))
+
+		if wordCount+words > 400 && chunk.Len() > 0 {
+			// Salvar chunk atual
+			text := strings.TrimSpace(chunk.String())
+			if len(text) >= 50 {
+				entries = append(entries, text)
+			}
+			chunk.Reset()
+			wordCount = 0
+		}
+
+		if chunk.Len() > 0 {
+			chunk.WriteString(" ")
+		}
+		chunk.WriteString(para)
+		wordCount += words
+	}
+
+	// Último chunk
+	if chunk.Len() > 0 {
+		text := strings.TrimSpace(chunk.String())
+		if len(text) >= 50 {
+			entries = append(entries, text)
+		}
+	}
+
+	return entries
+}
+
+// parseAesopFables divide por "Fábula [ROMAN]" incluindo título e moral
+func parseAesopFables(content string) []string {
+	var entries []string
+
+	// Dividir por "Fábula [ROMAN]"
+	fableRe := regexp.MustCompile(`(?m)^Fábula\s+[IVXLCDM]+\s*$`)
+	parts := fableRe.Split(content, -1)
+
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if len(part) < 30 {
+			continue
+		}
+
+		// Limpar linhas vazias excessivas e whitespace
+		cleaned := regexp.MustCompile(`\n\s*\n[\s\n]*`).ReplaceAllString(part, "\n")
+		cleaned = strings.TrimSpace(cleaned)
+
+		// Remover códigos de referência (H1865, MW1919, etc.)
+		cleaned = regexp.MustCompile(`(?m)^[A-Z]+\d+\s*$`).ReplaceAllString(cleaned, "")
+		cleaned = strings.TrimSpace(cleaned)
+
+		if len(cleaned) < 30 {
+			continue
+		}
+
+		// Colapsar whitespace
+		cleaned = regexp.MustCompile(`\s+`).ReplaceAllString(cleaned, " ")
+
+		entries = append(entries, cleaned)
 	}
 
 	return entries
