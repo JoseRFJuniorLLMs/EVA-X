@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	gemini "eva-mind/internal/cortex/gemini"
+	evaSelf "eva-mind/internal/cortex/self"
 	"net/http"
 	"strings"
 	"sync"
@@ -38,6 +39,7 @@ type evaMessage struct {
 // Client:    internal/cortex/gemini (v1beta, producao)
 // Frontend:  Malaria-Angolar/frontend/src/pages/EvaPage.tsx
 // Memoria:   Meta-cognitiva via Neo4j (internal/cortex/eva_memory)
+//            Identidade pessoal via CoreMemoryEngine (Neo4j :7688)
 // Protocolo:
 //
 //	Browser envia: {"type":"text","text":"pergunta do usuario"}
@@ -66,6 +68,7 @@ func (s *SignalingServer) handleEvaChat(w http.ResponseWriter, r *http.Request) 
 	defer geminiClient.Close()
 
 	sessionID := "eva-" + time.Now().Format("20060102150405")
+	sessionStart := time.Now()
 
 	// Espera primeira mensagem do cliente (deve ser tipo "config" com CPF)
 	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
@@ -92,7 +95,7 @@ func (s *SignalingServer) handleEvaChat(w http.ResponseWriter, r *http.Request) 
 
 	log.Info().Str("session", sessionID).Str("cpf", clientCPF).Bool("hasContext", configMsg.Text != "").Msg("[EVA] Config recebida do cliente")
 
-	// Carregar memoria meta-cognitiva do Neo4j
+	// Carregar memoria meta-cognitiva do Neo4j (sistema legado :7687)
 	var memories []string
 	if s.evaMemory != nil {
 		if err := s.evaMemory.StartSession(ctx, sessionID); err != nil {
@@ -105,6 +108,18 @@ func (s *SignalingServer) handleEvaChat(w http.ResponseWriter, r *http.Request) 
 		} else if metaCognition != "" {
 			memories = []string{metaCognition}
 			log.Info().Str("session", sessionID).Msg("[EVA] Memoria meta-cognitiva injetada")
+		}
+	}
+
+	// Injetar identidade pessoal da EVA (CoreMemoryEngine — Neo4j :7688)
+	// GetIdentityContext() retorna: personalidade OCEAN, memorias importantes, autodescricao
+	if s.coreMemory != nil {
+		identityCtx, err := s.coreMemory.GetIdentityContext(ctx)
+		if err != nil {
+			log.Warn().Err(err).Msg("[EVA] Falha ao carregar identidade pessoal (CoreMemory)")
+		} else if identityCtx != "" {
+			clientContext = identityCtx + "\n\n---\n\n" + clientContext
+			log.Info().Str("session", sessionID).Msg("[EVA] Identidade pessoal injetada (CoreMemory)")
 		}
 	}
 
@@ -131,10 +146,13 @@ func (s *SignalingServer) handleEvaChat(w http.ResponseWriter, r *http.Request) 
 	conn.WriteJSON(evaMessage{Type: "status", Text: "ready"})
 
 	var writeMu sync.Mutex
+	var transcriptMu sync.Mutex
 	errChan := make(chan error, 2)
 
-	// Buffer para acumular resposta da EVA (para salvar no Neo4j)
-	var responseAccum strings.Builder
+	// Buffers para acumular conversa
+	var responseAccum strings.Builder  // buffer por turno (EVA)
+	var transcriptAccum strings.Builder // transcript completo da sessao
+	var evaResponses []string           // respostas da EVA para CoreMemory
 
 	// Goroutine: Gemini -> Browser (text responses)
 	go func() {
@@ -171,9 +189,16 @@ func (s *SignalingServer) handleEvaChat(w http.ResponseWriter, r *http.Request) 
 					conn.WriteJSON(evaMessage{Type: "status", Text: "turn_complete"})
 					writeMu.Unlock()
 
-					// Salvar resposta acumulada no Neo4j
-					if s.evaMemory != nil && responseAccum.Len() > 0 {
-						go s.evaMemory.StoreTurn(ctx, sessionID, "assistant", responseAccum.String())
+					// Salvar resposta do turno no Neo4j legado + acumular transcript
+					if responseAccum.Len() > 0 {
+						turn := responseAccum.String()
+						if s.evaMemory != nil {
+							go s.evaMemory.StoreTurn(ctx, sessionID, "assistant", turn)
+						}
+						transcriptMu.Lock()
+						transcriptAccum.WriteString("EVA: " + turn + "\n")
+						evaResponses = append(evaResponses, turn)
+						transcriptMu.Unlock()
 					}
 					responseAccum.Reset()
 					continue
@@ -235,10 +260,13 @@ func (s *SignalingServer) handleEvaChat(w http.ResponseWriter, r *http.Request) 
 				}
 
 				if msg.Type == "text" && msg.Text != "" {
-					// Salvar mensagem do usuario no Neo4j
+					// Salvar mensagem do usuario no Neo4j legado + acumular transcript
 					if s.evaMemory != nil {
 						go s.evaMemory.StoreTurn(ctx, sessionID, "user", msg.Text)
 					}
+					transcriptMu.Lock()
+					transcriptAccum.WriteString("Usuario: " + msg.Text + "\n")
+					transcriptMu.Unlock()
 					geminiClient.SendText(msg.Text)
 				}
 			}
@@ -247,11 +275,33 @@ func (s *SignalingServer) handleEvaChat(w http.ResponseWriter, r *http.Request) 
 
 	sessionErr := <-errChan
 
-	// Finalizar sessao no Neo4j
+	// Finalizar sessao no Neo4j legado
 	if s.evaMemory != nil {
 		s.evaMemory.EndSession(ctx, sessionID)
-		// Detectar padroes apos cada sessao
 		go s.evaMemory.DetectPatterns(context.Background())
+	}
+
+	// Processar fim de sessao no CoreMemoryEngine (reflexao + memorias pessoais)
+	if s.coreMemory != nil {
+		transcript := transcriptAccum.String()
+		if transcript != "" {
+			duration := time.Since(sessionStart).Minutes()
+			go func() {
+				data := evaSelf.SessionData{
+					SessionID:       sessionID,
+					Transcript:      transcript,
+					DurationMinutes: duration,
+					EVAResponses:    evaResponses,
+					Timestamp:       sessionStart,
+				}
+				bgCtx := context.Background()
+				if err := s.coreMemory.ProcessSessionEnd(bgCtx, data); err != nil {
+					log.Warn().Err(err).Str("session", sessionID).Msg("[CoreMemory] Falha ao processar fim de sessao")
+				} else {
+					log.Info().Str("session", sessionID).Msg("[CoreMemory] Sessao processada — memorias pessoais atualizadas")
+				}
+			}()
+		}
 	}
 
 	log.Info().Str("session", sessionID).Err(sessionErr).Msg("EVA chat session ended")
