@@ -494,9 +494,14 @@ func (e *CoreMemoryEngine) detectMetaInsights(ctx context.Context) error {
 
 // TeachEVA interface para criador ensinar EVA
 func (e *CoreMemoryEngine) TeachEVA(ctx context.Context, teaching string, importance float64) error {
-	embedding, err := e.embeddingService.GenerateEmbedding(ctx, teaching)
-	if err != nil {
-		return err
+	// embedding opcional — se não houver serviço, salva sem vetor semântico
+	var embedding []float32
+	if e.embeddingService != nil {
+		var err error
+		embedding, err = e.embeddingService.GenerateEmbedding(ctx, teaching)
+		if err != nil {
+			embedding = nil // continua sem embedding
+		}
 	}
 
 	memory := CoreMemory{
