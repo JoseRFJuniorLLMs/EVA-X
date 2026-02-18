@@ -24,6 +24,7 @@ type Service struct {
 	qdrantClient       *vector.QdrantClient
 	neo4jClient        *graph.Neo4jClient // AUDIT FIX: Adicionado para salvar no Neo4j
 	graphStore         *memory.GraphStore // AUDIT FIX: Store para Neo4j
+	memoryStore        *memory.MemoryStore // AUDIT FIX 2026-02-17: Store para salvar com importância/emoção reais
 	fdpnEngine         *lacan.FDPNEngine
 	personalityService *ps.PersonalityService
 	zetaRouter         *ps.ZetaRouter
@@ -53,11 +54,17 @@ func NewService(
 		graphStore = memory.NewGraphStore(neo4j, nil)
 	}
 
+	var memoryStore *memory.MemoryStore
+	if db != nil {
+		memoryStore = memory.NewMemoryStore(db, graphStore, qdrant)
+	}
+
 	return &Service{
 		db:                 db,
 		qdrantClient:       qdrant,
 		neo4jClient:        neo4j,      // AUDIT FIX
 		graphStore:         graphStore, // AUDIT FIX
+		memoryStore:        memoryStore, // AUDIT FIX 2026-02-17
 		personalityService: personalitySvc,
 		zetaRouter:         zeta,
 		pushService:        push,

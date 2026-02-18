@@ -63,10 +63,16 @@ type Config struct {
 	// Google Services
 	GoogleMapsAPIKey string
 
-	// Neo4j
+	// Neo4j - dados dos pacientes
 	Neo4jURI      string
 	Neo4jUsername string
 	Neo4jPassword string
+
+	// Neo4j CORE - memória pessoal da EVA (porta 7688)
+	Neo4jCoreURI      string
+	Neo4jCoreUsername string
+	Neo4jCorePassword string
+	Neo4jCoreDB       string
 
 	// Redis
 	RedisHost     string
@@ -154,10 +160,16 @@ func Load() (*Config, error) {
 		// Auth
 		JWTSecret: getEnvRequired("JWT_SECRET"),
 
-		// Neo4j
+		// Neo4j - dados dos pacientes
 		Neo4jURI:      getEnvWithDefault("NEO4J_URI", "neo4j://localhost:7687"),
 		Neo4jUsername: getEnvWithDefault("NEO4J_USERNAME", "neo4j"),
 		Neo4jPassword: getEnvWithDefault("NEO4J_PASSWORD", "password"),
+
+		// Neo4j CORE - memória pessoal da EVA
+		Neo4jCoreURI:      getEnvWithDefault("NEO4J_CORE_URI", "bolt://localhost:7688"),
+		Neo4jCoreUsername: getEnvWithDefault("NEO4J_CORE_USER", "neo4j"),
+		Neo4jCorePassword: getEnvWithDefault("NEO4J_CORE_PASSWORD", "password"),
+		Neo4jCoreDB:       getEnvWithDefault("NEO4J_CORE_DB", "neo4j"),
 
 		// Redis
 		RedisHost:     getEnvWithDefault("REDIS_HOST", "localhost"),

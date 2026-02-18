@@ -23,6 +23,7 @@ import (
 	"eva-mind/internal/cortex/lacan"
 	"eva-mind/internal/cortex/learning"
 	"eva-mind/internal/cortex/personality"
+	evaSelf "eva-mind/internal/cortex/self"
 	"eva-mind/internal/cortex/selfawareness"
 	"eva-mind/internal/cortex/voice/speaker"
 	"eva-mind/internal/hippocampus/habits"
@@ -81,6 +82,7 @@ type SignalingServer struct {
 	swarmOrchestrator  *swarm.Orchestrator
 	autonomousLearner  *learning.AutonomousLearner
 	speakerSvc         *speaker.SpeakerService
+	coreMemory         *evaSelf.CoreMemoryEngine
 }
 
 func main() {
@@ -155,6 +157,39 @@ func main() {
 		log.Info().Msg("🧠 EVA Meta-Cognitive Memory inicializada")
 	} else {
 		log.Warn().Msg("⚠️ EVA Memory desabilitada (Neo4j indisponivel)")
+	}
+
+	// 6.3 Core Memory Engine — memória pessoal da EVA (Neo4j :7688)
+	var coreMemoryEngine *evaSelf.CoreMemoryEngine
+	reflectionSvc, reflectErr := evaSelf.NewReflectionService(cfg.GoogleAPIKey, cfg.GeminiAnalysisModel)
+	if reflectErr != nil {
+		log.Warn().Err(reflectErr).Msg("ReflectionService indisponivel - CoreMemory desabilitado")
+	} else {
+		anonSvc, anonErr := evaSelf.NewAnonymizationService(evaSelf.AnonymizationConfig{
+			GeminiAPIKey:      cfg.GoogleAPIKey,
+			ModelName:         cfg.GeminiAnalysisModel,
+			UseRegexFilters:   true,
+			PreserveStructure: true,
+		})
+		if anonErr != nil {
+			log.Warn().Err(anonErr).Msg("AnonymizationService indisponivel - CoreMemory desabilitado")
+		} else {
+			coreMemoryEngine, err = evaSelf.NewCoreMemoryEngine(evaSelf.CoreMemoryConfig{
+				Neo4jURI:            cfg.Neo4jCoreURI,
+				Neo4jUser:           cfg.Neo4jCoreUsername,
+				Neo4jPassword:       cfg.Neo4jCorePassword,
+				Database:            cfg.Neo4jCoreDB,
+				SimilarityThreshold: 0.88,
+				MinOccurrences:      3,
+			}, reflectionSvc, anonSvc, nil)
+			if err != nil {
+				log.Warn().Err(err).Msg("CoreMemoryEngine indisponivel - identidade EVA sem persistência")
+				coreMemoryEngine = nil
+			} else {
+				defer coreMemoryEngine.Shutdown(context.Background())
+				log.Info().Msg("🧠 CoreMemoryEngine inicializado — EVA tem memória própria (Neo4j :7688)")
+			}
+		}
 	}
 
 	// 7. Cognitive Services
@@ -275,6 +310,7 @@ func main() {
 		swarmOrchestrator:  orchestrator,
 		autonomousLearner:  autonomousLearner,
 		speakerSvc:         speakerSvc,
+		coreMemory:         coreMemoryEngine,
 	}
 
 	// 9. Router & Servidor HTTP
@@ -320,6 +356,14 @@ func main() {
 	v1.HandleFunc("/idosos/by-cpf/{cpf}", server.handleGetIdosoByCpf).Methods("GET")
 	v1.HandleFunc("/idosos/{id}", server.handleGetIdoso).Methods("GET")
 	v1.HandleFunc("/idosos/sync-token-by-cpf", server.handleSyncTokenByCpf).Methods("PATCH")
+
+	// Core Memory — identidade e memória pessoal da EVA (/api/v1/self/*)
+	if coreMemoryEngine != nil {
+		evaSelf.RegisterRoutes(v1, coreMemoryEngine)
+		log.Info().Msg("🧬 Rotas /api/v1/self/* registradas (CoreMemory)")
+	} else {
+		log.Warn().Msg("⚠️ Rotas /api/v1/self/* não registradas (CoreMemoryEngine indisponivel)")
+	}
 
 	// 7. Scheduler (Background Jobs)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

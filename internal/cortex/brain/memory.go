@@ -49,24 +49,30 @@ func (s *Service) ProcessUserSpeech(ctx context.Context, idosoID int64, text str
 				// Fallback: save summarized version, not raw text
 				summary := summarizeText(text)
 				memCtx := MemoryContext{
-					Emotion:  audioEmotion, // 🚀 IMPROVEMENT 3: Use detected emotion
-					Urgency:  audioUrgency, // 🚀 IMPROVEMENT 3: Use detected urgency
-					Keywords: extractKeywords(summary),
+					Emotion:        audioEmotion, // 🚀 IMPROVEMENT 3: Use detected emotion
+					Urgency:        audioUrgency, // 🚀 IMPROVEMENT 3: Use detected urgency
+					AudioIntensity: audioIntensity, // 🚀 IMPROVEMENT 6: Use detected intensity
+					Keywords:       extractKeywords(summary),
 				}
-				s.SaveEpisodicMemoryWithContext(idosoID, "user", summary, time.Now(), true, memCtx)
+				if err := s.SaveEpisodicMemoryWithContext(idosoID, "user", summary, time.Now(), true, memCtx); err != nil {
+					log.Printf("❌ [Ingestion] Falha ao salvar resumo idoso=%d: %v", idosoID, err)
+				}
 				return
 			}
 
 			// 🚀 IMPROVEMENT 1: Save ONLY atomic facts
 			for _, fact := range facts {
 				memCtx := MemoryContext{
-					Emotion:  audioEmotion, // 🚀 IMPROVEMENT 3: Use detected emotion
-					Urgency:  audioUrgency, // 🚀 IMPROVEMENT 3: Use detected urgency
-					Keywords: extractKeywords(fact.Content),
+					Emotion:        audioEmotion, // 🚀 IMPROVEMENT 3: Use detected emotion
+					Urgency:        audioUrgency, // 🚀 IMPROVEMENT 3: Use detected urgency
+					AudioIntensity: audioIntensity, // 🚀 IMPROVEMENT 6: Use detected intensity
+					Keywords:       extractKeywords(fact.Content),
 				}
 
 				// 🚀 IMPROVEMENT 5: Use correct event date from ingestion pipeline
-				s.SaveEpisodicMemoryWithContext(idosoID, "user", fact.Content, fact.EventTime, true, memCtx)
+				if err := s.SaveEpisodicMemoryWithContext(idosoID, "user", fact.Content, fact.EventTime, true, memCtx); err != nil {
+					log.Printf("❌ [Ingestion] Falha ao salvar fato atômico idoso=%d: %v", idosoID, err)
+				}
 			}
 
 			log.Printf("✅ [Ingestion] Saved %d atomic facts", len(facts))
@@ -74,11 +80,16 @@ func (s *Service) ProcessUserSpeech(ctx context.Context, idosoID int64, text str
 	} else {
 		// Fallback for short text: save as-is but mark as atomic
 		memCtx := MemoryContext{
-			Emotion:  audioEmotion, // 🚀 IMPROVEMENT 3: Use detected emotion
-			Urgency:  audioUrgency, // 🚀 IMPROVEMENT 3: Use detected urgency
-			Keywords: extractKeywords(text),
+			Emotion:        audioEmotion, // 🚀 IMPROVEMENT 3: Use detected emotion
+			Urgency:        audioUrgency, // 🚀 IMPROVEMENT 3: Use detected urgency
+			AudioIntensity: audioIntensity, // 🚀 IMPROVEMENT 6: Use detected intensity
+			Keywords:       extractKeywords(text),
 		}
-		go s.SaveEpisodicMemoryWithContext(idosoID, "user", text, time.Now(), true, memCtx)
+		go func() {
+			if err := s.SaveEpisodicMemoryWithContext(idosoID, "user", text, time.Now(), true, memCtx); err != nil {
+				log.Printf("❌ [Memory] Falha ao salvar texto idoso=%d: %v", idosoID, err)
+			}
+		}()
 	}
 }
 
