@@ -2,7 +2,7 @@ EVA-Mind
 ========
 
 <p align="center">
-  <img src="docs/oceano_azul.jpg" alt="EVA - Virtual Support Entity" width="600">
+  <img src="assets/eva.jpg" alt="EVA - Virtual Support Entity" width="600">
 </p>
 
 	EVA-Mind is an artificial intelligence system for healthcare.
