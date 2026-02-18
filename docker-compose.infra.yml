@@ -23,6 +23,29 @@ services:
       retries: 10
       start_period: 30s
 
+  # Neo4j CORE — memória pessoal da EVA (identidade, aprendizado, personalidade)
+  neo4j-core:
+    image: neo4j:5-community
+    container_name: eva-neo4j-core
+    restart: unless-stopped
+    ports:
+      - "7475:7474"   # Browser UI: http://localhost:7475
+      - "7688:7687"   # Bolt: bolt://localhost:7688
+    environment:
+      NEO4J_AUTH: neo4j/Debian23
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_memory_heap_initial__size: "128m"
+      NEO4J_dbms_memory_heap_max__size: "256m"
+    volumes:
+      - neo4j_core_data:/data
+      - neo4j_core_logs:/logs
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
   qdrant:
     image: qdrant/qdrant:latest
     container_name: eva-qdrant
@@ -33,7 +56,7 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:6333/healthz || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:6333/healthz || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -58,5 +81,7 @@ services:
 volumes:
   neo4j_data:
   neo4j_logs:
+  neo4j_core_data:
+  neo4j_core_logs:
   qdrant_data:
   redis_data:

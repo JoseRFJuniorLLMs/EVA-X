@@ -987,14 +987,18 @@ func (s *SignalingServer) handleGeminiResponse(session *WebSocketSession, respon
 					Importance: 0.3, // Assistant responses less important than user input
 					Keywords:   extractTopics(aiText),
 				}
-				go s.brainService.SaveEpisodicMemoryWithContext(
-					session.IdosoID,
-					"assistant",
-					aiText,
-					time.Now(),
-					false, // Not atomic (EVA's full response)
-					memCtx,
-				)
+				go func() {
+					if err := s.brainService.SaveEpisodicMemoryWithContext(
+						session.IdosoID,
+						"assistant",
+						aiText,
+						time.Now(),
+						false, // Not atomic (EVA's full response)
+						memCtx,
+					); err != nil {
+						log.Printf("❌ [MEMORY] Falha ao salvar resposta EVA idoso=%d: %v", session.IdosoID, err)
+					}
+				}()
 			}
 		}
 	}
