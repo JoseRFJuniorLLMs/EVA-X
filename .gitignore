@@ -67,4 +67,5 @@ clients/python/
 data/
 docs/
 migrations/
-scripts/
+scripts/*
+!scripts/redeploy.sh
