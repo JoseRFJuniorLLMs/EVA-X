@@ -110,9 +110,9 @@ func getMemoriesHandler(engine *CoreMemoryEngine) http.HandlerFunc {
 			}
 		}
 
-		// Query Cypher
+		// Query Cypher — relação criada em recordMemory é REMEMBERS
 		query := `
-			MATCH (eva:EvaSelf)-[:HAS_MEMORY]->(mem:CoreMemory)
+			MATCH (eva:EvaSelf)-[:REMEMBERS]->(mem:CoreMemory)
 		`
 		if memoryType != "" {
 			query += fmt.Sprintf("WHERE mem.memory_type = '%s'\n", memoryType)
@@ -181,7 +181,7 @@ func searchMemoriesHandler(engine *CoreMemoryEngine) http.HandlerFunc {
 
 		// Busca todas as memórias
 		query := `
-			MATCH (eva:EvaSelf)-[:HAS_MEMORY]->(mem:CoreMemory)
+			MATCH (eva:EvaSelf)-[:REMEMBERS]->(mem:CoreMemory)
 			RETURN mem.id AS id, mem.content AS content, mem.embedding AS embedding, mem.reinforcement_count AS reinforcement
 		`
 
@@ -237,7 +237,7 @@ func getMemoryStatsHandler(engine *CoreMemoryEngine) http.HandlerFunc {
 		ctx := r.Context()
 
 		query := `
-			MATCH (eva:EvaSelf)-[:HAS_MEMORY]->(mem:CoreMemory)
+			MATCH (eva:EvaSelf)-[:REMEMBERS]->(mem:CoreMemory)
 			RETURN
 				count(mem) AS total,
 				mem.memory_type AS type
@@ -422,7 +422,7 @@ func getDiversityScoreHandler(engine *CoreMemoryEngine) http.HandlerFunc {
 
 		// Busca todas as memórias com embeddings
 		query := `
-			MATCH (eva:EvaSelf)-[:HAS_MEMORY]->(mem:CoreMemory)
+			MATCH (eva:EvaSelf)-[:REMEMBERS]->(mem:CoreMemory)
 			RETURN mem.id AS id, mem.content AS content, mem.embedding AS embedding, mem.reinforcement_count AS reinforcement
 		`
 
