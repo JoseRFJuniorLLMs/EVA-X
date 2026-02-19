@@ -1394,6 +1394,234 @@ func (h *ToolsHandler) handleBiographyWriter(idosoID int64, args map[string]inte
 }
 
 // =============================================================================
+// CATEGORIA 7: APRENDIZAGEM DE IDIOMAS
+// =============================================================================
+
+// LanguageLesson representa uma lição de idioma
+type LanguageLesson struct {
+	Language    string            `json:"language"`
+	LanguagePT  string           `json:"language_pt"`
+	Topic       string           `json:"topic"`
+	TopicPT     string           `json:"topic_pt"`
+	Phrases     []LanguagePhrase `json:"phrases"`
+}
+
+// LanguagePhrase é uma frase com tradução e pronúncia
+type LanguagePhrase struct {
+	Original      string `json:"original"`
+	Translation   string `json:"translation"`
+	Pronunciation string `json:"pronunciation"`
+}
+
+// handleLearnNewLanguage ensina frases básicas em idiomas estrangeiros
+func (h *ToolsHandler) handleLearnNewLanguage(idosoID int64, args map[string]interface{}) (map[string]interface{}, error) {
+	language, _ := args["language"].(string)
+	topic, _ := args["topic"].(string)
+
+	if language == "" {
+		language = "ingles"
+	}
+	if topic == "" {
+		topic = "greetings"
+	}
+
+	log.Printf("🌍 [LANGUAGE] Lição de %s (tema: %s) para Idoso %d", language, topic, idosoID)
+
+	lesson := getLanguageLesson(language, topic)
+
+	// Montar mensagem de fala para a EVA dizer
+	var phraseList []string
+	for _, p := range lesson.Phrases {
+		phraseList = append(phraseList, fmt.Sprintf("'%s' se diz '%s', pronúncia: %s", p.Translation, p.Original, p.Pronunciation))
+	}
+
+	message := fmt.Sprintf("Vamos aprender %s! Tema: %s. ", lesson.LanguagePT, lesson.TopicPT)
+	for i, p := range phraseList {
+		message += fmt.Sprintf("%d) %s. ", i+1, p)
+	}
+	message += "Tente repetir comigo!"
+
+	// Notificar app se disponível
+	if h.NotifyFunc != nil {
+		h.NotifyFunc(idosoID, "language_lesson", map[string]interface{}{
+			"language": language,
+			"topic":    topic,
+			"phrases":  lesson.Phrases,
+		})
+	}
+
+	return map[string]interface{}{
+		"status":      "lesson",
+		"language":    lesson.LanguagePT,
+		"topic":       lesson.TopicPT,
+		"phrases":     lesson.Phrases,
+		"phrase_count": len(lesson.Phrases),
+		"message":     message,
+	}, nil
+}
+
+// getLanguageLesson retorna lições com frases reais por idioma e tópico
+func getLanguageLesson(language, topic string) *LanguageLesson {
+	langNames := map[string]string{
+		"ingles": "Inglês", "espanhol": "Espanhol", "frances": "Francês",
+		"italiano": "Italiano", "alemao": "Alemão", "japones": "Japonês",
+		"coreano": "Coreano", "chines": "Chinês", "arabe": "Árabe",
+		"hindi": "Hindi", "russo": "Russo", "portugues": "Português",
+		"turco": "Turco", "holandes": "Holandês", "sueco": "Sueco",
+		"polones": "Polonês", "tcheco": "Tcheco", "grego": "Grego",
+		"hebraico": "Hebraico", "tailandes": "Tailandês", "vietnamita": "Vietnamita",
+		"indonesio": "Indonésio", "malaio": "Malaio", "swahili": "Suaíli",
+		"bengali": "Bengali", "ucraniano": "Ucraniano", "romeno": "Romeno",
+		"hungaro": "Húngaro", "finlandes": "Finlandês", "noruegues": "Norueguês",
+		"dinamarques": "Dinamarquês",
+	}
+
+	topicNames := map[string]string{
+		"greetings": "Saudações", "numbers": "Números", "food": "Comida",
+		"family": "Família", "travel": "Viagem", "health": "Saúde",
+		"weather": "Clima", "daily": "Dia a dia",
+	}
+
+	langPT := langNames[language]
+	if langPT == "" {
+		langPT = language
+	}
+	topicPT := topicNames[topic]
+	if topicPT == "" {
+		topicPT = topic
+	}
+
+	// Banco de frases por idioma e tópico
+	lessons := map[string]map[string][]LanguagePhrase{
+		"ingles": {
+			"greetings": {
+				{Original: "Good morning", Translation: "Bom dia", Pronunciation: "gud mórning"},
+				{Original: "How are you?", Translation: "Como você está?", Pronunciation: "rau ar iú"},
+				{Original: "Nice to meet you", Translation: "Prazer em conhecer", Pronunciation: "náis tu míit iú"},
+				{Original: "Thank you very much", Translation: "Muito obrigado", Pronunciation: "thénk iú véri mâtch"},
+				{Original: "Goodbye", Translation: "Tchau", Pronunciation: "gudbái"},
+			},
+			"numbers": {
+				{Original: "One, two, three", Translation: "Um, dois, três", Pronunciation: "uan, tú, thrí"},
+				{Original: "Four, five, six", Translation: "Quatro, cinco, seis", Pronunciation: "fór, fáiv, síks"},
+				{Original: "Seven, eight, nine, ten", Translation: "Sete, oito, nove, dez", Pronunciation: "séven, êit, náin, tén"},
+			},
+			"food": {
+				{Original: "I'm hungry", Translation: "Estou com fome", Pronunciation: "aim rângri"},
+				{Original: "Water, please", Translation: "Água, por favor", Pronunciation: "uóter, plíiz"},
+				{Original: "The food is delicious", Translation: "A comida está deliciosa", Pronunciation: "dã fúud is delíchious"},
+				{Original: "Coffee with milk", Translation: "Café com leite", Pronunciation: "cófi uith mílk"},
+			},
+			"family": {
+				{Original: "My family", Translation: "Minha família", Pronunciation: "mái fémili"},
+				{Original: "Son and daughter", Translation: "Filho e filha", Pronunciation: "sân end dóter"},
+				{Original: "Grandchildren", Translation: "Netos", Pronunciation: "grândtchildrén"},
+				{Original: "I love my family", Translation: "Eu amo minha família", Pronunciation: "ái lâv mái fémili"},
+			},
+			"health": {
+				{Original: "I need a doctor", Translation: "Preciso de um médico", Pronunciation: "ái níid a dóctor"},
+				{Original: "I feel good", Translation: "Eu me sinto bem", Pronunciation: "ái fíil gud"},
+				{Original: "Medicine", Translation: "Remédio", Pronunciation: "médicin"},
+				{Original: "Hospital", Translation: "Hospital", Pronunciation: "ráspitol"},
+			},
+		},
+		"espanhol": {
+			"greetings": {
+				{Original: "Buenos días", Translation: "Bom dia", Pronunciation: "buénos días"},
+				{Original: "¿Cómo estás?", Translation: "Como você está?", Pronunciation: "cómo estás"},
+				{Original: "Mucho gusto", Translation: "Muito prazer", Pronunciation: "mútcho gústo"},
+				{Original: "Muchas gracias", Translation: "Muito obrigado", Pronunciation: "mútchas grácias"},
+				{Original: "Adiós", Translation: "Tchau", Pronunciation: "adiós"},
+			},
+			"food": {
+				{Original: "Tengo hambre", Translation: "Estou com fome", Pronunciation: "téngo âmbre"},
+				{Original: "Agua, por favor", Translation: "Água, por favor", Pronunciation: "águá, por favór"},
+				{Original: "La comida está deliciosa", Translation: "A comida está deliciosa", Pronunciation: "la comída está deliciósa"},
+			},
+			"family": {
+				{Original: "Mi familia", Translation: "Minha família", Pronunciation: "mi família"},
+				{Original: "Hijo e hija", Translation: "Filho e filha", Pronunciation: "ího e íha"},
+				{Original: "Nietos", Translation: "Netos", Pronunciation: "niétos"},
+				{Original: "Te quiero mucho", Translation: "Te amo muito", Pronunciation: "te kiéro mútcho"},
+			},
+		},
+		"frances": {
+			"greetings": {
+				{Original: "Bonjour", Translation: "Bom dia", Pronunciation: "bonjúr"},
+				{Original: "Comment allez-vous?", Translation: "Como vai?", Pronunciation: "comã talê vú"},
+				{Original: "Enchanté", Translation: "Prazer", Pronunciation: "ãchãtê"},
+				{Original: "Merci beaucoup", Translation: "Muito obrigado", Pronunciation: "mersi bocú"},
+				{Original: "Au revoir", Translation: "Tchau", Pronunciation: "ô revuár"},
+			},
+			"food": {
+				{Original: "J'ai faim", Translation: "Estou com fome", Pronunciation: "jê fã"},
+				{Original: "De l'eau, s'il vous plaît", Translation: "Água, por favor", Pronunciation: "de ló, sil vu plé"},
+				{Original: "C'est délicieux", Translation: "Está delicioso", Pronunciation: "sê deliciô"},
+			},
+		},
+		"italiano": {
+			"greetings": {
+				{Original: "Buongiorno", Translation: "Bom dia", Pronunciation: "buondjiórno"},
+				{Original: "Come stai?", Translation: "Como está?", Pronunciation: "cóme stái"},
+				{Original: "Piacere", Translation: "Prazer", Pronunciation: "piachere"},
+				{Original: "Grazie mille", Translation: "Muito obrigado", Pronunciation: "grátsie míle"},
+				{Original: "Arrivederci", Translation: "Tchau", Pronunciation: "arrivedérci"},
+			},
+		},
+		"alemao": {
+			"greetings": {
+				{Original: "Guten Morgen", Translation: "Bom dia", Pronunciation: "gúten mórgen"},
+				{Original: "Wie geht es Ihnen?", Translation: "Como vai?", Pronunciation: "ví guêt és ínen"},
+				{Original: "Danke schön", Translation: "Muito obrigado", Pronunciation: "dânke chön"},
+				{Original: "Auf Wiedersehen", Translation: "Tchau", Pronunciation: "áuf víderzen"},
+			},
+		},
+		"japones": {
+			"greetings": {
+				{Original: "おはようございます (Ohayou gozaimasu)", Translation: "Bom dia", Pronunciation: "ohayô gozaimáss"},
+				{Original: "お元気ですか (Ogenki desu ka)", Translation: "Como está?", Pronunciation: "ogenki déss ka"},
+				{Original: "ありがとうございます (Arigatou gozaimasu)", Translation: "Muito obrigado", Pronunciation: "arigatô gozaimáss"},
+				{Original: "さようなら (Sayounara)", Translation: "Tchau", Pronunciation: "sayonará"},
+			},
+		},
+	}
+
+	// Buscar lição específica
+	if langLessons, ok := lessons[language]; ok {
+		if phrases, ok := langLessons[topic]; ok {
+			return &LanguageLesson{
+				Language:   language,
+				LanguagePT: langPT,
+				Topic:      topic,
+				TopicPT:    topicPT,
+				Phrases:    phrases,
+			}
+		}
+		// Se não tem o tópico, usar greetings como fallback
+		if phrases, ok := langLessons["greetings"]; ok {
+			return &LanguageLesson{
+				Language:   language,
+				LanguagePT: langPT,
+				Topic:      "greetings",
+				TopicPT:    "Saudações",
+				Phrases:    phrases,
+			}
+		}
+	}
+
+	// Fallback genérico para idiomas sem lições pré-definidas
+	return &LanguageLesson{
+		Language:   language,
+		LanguagePT: langPT,
+		Topic:      topic,
+		TopicPT:    topicPT,
+		Phrases: []LanguagePhrase{
+			{Original: "(em breve)", Translation: "Lições de " + langPT + " estão sendo preparadas", Pronunciation: "peça novamente em breve"},
+		},
+	}
+}
+
+// =============================================================================
 // ESTRUTURAS DE SUPORTE
 // =============================================================================
 
