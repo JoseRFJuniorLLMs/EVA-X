@@ -164,7 +164,7 @@ func GetDefaultTools() []interface{} {
 					},
 				},
 				map[string]interface{}{
-					"name":        "radio_station_tuner",
+					"name":        "play_radio_station",
 					"description": "Sintoniza estações de rádio AM/FM via streaming",
 					"parameters": map[string]interface{}{
 						"type": "object",
@@ -178,7 +178,7 @@ func GetDefaultTools() []interface{} {
 					},
 				},
 				map[string]interface{}{
-					"name":        "play_relaxation_sounds",
+					"name":        "nature_sounds",
 					"description": "Toca sons de natureza ou white noise para relaxamento e sono",
 					"parameters": map[string]interface{}{
 						"type": "object",
@@ -193,7 +193,7 @@ func GetDefaultTools() []interface{} {
 					},
 				},
 				map[string]interface{}{
-					"name":        "hymn_and_prayer_player",
+					"name":        "religious_content",
 					"description": "Reproduz hinos religiosos ou guia orações (terço, salmos)",
 					"parameters": map[string]interface{}{
 						"type": "object",
@@ -211,42 +211,7 @@ func GetDefaultTools() []interface{} {
 					},
 				},
 				map[string]interface{}{
-					"name":        "daily_mass_stream",
-					"description": "Inicia transmissão de missa ao vivo ou gravada",
-					"parameters": map[string]interface{}{
-						"type":       "object",
-						"properties": map[string]interface{}{},
-					},
-				},
-				map[string]interface{}{
-					"name":        "watch_classic_movies",
-					"description": "Busca e reproduz filmes clássicos dublados ou nacionais",
-					"parameters": map[string]interface{}{
-						"type": "object",
-						"properties": map[string]interface{}{
-							"movie_name": map[string]interface{}{
-								"type":        "string",
-								"description": "Nome do filme ou ator (ex: 'Mazzaropi')",
-							},
-						},
-						"required": []string{"movie_name"},
-					},
-				},
-				map[string]interface{}{
-					"name":        "watch_news_briefing",
-					"description": "Apresenta um resumo das principais notícias do dia em vídeo ou áudio",
-					"parameters": map[string]interface{}{
-						"type": "object",
-						"properties": map[string]interface{}{
-							"topic": map[string]interface{}{
-								"type":        "string",
-								"description": "Tópico de interesse (geral, política, esportes)",
-							},
-						},
-					},
-				},
-				map[string]interface{}{
-					"name":        "read_newspaper_aloud",
+					"name":        "read_newspaper",
 					"description": "Lê as manchetes do dia dos principais jornais",
 					"parameters": map[string]interface{}{
 						"type": "object",
@@ -259,7 +224,7 @@ func GetDefaultTools() []interface{} {
 					},
 				},
 				map[string]interface{}{
-					"name":        "horoscope_daily",
+					"name":        "daily_horoscope",
 					"description": "Busca e lê o horóscopo do dia para o signo do paciente",
 					"parameters": map[string]interface{}{
 						"type": "object",
@@ -285,7 +250,7 @@ func GetDefaultTools() []interface{} {
 					},
 				},
 				map[string]interface{}{
-					"name":        "riddle_and_joke_teller",
+					"name":        "riddles_and_jokes",
 					"description": "Conta piadas ou propõe adivinhas/charadas",
 					"parameters": map[string]interface{}{
 						"type": map[string]interface{}{
@@ -304,34 +269,25 @@ func GetDefaultTools() []interface{} {
 					},
 				},
 				map[string]interface{}{
-					"name":        "poetry_generator",
-					"description": "Cria um poema ou rima personalizada sobre um tema escolhido",
-					"parameters": map[string]interface{}{
-						"type": "object",
-						"properties": map[string]interface{}{
-							"theme": map[string]interface{}{
-								"type":        "string",
-								"description": "Tema do poema (ex: 'família', 'saudade', 'alegria')",
-							},
-						},
-					},
-				},
-				map[string]interface{}{
 					"name":        "learn_new_language",
-					"description": "Inicia uma lição básica de um novo idioma (inglês, espanhol, francês)",
+					"description": "Inicia uma lição básica de idioma (inglês, espanhol, francês) com frases do dia a dia",
 					"parameters": map[string]interface{}{
 						"type": "object",
 						"properties": map[string]interface{}{
 							"language": map[string]interface{}{
 								"type":        "string",
 								"description": "Idioma a aprender",
-								"enum":        []string{"ingles", "espanhol", "frances"},
+								"enum":        []string{"ingles", "espanhol", "frances", "italiano", "alemao", "japones", "coreano", "chines", "arabe", "hindi", "russo", "portugues", "turco", "holandes", "sueco", "polones", "tcheco", "grego", "hebraico", "tailandes", "vietnamita", "indonesio", "malaio", "swahili", "bengali", "ucraniano", "romeno", "hungaro", "finlandes", "noruegues", "dinamarques"},
+							},
+							"topic": map[string]interface{}{
+								"type":        "string",
+								"description": "Tema da lição (saudações, números, comida, família, viagem, saúde)",
 							},
 						},
 						"required": []string{"language"},
 					},
 				},
-			},
+				},
 		},
 		// 1. Gmail - send_email
 		map[string]interface{}{

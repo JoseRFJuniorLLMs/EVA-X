@@ -41,7 +41,7 @@ func (a *Agent) registerTools() {
 	}, a.genericHandler("music", "Tocando música nostálgica"))
 
 	a.RegisterTool(swarm.ToolDefinition{
-		Name:        "radio_station_tuner",
+		Name:        "play_radio_station",
 		Description: "Sintoniza estações de rádio AM/FM via streaming",
 		Parameters: map[string]interface{}{
 			"station_name": map[string]interface{}{
@@ -52,7 +52,7 @@ func (a *Agent) registerTools() {
 	}, a.genericHandler("radio", "Sintonizando rádio"))
 
 	a.RegisterTool(swarm.ToolDefinition{
-		Name:        "play_relaxation_sounds",
+		Name:        "nature_sounds",
 		Description: "Toca sons de natureza ou white noise para relaxamento",
 		Parameters: map[string]interface{}{
 			"sound_type": map[string]interface{}{
@@ -65,7 +65,7 @@ func (a *Agent) registerTools() {
 
 	// --- ESPIRITUAL ---
 	a.RegisterTool(swarm.ToolDefinition{
-		Name:        "hymn_and_prayer_player",
+		Name:        "religious_content",
 		Description: "Reproduz hinos religiosos ou guia orações",
 		Parameters: map[string]interface{}{
 			"type":         map[string]interface{}{"type": "string", "description": "Tipo: hino, oracao, terço, salmo"},
@@ -74,32 +74,9 @@ func (a *Agent) registerTools() {
 		Required: []string{"type"},
 	}, a.genericHandler("spiritual", "Reproduzindo conteúdo espiritual"))
 
-	a.RegisterTool(swarm.ToolDefinition{
-		Name:        "daily_mass_stream",
-		Description: "Inicia transmissão de missa ao vivo ou gravada",
-		Parameters:  map[string]interface{}{},
-	}, a.genericHandler("spiritual", "Iniciando missa"))
-
 	// --- MÍDIA ---
 	a.RegisterTool(swarm.ToolDefinition{
-		Name:        "watch_classic_movies",
-		Description: "Busca e reproduz filmes clássicos",
-		Parameters: map[string]interface{}{
-			"movie_name": map[string]interface{}{"type": "string", "description": "Nome do filme ou ator"},
-		},
-		Required: []string{"movie_name"},
-	}, a.genericHandler("media", "Buscando filme"))
-
-	a.RegisterTool(swarm.ToolDefinition{
-		Name:        "watch_news_briefing",
-		Description: "Apresenta resumo das notícias do dia",
-		Parameters: map[string]interface{}{
-			"topic": map[string]interface{}{"type": "string", "description": "Tópico (geral, política, esportes)"},
-		},
-	}, a.genericHandler("media", "Preparando resumo de notícias"))
-
-	a.RegisterTool(swarm.ToolDefinition{
-		Name:        "read_newspaper_aloud",
+		Name:        "read_newspaper",
 		Description: "Lê manchetes dos principais jornais",
 		Parameters: map[string]interface{}{
 			"newspaper": map[string]interface{}{"type": "string", "description": "Nome do jornal"},
@@ -107,7 +84,7 @@ func (a *Agent) registerTools() {
 	}, a.genericHandler("media", "Lendo manchetes"))
 
 	a.RegisterTool(swarm.ToolDefinition{
-		Name:        "horoscope_daily",
+		Name:        "daily_horoscope",
 		Description: "Busca e lê o horóscopo do dia",
 		Parameters: map[string]interface{}{
 			"sign": map[string]interface{}{"type": "string", "description": "Signo"},
@@ -146,7 +123,7 @@ func (a *Agent) registerTools() {
 	}, a.genericHandler("games", "Iniciando treino cognitivo"))
 
 	a.RegisterTool(swarm.ToolDefinition{
-		Name:        "riddle_and_joke_teller",
+		Name:        "riddles_and_jokes",
 		Description: "Conta piadas ou propõe charadas",
 		Parameters: map[string]interface{}{
 			"type": map[string]interface{}{
@@ -155,27 +132,6 @@ func (a *Agent) registerTools() {
 			},
 		},
 	}, a.genericHandler("humor", "Preparando humor"))
-
-	// --- CRIATIVO ---
-	a.RegisterTool(swarm.ToolDefinition{
-		Name:        "poetry_generator",
-		Description: "Cria um poema personalizado",
-		Parameters: map[string]interface{}{
-			"theme": map[string]interface{}{"type": "string", "description": "Tema do poema"},
-		},
-	}, a.genericHandler("creative", "Criando poema"))
-
-	a.RegisterTool(swarm.ToolDefinition{
-		Name:        "learn_new_language",
-		Description: "Inicia lição de idioma",
-		Parameters: map[string]interface{}{
-			"language": map[string]interface{}{
-				"type": "string", "description": "Idioma",
-				"enum": []string{"ingles", "espanhol", "frances"},
-			},
-		},
-		Required: []string{"language"},
-	}, a.genericHandler("education", "Iniciando lição"))
 
 	// --- DIARY & STORIES ---
 	a.RegisterTool(swarm.ToolDefinition{
@@ -253,6 +209,23 @@ func (a *Agent) registerTools() {
 			"dish_type": map[string]interface{}{"type": "string", "description": "Tipo de prato"},
 		},
 	}, a.genericHandler("utility", "Buscando receitas"))
+
+	// --- EDUCAÇÃO ---
+	a.RegisterTool(swarm.ToolDefinition{
+		Name:        "learn_new_language",
+		Description: "Lição básica de idioma estrangeiro",
+		Parameters: map[string]interface{}{
+			"language": map[string]interface{}{
+				"type": "string", "description": "Idioma",
+				"enum": []string{"ingles", "espanhol", "frances", "italiano", "alemao", "japones", "coreano", "chines", "arabe", "hindi", "russo", "portugues", "turco", "holandes", "sueco", "polones", "tcheco", "grego", "hebraico", "tailandes", "vietnamita", "indonesio", "malaio", "swahili", "bengali", "ucraniano", "romeno", "hungaro", "finlandes", "noruegues", "dinamarques"},
+			},
+			"topic": map[string]interface{}{
+				"type": "string", "description": "Tema da lição",
+				"enum": []string{"greetings", "numbers", "food", "family", "travel", "health", "weather", "daily"},
+			},
+		},
+		Required: []string{"language"},
+	}, a.genericHandler("education", "Iniciando lição de idioma"))
 
 	// --- BEM-ESTAR EXTRAS ---
 	a.RegisterTool(swarm.ToolDefinition{

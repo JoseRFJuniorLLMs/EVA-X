@@ -81,23 +81,21 @@ FERRAMENTAS DISPONÍVEIS:
 
 🎵 ENTRETENIMENTO E MÚSICA:
 - play_nostalgic_music: Tocar músicas da juventude do paciente (args: decade)
-- radio_station_tuner: Sintonizar rádio AM/FM (args: station_name)
-- play_relaxation_sounds: Tocar sons relaxantes (args: sound_type)
-- hymn_and_prayer_player: Tocar hinos ou orações (args: type, content_name)
-- daily_mass_stream: Ver missa ao vivo
+- play_radio_station: Sintonizar rádio AM/FM (args: station_name)
+- nature_sounds: Tocar sons relaxantes da natureza (args: sound_type)
+- religious_content: Tocar hinos, orações ou conteúdo religioso (args: type, content_name)
 
 📺 CONTEÚDO E NOTÍCIAS:
-- watch_classic_movies: Ver filmes clássicos (args: movie_name)
-- watch_news_briefing: Ver resumo de notícias (args: topic)
-- read_newspaper_aloud: Ler manchetes de jornais (args: newspaper)
-- horoscope_daily: Ler horóscopo do dia (args: sign)
+- read_newspaper: Ler manchetes de jornais (args: newspaper)
+- daily_horoscope: Ler horóscopo do dia (args: sign)
 
 🎮 JOGOS E ATIVIDADES COGNITIVAS:
 - play_trivia_game: Iniciar jogo de quiz/trivia (args: theme)
 - memory_game: Jogo de memória (args: difficulty)
 - word_association: Jogo de associação de palavras
 - brain_training: Exercícios cognitivos (args: type)
-- riddle_and_joke_teller: Contar piada ou adivinha (args: type)
+- riddles_and_jokes: Contar piada ou adivinha (args: type)
+- complete_the_lyrics: EVA canta parte de uma música antiga, paciente completa a letra
 
 🧘 BEM-ESTAR E RELAXAMENTO:
 - guided_meditation: Meditação guiada (args: duration, theme)
@@ -117,7 +115,6 @@ FERRAMENTAS DISPONÍVEIS:
 
 📝 MEMÓRIAS E HISTÓRIAS:
 - voice_diary: Iniciar sessão de diário por voz
-- poetry_generator: Criar um poema personalizado (args: theme)
 - story_generator: Gerar história personalizada (args: theme, characters)
 - reminiscence_therapy: Terapia de reminiscência (args: era, topic)
 - biography_writer: Escrever biografia do idoso (args: life_period)
@@ -131,7 +128,9 @@ FERRAMENTAS DISPONÍVEIS:
 🌡️ UTILIDADES:
 - weather_chat: Conversar sobre o tempo (args: location)
 - cooking_recipes: Receitas de culinária (args: dish_type)
-- learn_new_language: Iniciar lição de idioma (args: language)
+- learn_new_language: Lição básica de idioma para o idoso (args: language, topic)
+  - language: ingles, espanhol, frances, italiano, alemao, japones, coreano, chines, arabe, hindi, russo, portugues, turco, holandes, sueco, polones, tcheco, grego, hebraico, tailandes, vietnamita, indonesio, malaio, swahili, bengali, ucraniano, romeno, hungaro, finlandes, noruegues, dinamarques
+  - topic: greetings, numbers, food, family, travel, health, weather, daily
 
 ⏰ ALARMES E DESPERTADOR:
 - set_alarm: Configurar alarme para acordar/despertar (args: time, label, repeat_days)

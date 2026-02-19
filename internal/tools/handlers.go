@@ -492,6 +492,10 @@ func (h *ToolsHandler) ExecuteTool(name string, args map[string]interface{}, ido
 	case "voice_diary":
 		return h.handleVoiceDiary(idosoID, args)
 
+	// --- Aprendizagem de Idiomas ---
+	case "learn_new_language":
+		return h.handleLearnNewLanguage(idosoID, args)
+
 	// --- Habit Tracking (Log de Hábitos) ---
 	case "log_habit":
 		return h.handleLogHabit(idosoID, args)
