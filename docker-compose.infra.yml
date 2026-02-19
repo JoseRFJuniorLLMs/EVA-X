@@ -78,6 +78,32 @@ services:
       retries: 5
       start_period: 5s
 
+  # ── NietzscheDB — substitui 2×Neo4j + Qdrant + Redis ─────────────────────
+  nietzsche-server:
+    image: ${NIETZSCHE_IMAGE:-us-central1-docker.pkg.dev/SEU-PROJECT-ID/nietzsche/nietzsche-server:latest}
+    container_name: eva-nietzsche
+    restart: unless-stopped
+    ports:
+      - "50051:50051"   # gRPC  (acesso interno da EVA-Mind)
+      - "8082:8080"     # HTTP dashboard → http://VM-IP:8082
+    environment:
+      NIETZSCHE_DATA_DIR:            /data/nietzsche
+      NIETZSCHE_PORT:                "50051"
+      NIETZSCHE_DASHBOARD_PORT:      "8080"
+      NIETZSCHE_LOG_LEVEL:           info
+      NIETZSCHE_SLEEP_INTERVAL_SECS: "300"
+      NIETZSCHE_SLEEP_NOISE:         "0.02"
+      NIETZSCHE_SLEEP_ADAM_STEPS:    "10"
+      NIETZSCHE_HAUSDORFF_THRESHOLD: "0.15"
+    volumes:
+      - nietzsche_data:/data/nietzsche
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
 volumes:
   neo4j_data:
   neo4j_logs:
@@ -85,3 +111,4 @@ volumes:
   neo4j_core_logs:
   qdrant_data:
   redis_data:
+  nietzsche_data:
