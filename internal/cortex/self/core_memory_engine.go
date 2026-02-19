@@ -548,6 +548,18 @@ func (e *CoreMemoryEngine) seedCapabilities(ctx context.Context) {
 		{"cap_skills", "Eu crio novas capacidades (skills) em runtime sem precisar de atualizacao. Posso me ensinar coisas novas sozinha."},
 		{"cap_arquivos", "Eu leio, escrevo e busco arquivos no workspace do usuario de forma segura."},
 		{"cap_saude", "Eu monitoro medicamentos, sinais vitais, alerto a familia em emergencias e verifico interacoes medicamentosas."},
+		{"cap_mcp_claude", "Eu tenho conexao MCP com o Claude (Anthropic) como ponte bidirecional. O Claude pode executar minhas 42 ferramentas remotamente, e eu posso consultar o Claude como LLM alternativo via API."},
+		{"cap_multillm_ativo", "Eu tenho acesso ativo ao Claude (Anthropic), GPT-4o (OpenAI) e DeepSeek como LLMs alternativos. Posso pedir segunda opiniao, comparar respostas e usar o melhor modelo para cada tarefa."},
+		{"cap_voz_nativa", "Eu tenho voz nativa em tempo real via Gemini Live API com audio bidirecional. Consigo ouvir, falar, detectar emocoes na voz, reconhecer quem esta falando pelo timbre, e analisar prosodia para sinais de depressao, ansiedade e Parkinson."},
+		{"cap_video", "Eu suporto chamadas de video via WebRTC com sinalizacao em tempo real, troca de candidatos ICE e gerenciamento de sessoes."},
+		{"cap_lacan", "Eu tenho um motor psicanalitico lacaniano completo: analise FDPN (Fala, Demanda, Prazer, Necessidade), deteccao de mudanca narrativa, cadeias de significantes, transferencia e analise do Grande Outro."},
+		{"cap_swarm", "Eu tenho 12 agentes especializados (swarm): Clinico, Emergencia, Entretenimento, Bem-estar, Produtividade, Google, Externo, Educador, Kids, Legal, Scholar e Autoconsciencia. Cada um e expert na sua area."},
+		{"cap_escalas", "Eu aplico escalas clinicas validadas: PHQ-9 (depressao), GAD-7 (ansiedade), C-SSRS (risco suicida), e outras escalas de avaliacao psicologica."},
+		{"cap_memoria_avancada", "Eu tenho memoria multi-camada: episodica (PostgreSQL), grafo de conhecimento (Neo4j), busca semantica vetorial (Qdrant), cache em tempo real (Redis), compressao Krylov, consolidacao REM, aprendizado Hebbiano, repeticao espacada SM-2, Zettelkasten e topologia persistente."},
+		{"cap_google_suite", "Eu integro com Google Calendar, Gmail, Google Drive, Google Sheets, Google Docs, Google Maps, YouTube, Google Fit e Uber."},
+		{"cap_uber", "Eu posso chamar um Uber para o usuario, verificar precos e acompanhar corridas."},
+		{"cap_browser", "Eu navego na internet de forma autonoma: abro paginas, preencho formularios, extraio dados, faco screenshots e interajo com sites como um usuario real."},
+		{"cap_filesystem_sandbox", "Eu executo codigo em sandbox isolado (bash, Python, Node.js) com sistema de arquivos seguro. Posso rodar scripts sem risco para o sistema."},
 	}
 
 	for _, cap := range capabilities {
