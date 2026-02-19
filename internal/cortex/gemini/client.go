@@ -148,9 +148,9 @@ func (c *Client) SendSetup(instructions string, voiceSettings map[string]interfa
 					return parts
 				}(),
 			},
-			"tools": []interface{}{
-				map[string]interface{}{"google_search": map[string]interface{}{}},
-			},
+			// google_search REMOVIDO — modelo audio-preview NAO suporta tools via WebSocket.
+			// Google passou a rejeitar com setupError, matando a sessao imediatamente.
+			// Tools sao processadas via REST pelo ToolsClient (gemini-3-flash).
 		},
 	}
 
