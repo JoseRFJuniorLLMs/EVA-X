@@ -21,10 +21,12 @@ type ToolExecuteRequest struct {
 // POST /api/v1/tools/execute
 // Secured by MCP_API_KEY — only for MCP stdio server bridge
 func (s *SignalingServer) handleToolExecute(w http.ResponseWriter, r *http.Request) {
-	// 1. Auth: require API key
+	// 1. Auth: require MCP_API_KEY (env var on server). No fallback — must be set.
 	apiKey := os.Getenv("MCP_API_KEY")
 	if apiKey == "" {
-		apiKey = "eva-mcp-dev-2026" // fallback for development
+		log.Error().Msg("🚫 [MCP] MCP_API_KEY not set on server — endpoint disabled")
+		http.Error(w, `{"error":"endpoint disabled: MCP_API_KEY not configured"}`, http.StatusForbidden)
+		return
 	}
 
 	authHeader := r.Header.Get("X-MCP-Key")
