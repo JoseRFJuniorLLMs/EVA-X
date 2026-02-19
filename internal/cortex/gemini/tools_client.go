@@ -438,6 +438,164 @@ Resposta: {"tool": "study_topic", "args": {"topic": "meditacao mindfulness"}}
 Fala: "EVA, o que voce ja aprendeu?"
 Resposta: {"tool": "list_curriculum", "args": {"status": "completed"}}
 
+📧 GOOGLE SERVICES (APIs Reais):
+- send_email: Enviar email via Gmail (args: to, subject, body)
+  - to: Email do destinatário
+  - subject: Assunto do email
+  - body: Corpo do email
+- search_videos: Buscar vídeos no YouTube (args: query, max_results)
+  - query: O que buscar (ex: "bossa nova", "receita de bolo")
+  - max_results: Máximo de resultados (padrão 5)
+- play_music: Buscar e tocar música no Spotify (args: query, artist, genre)
+  - query: Nome da música ou busca
+  - artist: Nome do artista (opcional)
+  - genre: Gênero musical (opcional)
+- send_whatsapp: Enviar mensagem no WhatsApp (args: to, message, contact_name)
+  - to: Número do destinatário (com código do país)
+  - message: Texto da mensagem
+  - contact_name: Nome do contato para buscar número (alternativa ao "to")
+- manage_calendar_event: Gerenciar eventos do Google Calendar (args: action, summary, description, start_time, end_time)
+  - action: "list" para listar eventos ou "create" para criar
+  - summary: Título do evento (para create)
+  - start_time: Data/hora início RFC3339 (para create)
+  - end_time: Data/hora fim RFC3339 (para create)
+- save_to_drive: Salvar arquivo no Google Drive (args: filename, content, folder)
+  - filename: Nome do arquivo
+  - content: Conteúdo a salvar
+  - folder: Nome da pasta (padrão "EVA-Mind")
+- find_nearby_places: Buscar locais próximos com Google Maps API real (args: type, location, radius)
+
+📱 MENSAGENS (Telegram):
+- send_telegram: Enviar mensagem no Telegram (args: chat_id, message)
+  - chat_id: ID do chat/grupo Telegram
+  - message: Texto da mensagem
+
+📂 FILESYSTEM (Acesso a Arquivos):
+- read_file: Ler conteúdo de um arquivo (args: path)
+- write_file: Escrever conteúdo em um arquivo (args: path, content)
+- list_files: Listar arquivos de um diretório (args: directory)
+- search_files: Buscar arquivos por nome (args: query)
+
+🌐 WEB (Pesquisa e Navegação):
+- web_search: Pesquisar na internet e resumir resultados (args: query)
+- browse_webpage: Abrir e exibir uma página web (args: url)
+
+📺 VÍDEO E DISPLAY:
+- play_video: Reproduzir vídeo por URL ou ID (args: url, video_id, title)
+- show_webpage: Mostrar página web embutida no app (args: url, title)
+
+💻 AUTO-PROGRAMAÇÃO (EVA edita seu próprio código):
+- edit_my_code: Editar arquivo do código-fonte da EVA (args: file_path, content)
+- create_branch: Criar branch git para modificações (args: branch_name)
+- commit_code: Fazer commit das mudanças (args: message)
+- run_tests: Executar testes do projeto
+- get_code_diff: Ver diferenças no código
+
+🗄️ ACESSO DIRETO A BASES DE DADOS:
+- query_postgresql: Executar query SELECT no PostgreSQL (args: query)
+- query_neo4j: Executar query Cypher no Neo4j (args: query)
+- query_qdrant: Buscar vetores no Qdrant (args: collection, query, limit)
+- query_nietzsche: Consultar NietzscheDB (args: endpoint, params)
+
+🖥️ SANDBOX + BROWSER + CRON:
+- execute_code: Executar código (args: language[bash/python/node], code, timeout)
+- browser_navigate: Navegar URL e extrair conteúdo (args: url)
+- browser_fill_form: Preencher formulário web (args: url, fields)
+- browser_extract: Extrair dados de página (args: url, selector)
+- create_scheduled_task: Criar tarefa agendada cron (args: description, schedule, tool_name, tool_args)
+- list_scheduled_tasks: Listar tarefas agendadas
+- cancel_scheduled_task: Cancelar tarefa agendada (args: task_id)
+
+🤖 MULTI-LLM + MESSAGING:
+- ask_llm: Consultar Claude, GPT ou DeepSeek (args: provider, prompt)
+- send_slack: Enviar mensagem no Slack (args: channel, message)
+- send_discord: Enviar mensagem no Discord (args: channel_id, message)
+- send_teams: Enviar mensagem no Microsoft Teams (args: message)
+- send_signal: Enviar mensagem no Signal (args: recipient, message)
+
+🏠 SMART HOME + WEBHOOKS + SKILLS:
+- smart_home_control: Controlar dispositivo IoT (args: device_id, action, brightness, temperature)
+- smart_home_status: Estado de dispositivos (args: device_id ou vazio=listar todos)
+- create_webhook: Criar webhook (args: name, url, events)
+- list_webhooks: Listar webhooks
+- trigger_webhook: Disparar webhook (args: name, payload)
+- create_skill: Criar nova skill dinâmica (args: name, description, language, code)
+- list_skills: Listar skills disponíveis
+- execute_skill: Executar skill (args: skill_name, args)
+- delete_skill: Remover skill (args: skill_name)
+
+Fala: "EVA, manda um email pro João"
+Resposta: {"tool": "send_email", "args": {"to": "joao@gmail.com", "subject": "Mensagem da EVA", "body": "Olá João!"}}
+
+Fala: "Procura um vídeo de bossa nova"
+Resposta: {"tool": "search_videos", "args": {"query": "bossa nova"}}
+
+Fala: "Toca uma música do Roberto Carlos"
+Resposta: {"tool": "play_music", "args": {"query": "Roberto Carlos", "artist": "Roberto Carlos"}}
+
+Fala: "Manda um zap pra minha filha dizendo que estou bem"
+Resposta: {"tool": "send_whatsapp", "args": {"contact_name": "filha", "message": "Oi filha, estou bem! Beijos da mamãe."}}
+
+Fala: "O que eu tenho na agenda?"
+Resposta: {"tool": "manage_calendar_event", "args": {"action": "list"}}
+
+Fala: "Salva esse texto no Drive"
+Resposta: {"tool": "save_to_drive", "args": {"filename": "nota.txt", "content": "texto a salvar"}}
+
+Fala: "Manda uma mensagem no Telegram"
+Resposta: {"tool": "send_telegram", "args": {"chat_id": "123456", "message": "Olá!"}}
+
+Fala: "Lê o arquivo config.go"
+Resposta: {"tool": "read_file", "args": {"path": "config.go"}}
+
+Fala: "Pesquisa na internet sobre meditação"
+Resposta: {"tool": "web_search", "args": {"query": "meditação benefícios para idosos"}}
+
+Fala: "Mostra o site do G1"
+Resposta: {"tool": "show_webpage", "args": {"url": "https://g1.globo.com", "title": "G1 Notícias"}}
+
+Fala: "EVA, cria uma branch pra corrigir um bug"
+Resposta: {"tool": "create_branch", "args": {"branch_name": "fix-bug"}}
+
+Fala: "EVA, roda os testes"
+Resposta: {"tool": "run_tests", "args": {}}
+
+Fala: "EVA, consulta quantos idosos tem no banco"
+Resposta: {"tool": "query_postgresql", "args": {"query": "SELECT COUNT(*) FROM idosos"}}
+
+Fala: "EVA, busca no Neo4j as conexões do paciente"
+Resposta: {"tool": "query_neo4j", "args": {"query": "MATCH (p:Patient)-[:KNOWS]->(c) RETURN p, c LIMIT 10"}}
+
+Fala: "Executa esse script python que calcula fibonacci"
+Resposta: {"tool": "execute_code", "args": {"language": "python", "code": "def fib(n):\n  a,b=0,1\n  for _ in range(n): a,b=b,a+b\n  return a\nprint(fib(10))"}}
+
+Fala: "Abre o site do G1 e me diz o que tem"
+Resposta: {"tool": "browser_navigate", "args": {"url": "https://g1.globo.com"}}
+
+Fala: "Me avisa todo dia às 8 da manhã para tomar remédio"
+Resposta: {"tool": "create_scheduled_task", "args": {"description": "Lembrete de remédio", "schedule": "daily 08:00", "tool_name": "alert_family", "tool_args": {"reason": "Hora do remédio"}}}
+
+Fala: "Pergunta pro Claude o que é machine learning"
+Resposta: {"tool": "ask_llm", "args": {"provider": "claude", "prompt": "O que é machine learning? Explique de forma simples."}}
+
+Fala: "Manda uma mensagem no Slack"
+Resposta: {"tool": "send_slack", "args": {"channel": "#general", "message": "Olá equipe!"}}
+
+Fala: "Manda no Discord"
+Resposta: {"tool": "send_discord", "args": {"channel_id": "123456789", "message": "Mensagem da EVA"}}
+
+Fala: "Liga a luz da sala"
+Resposta: {"tool": "smart_home_control", "args": {"device_id": "light.sala", "action": "on"}}
+
+Fala: "Quais dispositivos eu tenho em casa?"
+Resposta: {"tool": "smart_home_status", "args": {}}
+
+Fala: "Cria uma skill que verifica o clima"
+Resposta: {"tool": "create_skill", "args": {"name": "check_weather", "description": "Verifica clima atual", "language": "bash", "code": "curl -s wttr.in/?format=3"}}
+
+Fala: "Executa a skill de clima"
+Resposta: {"tool": "execute_skill", "args": {"skill_name": "check_weather"}}
+
 Fala: "Obrigado"
 Resposta: {"tool": "none"}`
 

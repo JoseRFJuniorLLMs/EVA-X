@@ -63,6 +63,8 @@ ARCHITECTURE
 	cortex/        - Higher-order processing:
 	  gemini/        - Gemini Live API client (v1beta, thread-safe,
 	                   callbacks, VAD, memory, tools)
+	  llm/           - Multi-LLM provider (Claude, GPT, DeepSeek)
+	  skills/        - Runtime skills engine (create, execute, version)
 	  lacan/         - Lacanian psychoanalytic engine (demand/desire
 	                   analysis, signifier chains, narrative shift
 	                   detection, Grand Autre, transference, FDPN)
@@ -144,6 +146,16 @@ ARCHITECTURE
 	  uber/          - Uber integration
 	  whatsapp/      - WhatsApp integration
 	  youtube/       - YouTube integration
+	  telegram/      - Telegram Bot API client
+	  sandbox/       - Code execution sandbox (bash, Python, Node.js)
+	  browser/       - Browser automation (navigate, forms, extract)
+	  cron/          - Scheduled task engine (cron-like scheduler)
+	  messaging/     - Multi-platform messaging (Slack, Discord,
+	                   Microsoft Teams, Signal)
+	  smarthome/     - Home Assistant IoT integration
+	  webhooks/      - Webhook management (create, trigger, HMAC)
+	  filesystem/    - Sandboxed file access (read, write, search)
+	  selfcode/      - Self-programming (git branches, commit, test)
 	  vision/        - Medication identifier, WebSocket handler
 	  workers/       - Pattern worker, prediction worker
 
@@ -316,6 +328,102 @@ CONTEXT PIPELINE
 	sent to the Gemini WebSocket API.
 
 
+AUTONOMOUS AGENT
+----------------
+
+	EVA is a full autonomous agent comparable to OpenClaw. She can
+	perceive, decide, and act across platforms without human
+	intervention. All capabilities are voice-activated and
+	non-blocking (goroutine + WebSocket notification pattern).
+
+	150+ tools organized in 12 categories:
+
+	Communication (7 channels):
+		send_email             - Gmail API (compose, send)
+		send_whatsapp          - Meta Graph API
+		send_telegram          - Telegram Bot API
+		send_slack             - Slack Web API
+		send_discord           - Discord Bot API
+		send_teams             - Microsoft Teams webhooks
+		send_signal            - Signal via signal-cli
+
+	Media & Entertainment:
+		search_videos          - YouTube Data API
+		play_music             - Spotify Web API (search, play)
+		play_video             - Send video to Flutter player
+		show_webpage           - Embedded WebView in app
+
+	Productivity:
+		manage_calendar_event  - Google Calendar API (create, list)
+		save_to_drive          - Google Drive API
+		find_nearby_places     - Google Maps/Places API
+		set_alarm              - Local alarm system
+		create_scheduled_task  - Cron-like task scheduler
+		list_scheduled_tasks   - List active scheduled tasks
+		cancel_scheduled_task  - Cancel scheduled task
+
+	Code Execution Sandbox:
+		execute_code           - Run bash, Python, or Node.js
+		                         in sandboxed environment with
+		                         timeout, safe env, output capture
+
+	Browser Automation:
+		browser_navigate       - Fetch URL, extract title/text/links
+		browser_fill_form      - Submit form data via POST
+		browser_extract        - Extract specific data from pages
+		web_search             - Web research via autonomous learner
+		browse_webpage         - Browse and summarize URL content
+
+	Self-Programming (OpenClaw-style):
+		edit_my_code           - Edit EVA's own source code
+		create_branch          - Create git branch (eva/* only)
+		commit_code            - Git commit (eva/* branches only)
+		run_tests              - Execute go test ./... with timeout
+		get_code_diff          - Show uncommitted changes (git diff)
+
+	Database Access (4 databases):
+		query_postgresql       - Full CRUD (SELECT, INSERT, UPDATE,
+		                         DELETE, CREATE, ALTER)
+		query_neo4j            - Cypher queries (read-only)
+		query_qdrant           - Vector similarity search
+		query_nietzsche        - NietzscheDB REST API
+
+	Filesystem:
+		read_file              - Read file from sandbox directory
+		write_file             - Write file to sandbox directory
+		list_files             - List directory contents
+		search_files           - Search files by name pattern
+
+	Multi-LLM:
+		ask_llm                - Query Claude, GPT, or DeepSeek
+		                         for second opinion or delegation
+
+	Smart Home (IoT):
+		smart_home_control     - Control devices via Home Assistant
+		                         (lights, switches, climate, etc.)
+		smart_home_status      - Get device state or list all devices
+
+	Webhooks:
+		create_webhook         - Register outgoing webhook with
+		                         HMAC-SHA256 signature
+		list_webhooks          - List registered webhooks
+		trigger_webhook        - Fire webhook manually
+
+	Runtime Skills (Self-Improving):
+		create_skill           - Create new capability as script
+		                         (bash, Python, or Node.js)
+		list_skills            - List available skills
+		execute_skill          - Run a skill with arguments
+		delete_skill           - Remove a skill
+
+	Skills are stored as JSON on disk and persist across restarts.
+	EVA can autonomously create new skills to extend her own
+	capabilities without requiring a rebuild or restart.
+
+	All autonomous agent tools are gated behind debug mode
+	(ENVIRONMENT=development) for safety during testing.
+
+
 CLINICAL TOOLS
 --------------
 
@@ -463,6 +571,31 @@ CONFIGURATION
 		TWILIO_AUTH_TOKEN     - Twilio auth
 		TWILIO_PHONE_NUMBER   - Caller ID for scheduled calls
 		FIREBASE_CREDENTIALS  - Push notification service key
+
+	Autonomous Agent (all optional):
+
+		GOOGLE_OAUTH_CLIENT_ID     - Google OAuth (Gmail, Calendar, Drive)
+		GOOGLE_OAUTH_CLIENT_SECRET - Google OAuth secret
+		GOOGLE_OAUTH_REDIRECT_URL  - OAuth callback URL
+		GOOGLE_MAPS_API_KEY        - Google Places/Maps
+		WHATSAPP_ACCESS_TOKEN      - Meta Graph API token
+		WHATSAPP_PHONE_NUMBER_ID   - WhatsApp phone number ID
+		TELEGRAM_BOT_TOKEN         - Telegram Bot API
+		CLAUDE_API_KEY             - Anthropic Claude API
+		OPENAI_API_KEY             - OpenAI GPT API
+		DEEPSEEK_API_KEY           - DeepSeek API
+		SLACK_BOT_TOKEN            - Slack Web API
+		DISCORD_BOT_TOKEN          - Discord Bot API
+		TEAMS_WEBHOOK_URL          - Microsoft Teams incoming webhook
+		SIGNAL_CLI_PATH            - Path to signal-cli binary
+		SIGNAL_SENDER_NUMBER       - Signal sender phone number
+		HOME_ASSISTANT_URL         - Home Assistant API URL
+		HOME_ASSISTANT_TOKEN       - Home Assistant long-lived token
+		EVA_WORKSPACE_DIR          - Filesystem sandbox (default: /home/eva/workspace)
+		EVA_PROJECT_DIR            - EVA source code (default: /opt/eva-mind)
+		SANDBOX_DIR                - Code execution sandbox (default: /home/eva/sandbox)
+		SKILLS_DIR                 - Skills storage (default: /home/eva/skills)
+		NIETZSCHE_DB_URL           - NietzscheDB API (default: http://localhost:3000)
 
 
 WEBSOCKET PROTOCOL

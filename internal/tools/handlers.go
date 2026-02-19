@@ -6,17 +6,32 @@ package tools
 import (
 	"context"
 	"eva-mind/internal/brainstem/database"
+	"eva-mind/internal/brainstem/oauth"
 	"eva-mind/internal/brainstem/push"
 	"eva-mind/internal/cortex/alert"
 	"eva-mind/internal/hippocampus/habits"
 	"eva-mind/internal/hippocampus/spaced"
 	"eva-mind/internal/motor/actions"
 	"eva-mind/internal/motor/email"
+	"eva-mind/internal/cortex/llm"
+	"eva-mind/internal/cortex/skills"
+	"eva-mind/internal/motor/browser"
+	"eva-mind/internal/motor/cron"
+	"eva-mind/internal/motor/filesystem"
+	"eva-mind/internal/motor/messaging"
+	"eva-mind/internal/motor/sandbox"
+	"eva-mind/internal/motor/selfcode"
+	"eva-mind/internal/motor/smarthome"
+	"eva-mind/internal/motor/telegram"
+	"eva-mind/internal/motor/webhooks"
 	"fmt"
 	"log"
 	"strings"
 	"time"
 )
+
+// WebSearchFunc tipo de função para pesquisa web (evita import cycle com cortex/learning)
+type WebSearchFunc func(ctx context.Context, topic string) (interface{}, error)
 
 type ToolsHandler struct {
 	db                *database.DB
@@ -25,6 +40,26 @@ type ToolsHandler struct {
 	escalationService *alert.EscalationService        // ✅ Escalation Service
 	spacedService     *spaced.SpacedRepetitionService // ✅ Spaced Repetition
 	habitTracker      *habits.HabitTracker            // ✅ Habit Tracking
+	oauthService      *oauth.Service                  // ✅ Google OAuth (token refresh)
+	autonomousLearner WebSearchFunc                   // ✅ Web Research
+	whatsappToken     string                          // ✅ WhatsApp Meta API token
+	whatsappPhoneID   string                          // ✅ WhatsApp Phone Number ID
+	telegramService   *telegram.Service               // ✅ Telegram Bot
+	filesystemService *filesystem.Service             // ✅ Filesystem Access
+	selfcodeService   *selfcode.Service               // ✅ Self-Coding
+	mapsAPIKey        string                          // ✅ Google Maps API Key
+	sandboxService    *sandbox.Service                // ✅ Code Execution Sandbox
+	browserService    *browser.Service                // ✅ Browser Automation
+	cronService       *cron.Service                   // ✅ Scheduled Tasks
+	llmService        *llm.Service                    // ✅ Multi-LLM (Claude, GPT, DeepSeek)
+	slackService      *messaging.SlackService         // ✅ Slack
+	discordService    *messaging.DiscordService       // ✅ Discord
+	teamsService      *messaging.TeamsService         // ✅ Microsoft Teams
+	signalService     *messaging.SignalService        // ✅ Signal
+	smartHomeService  *smarthome.Service              // ✅ Smart Home (Home Assistant)
+	webhookService    *webhooks.Service               // ✅ Webhooks
+	skillsService     *skills.Service                 // ✅ Runtime Skills
+	debugMode         bool                            // ✅ Novas tools só habilitadas em debug
 	NotifyFunc        func(idosoID int64, msgType string, payload interface{})
 }
 
@@ -51,9 +86,171 @@ func (h *ToolsHandler) SetHabitTracker(tracker *habits.HabitTracker) {
 	h.habitTracker = tracker
 }
 
+// SetOAuthService configura o serviço de OAuth para refresh de tokens Google
+func (h *ToolsHandler) SetOAuthService(svc *oauth.Service) {
+	h.oauthService = svc
+}
+
+// SetAutonomousLearner configura o learner para web search
+func (h *ToolsHandler) SetAutonomousLearner(learner WebSearchFunc) {
+	h.autonomousLearner = learner
+}
+
+// SetWhatsAppConfig configura credenciais WhatsApp Meta API
+func (h *ToolsHandler) SetWhatsAppConfig(accessToken, phoneNumberID string) {
+	h.whatsappToken = accessToken
+	h.whatsappPhoneID = phoneNumberID
+}
+
+// SetTelegramService configura o serviço Telegram
+func (h *ToolsHandler) SetTelegramService(svc *telegram.Service) {
+	h.telegramService = svc
+}
+
+// SetFilesystemService configura o serviço de filesystem
+func (h *ToolsHandler) SetFilesystemService(svc *filesystem.Service) {
+	h.filesystemService = svc
+}
+
+// SetSelfCodeService configura o serviço de auto-programação
+func (h *ToolsHandler) SetSelfCodeService(svc *selfcode.Service) {
+	h.selfcodeService = svc
+}
+
+// SetMapsAPIKey configura a API key do Google Maps
+func (h *ToolsHandler) SetMapsAPIKey(key string) {
+	h.mapsAPIKey = key
+}
+
+// SetSandboxService configura o serviço de execução de código
+func (h *ToolsHandler) SetSandboxService(svc *sandbox.Service) {
+	h.sandboxService = svc
+}
+
+// SetBrowserService configura o serviço de browser automation
+func (h *ToolsHandler) SetBrowserService(svc *browser.Service) {
+	h.browserService = svc
+}
+
+// SetCronService configura o serviço de tarefas agendadas
+func (h *ToolsHandler) SetCronService(svc *cron.Service) {
+	h.cronService = svc
+}
+
+// SetLLMService configura o serviço multi-LLM
+func (h *ToolsHandler) SetLLMService(svc *llm.Service) {
+	h.llmService = svc
+}
+
+// SetSlackService configura o serviço Slack
+func (h *ToolsHandler) SetSlackService(svc *messaging.SlackService) {
+	h.slackService = svc
+}
+
+// SetDiscordService configura o serviço Discord
+func (h *ToolsHandler) SetDiscordService(svc *messaging.DiscordService) {
+	h.discordService = svc
+}
+
+// SetTeamsService configura o serviço Microsoft Teams
+func (h *ToolsHandler) SetTeamsService(svc *messaging.TeamsService) {
+	h.teamsService = svc
+}
+
+// SetSignalService configura o serviço Signal
+func (h *ToolsHandler) SetSignalService(svc *messaging.SignalService) {
+	h.signalService = svc
+}
+
+// SetSmartHomeService configura o serviço Smart Home
+func (h *ToolsHandler) SetSmartHomeService(svc *smarthome.Service) {
+	h.smartHomeService = svc
+}
+
+// SetWebhookService configura o serviço de webhooks
+func (h *ToolsHandler) SetWebhookService(svc *webhooks.Service) {
+	h.webhookService = svc
+}
+
+// SetSkillsService configura o serviço de skills dinâmicas
+func (h *ToolsHandler) SetSkillsService(svc *skills.Service) {
+	h.skillsService = svc
+}
+
+// SetDebugMode habilita/desabilita novas ferramentas (debug only)
+func (h *ToolsHandler) SetDebugMode(enabled bool) {
+	h.debugMode = enabled
+}
+
+// debugOnlyTools — tools novas que só funcionam em modo debug
+var debugOnlyTools = map[string]bool{
+	// Fase 1 — Google Services + Messaging + Filesystem + SelfCode + DB
+	"send_email": true, "search_videos": true, "play_music": true,
+	"send_whatsapp": true, "manage_calendar_event": true, "save_to_drive": true,
+	"find_nearby_places": true, "send_telegram": true,
+	"read_file": true, "write_file": true, "list_files": true, "search_files": true,
+	"web_search": true, "browse_webpage": true, "play_video": true, "show_webpage": true,
+	"edit_my_code": true, "create_branch": true, "commit_code": true,
+	"run_tests": true, "get_code_diff": true,
+	"query_postgresql": true, "query_neo4j": true, "query_qdrant": true, "query_nietzsche": true,
+	// Fase 2 — Sandbox + Browser + Cron + Multi-LLM + Messaging+ + Smart Home + Webhooks + Skills
+	"execute_code": true, "browser_navigate": true, "browser_fill_form": true, "browser_extract": true,
+	"create_scheduled_task": true, "list_scheduled_tasks": true, "cancel_scheduled_task": true,
+	"ask_llm": true,
+	"send_slack": true, "send_discord": true, "send_teams": true, "send_signal": true,
+	"smart_home_control": true, "smart_home_status": true,
+	"create_webhook": true, "list_webhooks": true, "trigger_webhook": true,
+	"create_skill": true, "list_skills": true, "execute_skill": true, "delete_skill": true,
+}
+
+// getGoogleAccessToken obtém um access token válido para Google APIs
+func (h *ToolsHandler) getGoogleAccessToken(idosoID int64) (string, error) {
+	refreshToken, accessToken, expiry, err := h.db.GetGoogleTokens(idosoID)
+	if err != nil {
+		return "", fmt.Errorf("Google não conectado: %v", err)
+	}
+	if refreshToken == "" && accessToken == "" {
+		return "", fmt.Errorf("conta Google não vinculada — peça ao cuidador para conectar")
+	}
+
+	// Token ainda válido
+	if accessToken != "" && time.Now().Before(expiry) {
+		return accessToken, nil
+	}
+
+	// Token expirado — refresh
+	if h.oauthService == nil {
+		return "", fmt.Errorf("serviço OAuth não configurado")
+	}
+	if refreshToken == "" {
+		return "", fmt.Errorf("refresh token ausente — reconectar conta Google")
+	}
+
+	newToken, err := h.oauthService.RefreshToken(context.Background(), refreshToken)
+	if err != nil {
+		return "", fmt.Errorf("falha ao renovar token: %v", err)
+	}
+
+	// Salvar novos tokens
+	if err := h.db.SaveGoogleTokens(idosoID, refreshToken, newToken.AccessToken, newToken.Expiry); err != nil {
+		log.Printf("⚠️ [OAUTH] Erro ao salvar tokens renovados: %v", err)
+	}
+
+	return newToken.AccessToken, nil
+}
+
 // ExecuteTool dispatches the tool call to the appropriate handler
 func (h *ToolsHandler) ExecuteTool(name string, args map[string]interface{}, idosoID int64) (map[string]interface{}, error) {
 	log.Printf("🛠️ [TOOLS] Executando tool: %s para Idoso %d", name, idosoID)
+
+	// 🔒 Novas ferramentas só habilitadas em modo debug (Environment=development)
+	if debugOnlyTools[name] && !h.debugMode {
+		log.Printf("🔒 [TOOLS] Tool '%s' bloqueada — disponível apenas em modo debug", name)
+		return map[string]interface{}{
+			"status":  "bloqueado",
+			"message": fmt.Sprintf("Ferramenta '%s' disponível apenas em modo debug/development", name),
+		}, nil
+	}
 
 	switch name {
 	case "alert_family":
@@ -566,6 +763,204 @@ func (h *ToolsHandler) ExecuteTool(name string, args map[string]interface{}, ido
 			"status":  "sucesso",
 			"message": fmt.Sprintf("Diretiva '%s' alterada para '%s'", directiveType, newValue),
 		}, nil
+
+	// ============================================================================
+	// 📧 GOOGLE SERVICES (Motor Layer — Real APIs)
+	// ============================================================================
+
+	case "send_email":
+		return h.handleSendEmail(idosoID, args)
+
+	case "search_videos":
+		return h.handleSearchVideos(idosoID, args)
+
+	case "play_music":
+		return h.handlePlayMusic(idosoID, args)
+
+	case "send_whatsapp":
+		return h.handleSendWhatsApp(idosoID, args)
+
+	case "manage_calendar_event":
+		return h.handleManageCalendar(idosoID, args)
+
+	case "save_to_drive":
+		return h.handleSaveToDrive(idosoID, args)
+
+	case "find_nearby_places":
+		return h.handleFindNearbyPlaces(idosoID, args)
+
+	// ============================================================================
+	// 📱 MESSAGING (Telegram)
+	// ============================================================================
+
+	case "send_telegram":
+		return h.handleSendTelegram(idosoID, args)
+
+	// ============================================================================
+	// 📂 FILESYSTEM
+	// ============================================================================
+
+	case "read_file":
+		return h.handleReadFile(idosoID, args)
+
+	case "write_file":
+		return h.handleWriteFile(idosoID, args)
+
+	case "list_files":
+		return h.handleListFiles(idosoID, args)
+
+	case "search_files":
+		return h.handleSearchFiles(idosoID, args)
+
+	// ============================================================================
+	// 🌐 WEB BROWSING
+	// ============================================================================
+
+	case "web_search":
+		return h.handleWebSearch(idosoID, args)
+
+	case "browse_webpage":
+		return h.handleBrowseWebpage(idosoID, args)
+
+	// ============================================================================
+	// 📺 VIDEO & WEB DISPLAY
+	// ============================================================================
+
+	case "play_video":
+		return h.handlePlayVideo(idosoID, args)
+
+	case "show_webpage":
+		return h.handleShowWebpage(idosoID, args)
+
+	// ============================================================================
+	// 💻 SELF-CODING (OpenClaw-style)
+	// ============================================================================
+
+	case "edit_my_code":
+		return h.handleEditMyCode(idosoID, args)
+
+	case "create_branch":
+		return h.handleCreateBranch(idosoID, args)
+
+	case "commit_code":
+		return h.handleCommitCode(idosoID, args)
+
+	case "run_tests":
+		return h.handleRunTests(idosoID, args)
+
+	case "get_code_diff":
+		return h.handleGetCodeDiff(idosoID, args)
+
+	// ============================================================================
+	// 🗄️ ACESSO DIRETO A BASES DE DADOS
+	// ============================================================================
+
+	case "query_postgresql":
+		return h.handleQueryPostgreSQL(idosoID, args)
+
+	case "query_neo4j":
+		return h.handleQueryNeo4j(idosoID, args)
+
+	case "query_qdrant":
+		return h.handleQueryQdrant(idosoID, args)
+
+	case "query_nietzsche":
+		return h.handleQueryNietzsche(idosoID, args)
+
+	// ============================================================================
+	// 🖥️ SANDBOX — Execução de Código (Bash, Python, Node)
+	// ============================================================================
+
+	case "execute_code":
+		return h.handleExecuteCode(idosoID, args)
+
+	// ============================================================================
+	// 🌐 BROWSER AUTOMATION
+	// ============================================================================
+
+	case "browser_navigate":
+		return h.handleBrowserNavigate(idosoID, args)
+
+	case "browser_fill_form":
+		return h.handleBrowserFillForm(idosoID, args)
+
+	case "browser_extract":
+		return h.handleBrowserExtract(idosoID, args)
+
+	// ============================================================================
+	// ⏰ CRON / SCHEDULED TASKS
+	// ============================================================================
+
+	case "create_scheduled_task":
+		return h.handleCreateScheduledTask(idosoID, args)
+
+	case "list_scheduled_tasks":
+		return h.handleListScheduledTasks(idosoID, args)
+
+	case "cancel_scheduled_task":
+		return h.handleCancelScheduledTask(idosoID, args)
+
+	// ============================================================================
+	// 🤖 MULTI-LLM (Claude, GPT, DeepSeek)
+	// ============================================================================
+
+	case "ask_llm":
+		return h.handleAskLLM(idosoID, args)
+
+	// ============================================================================
+	// 💬 MESSAGING CHANNELS (Slack, Discord, Teams, Signal)
+	// ============================================================================
+
+	case "send_slack":
+		return h.handleSendSlack(idosoID, args)
+
+	case "send_discord":
+		return h.handleSendDiscord(idosoID, args)
+
+	case "send_teams":
+		return h.handleSendTeams(idosoID, args)
+
+	case "send_signal":
+		return h.handleSendSignal(idosoID, args)
+
+	// ============================================================================
+	// 🏠 SMART HOME (Home Assistant IoT)
+	// ============================================================================
+
+	case "smart_home_control":
+		return h.handleSmartHomeControl(idosoID, args)
+
+	case "smart_home_status":
+		return h.handleSmartHomeStatus(idosoID, args)
+
+	// ============================================================================
+	// 🔗 WEBHOOKS
+	// ============================================================================
+
+	case "create_webhook":
+		return h.handleCreateWebhook(idosoID, args)
+
+	case "list_webhooks":
+		return h.handleListWebhooks(idosoID, args)
+
+	case "trigger_webhook":
+		return h.handleTriggerWebhook(idosoID, args)
+
+	// ============================================================================
+	// 🧩 SKILLS (Self-Improving Runtime)
+	// ============================================================================
+
+	case "create_skill":
+		return h.handleCreateSkill(idosoID, args)
+
+	case "list_skills":
+		return h.handleListSkills(idosoID, args)
+
+	case "execute_skill":
+		return h.handleExecuteSkill(idosoID, args)
+
+	case "delete_skill":
+		return h.handleDeleteSkill(idosoID, args)
 
 	default:
 		return nil, fmt.Errorf("ferramenta desconhecida: %s", name)

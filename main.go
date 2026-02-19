@@ -32,6 +32,19 @@ import (
 	"eva-mind/internal/hippocampus/memory/superhuman"
 	"eva-mind/internal/hippocampus/spaced"
 	"eva-mind/internal/motor/email"
+	"eva-mind/internal/cortex/llm"
+	"eva-mind/internal/cortex/skills"
+	"eva-mind/internal/motor/browser"
+	"eva-mind/internal/motor/cron"
+	"eva-mind/internal/motor/filesystem"
+	"eva-mind/internal/motor/messaging"
+	"eva-mind/internal/motor/sandbox"
+	"eva-mind/internal/motor/selfcode"
+	"eva-mind/internal/motor/smarthome"
+	"eva-mind/internal/motor/telegram"
+	"eva-mind/internal/motor/webhooks"
+	"eva-mind/internal/brainstem/oauth"
+	"eva-mind/internal/mcp"
 	"eva-mind/internal/scheduler"
 	"eva-mind/internal/security"
 	"eva-mind/internal/swarm"
@@ -221,10 +234,14 @@ func main() {
 		log.Info().Msg("📧 Email Service inicializado")
 	}
 
-	// 7.5 Tools Handler (93 tools — medicamentos, alarmes, jogos, GTD, etc)
+	// 7.5 Tools Handler (120+ tools — medicamentos, alarmes, jogos, GTD, etc)
 	toolsHandler := tools.NewToolsHandler(db, pushService, emailSvc)
 	toolsHandler.SetSpacedService(spacedSvc)
 	toolsHandler.SetHabitTracker(habitTracker)
+
+	// 🔒 Novas ferramentas (Gmail, YouTube, Filesystem, SelfCode, etc) só em debug
+	toolsHandler.SetDebugMode(cfg.Environment == "development")
+	log.Info().Str("environment", cfg.Environment).Bool("debug_tools", cfg.Environment == "development").Msg("🔒 Debug mode para novas ferramentas")
 
 	// EscalationService (escalation de alertas: push → email → SMS)
 	escalationSvc := alert.NewEscalationService(alert.EscalationConfig{
@@ -233,7 +250,122 @@ func main() {
 		DB:       db.Conn,
 	})
 	toolsHandler.SetEscalationService(escalationSvc)
-	log.Info().Msg("🛠️ Tools Handler inicializado (93 tools)")
+
+	// ✅ OAuth Service (Google APIs: Gmail, YouTube, Calendar, Drive)
+	oauthSvc := oauth.NewService(
+		cfg.GoogleOAuthClientID,
+		cfg.GoogleOAuthClientSecret,
+		cfg.GoogleOAuthRedirectURL,
+	)
+	toolsHandler.SetOAuthService(oauthSvc)
+
+	// ✅ WhatsApp (Meta Graph API)
+	if cfg.WhatsAppAccessToken != "" {
+		toolsHandler.SetWhatsAppConfig(cfg.WhatsAppAccessToken, cfg.WhatsAppPhoneNumberID)
+		log.Info().Msg("💬 WhatsApp Meta API configurado")
+	}
+
+	// ✅ Telegram Bot
+	if cfg.TelegramBotToken != "" {
+		telegramSvc := telegram.NewService(cfg.TelegramBotToken)
+		toolsHandler.SetTelegramService(telegramSvc)
+		log.Info().Msg("📱 Telegram Bot configurado")
+	}
+
+	// ✅ Filesystem Access (sandboxed)
+	fsSvc := filesystem.NewService(cfg.EVAWorkspaceDir)
+	toolsHandler.SetFilesystemService(fsSvc)
+	log.Info().Msgf("📂 Filesystem Service: %s", cfg.EVAWorkspaceDir)
+
+	// ✅ Self-Coding (OpenClaw-style)
+	selfcodeSvc := selfcode.NewService(cfg.EVAProjectDir)
+	toolsHandler.SetSelfCodeService(selfcodeSvc)
+	log.Info().Msgf("💻 Self-Code Service: %s", cfg.EVAProjectDir)
+
+	// ✅ Google Maps API Key
+	if cfg.GoogleMapsAPIKey != "" {
+		toolsHandler.SetMapsAPIKey(cfg.GoogleMapsAPIKey)
+		log.Info().Msg("📍 Google Maps API configurado")
+	}
+
+	// ✅ Sandbox (Code Execution — bash, python, node)
+	sandboxSvc := sandbox.NewService(cfg.SandboxDir)
+	toolsHandler.SetSandboxService(sandboxSvc)
+	log.Info().Msgf("🖥️ Sandbox Service: %s", cfg.SandboxDir)
+
+	// ✅ Browser Automation
+	browserSvc := browser.NewService()
+	toolsHandler.SetBrowserService(browserSvc)
+	log.Info().Msg("🌐 Browser Service inicializado")
+
+	// ✅ Cron / Scheduled Tasks
+	cronSvc := cron.NewService()
+	cronSvc.SetExecutor(func(toolName string, args map[string]interface{}, idosoID int64) (map[string]interface{}, error) {
+		return toolsHandler.ExecuteTool(toolName, args, idosoID)
+	})
+	cronSvc.Start()
+	toolsHandler.SetCronService(cronSvc)
+	log.Info().Msg("⏰ Cron Service iniciado")
+
+	// ✅ Multi-LLM (Claude, GPT, DeepSeek)
+	llmSvc := llm.NewService()
+	if cfg.ClaudeAPIKey != "" {
+		llmSvc.AddProvider("claude", cfg.ClaudeAPIKey, "https://api.anthropic.com", "claude-sonnet-4-6")
+		log.Info().Msg("🤖 LLM Provider: Claude configurado")
+	}
+	if cfg.OpenAIAPIKey != "" {
+		llmSvc.AddProvider("gpt", cfg.OpenAIAPIKey, "https://api.openai.com", "gpt-4o")
+		log.Info().Msg("🤖 LLM Provider: GPT configurado")
+	}
+	if cfg.DeepSeekAPIKey != "" {
+		llmSvc.AddProvider("deepseek", cfg.DeepSeekAPIKey, "https://api.deepseek.com", "deepseek-chat")
+		log.Info().Msg("🤖 LLM Provider: DeepSeek configurado")
+	}
+	toolsHandler.SetLLMService(llmSvc)
+
+	// ✅ Messaging Channels
+	if cfg.SlackBotToken != "" {
+		toolsHandler.SetSlackService(messaging.NewSlackService(cfg.SlackBotToken))
+		log.Info().Msg("💬 Slack configurado")
+	}
+	if cfg.DiscordBotToken != "" {
+		toolsHandler.SetDiscordService(messaging.NewDiscordService(cfg.DiscordBotToken))
+		log.Info().Msg("💬 Discord configurado")
+	}
+	if cfg.TeamsWebhookURL != "" {
+		toolsHandler.SetTeamsService(messaging.NewTeamsService(cfg.TeamsWebhookURL))
+		log.Info().Msg("💬 Teams configurado")
+	}
+	if cfg.SignalSenderNum != "" {
+		toolsHandler.SetSignalService(messaging.NewSignalService(cfg.SignalCLIPath, cfg.SignalSenderNum))
+		log.Info().Msg("💬 Signal configurado")
+	}
+
+	// ✅ Smart Home (Home Assistant)
+	if cfg.HomeAssistantToken != "" {
+		smartHomeSvc := smarthome.NewService(cfg.HomeAssistantURL, cfg.HomeAssistantToken)
+		toolsHandler.SetSmartHomeService(smartHomeSvc)
+		log.Info().Msgf("🏠 Smart Home: %s", cfg.HomeAssistantURL)
+	}
+
+	// ✅ Webhooks
+	webhookSvc := webhooks.NewService()
+	toolsHandler.SetWebhookService(webhookSvc)
+	log.Info().Msg("🔗 Webhook Service inicializado")
+
+	// ✅ Skills (Self-Improving Runtime)
+	skillsSvc := skills.NewService(cfg.SkillsDir)
+	skillsSvc.SetRunner(func(ctx context.Context, language, code string, timeout time.Duration) (string, int, error) {
+		result, err := sandboxSvc.Execute(ctx, language, code, timeout)
+		if err != nil {
+			return "", 1, err
+		}
+		return result.Output, result.ExitCode, nil
+	})
+	toolsHandler.SetSkillsService(skillsSvc)
+	log.Info().Msgf("🧩 Skills Service: %s (%d skills carregadas)", cfg.SkillsDir, len(skillsSvc.List()))
+
+	log.Info().Msg("🛠️ Tools Handler inicializado (150+ tools)")
 
 	// 7.6 Tools Client (Gemini 2.5 Flash REST — deteccao de intencao de tool)
 	toolsClient := gemini.NewToolsClient(cfg)
@@ -241,6 +373,9 @@ func main() {
 
 	// 7.7 Autonomous Learner (aprendizagem autonoma — pesquisa, estuda e memoriza)
 	autonomousLearner := learning.NewAutonomousLearner(db.Conn, cfg, qdrantClient, embedSvc)
+	toolsHandler.SetAutonomousLearner(func(ctx context.Context, topic string) (interface{}, error) {
+		return autonomousLearner.StudyTopic(ctx, topic)
+	})
 	log.Info().Msg("📚 Autonomous Learner inicializado")
 
 	// 7.8 Self-Awareness Service (introspecao — codigo, bancos, memorias)
@@ -356,6 +491,11 @@ func main() {
 	v1.HandleFunc("/idosos/by-cpf/{cpf}", server.handleGetIdosoByCpf).Methods("GET")
 	v1.HandleFunc("/idosos/{id}", server.handleGetIdoso).Methods("GET")
 	v1.HandleFunc("/idosos/sync-token-by-cpf", server.handleSyncTokenByCpf).Methods("PATCH")
+
+	// MCP Server — Model Context Protocol
+	mcpServer := mcp.NewServer(db.Conn)
+	router.PathPrefix("/mcp").Handler(mcpServer)
+	log.Info().Msg("🔌 MCP Server montado em /mcp")
 
 	// Core Memory — identidade e memória pessoal da EVA (/api/v1/self/*)
 	if coreMemoryEngine != nil {
