@@ -4,7 +4,7 @@
       "command": "D:\\DEV\\EVA-Mind\\eva-mcp-server.exe",
       "env": {
         "EVA_API_URL": "http://34.35.36.178:8080",
-        "MCP_API_KEY": "eva-mcp-dev-2026"
+        "MCP_API_KEY": "22d6188d334c0e11217555f59270763494839ddfd85fcfb91e931872747d65a0"
       }
     }
   }
