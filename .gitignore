@@ -36,7 +36,9 @@ venv/
 *.env.local
 vm.env
 env_backup.txt
+*_backup.txt
 serviceAccountKey.json
+cloud-run-env.yaml
 
 # Scripts to ignore
 deploy.sh
