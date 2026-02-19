@@ -497,6 +497,10 @@ func main() {
 	router.PathPrefix("/mcp").Handler(mcpServer)
 	log.Info().Msg("🔌 MCP Server montado em /mcp")
 
+	// Tool Execution REST endpoint (para MCP stdio server)
+	v1.HandleFunc("/tools/execute", server.handleToolExecute).Methods("POST")
+	log.Info().Msg("🔧 Tool execution endpoint: POST /api/v1/tools/execute")
+
 	// Core Memory — identidade e memória pessoal da EVA (/api/v1/self/*)
 	if coreMemoryEngine != nil {
 		evaSelf.RegisterRoutes(v1, coreMemoryEngine)
