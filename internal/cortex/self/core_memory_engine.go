@@ -6,6 +6,7 @@ package self
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
@@ -43,6 +44,7 @@ const (
 	TeachingReceived     MemoryType = "teaching_received"
 	MetaInsightType      MemoryType = "meta_insight"
 	SelfReflection       MemoryType = "self_reflection"
+	CapabilityKnowledge  MemoryType = "capability"
 )
 
 // AbstractionLevel níveis de abstração
@@ -147,6 +149,9 @@ func NewCoreMemoryEngine(cfg CoreMemoryConfig, reflectionSvc *ReflectionService,
 		return nil, fmt.Errorf("failed to initialize EvaSelf: %w", err)
 	}
 
+	// Semear capacidades na memória pessoal (idempotente via MERGE)
+	engine.seedCapabilities(context.Background())
+
 	return engine, nil
 }
 
@@ -205,10 +210,10 @@ func (e *CoreMemoryEngine) GetIdentityContext(ctx context.Context) (string, erro
 		selfNode := selfRecord.Values[0].(neo4j.Node)
 		selfProps := selfNode.Props
 
-		// Obter memórias recentes importantes
+		// Obter memórias recentes importantes (excluindo capabilities, que vêm separadas)
 		memQuery := `
 			MATCH (m:CoreMemory)
-			WHERE m.importance_weight >= 0.6
+			WHERE m.importance_weight >= 0.6 AND m.memory_type <> 'capability'
 			RETURN m.content AS content, m.memory_type AS type
 			ORDER BY m.importance_weight DESC, m.last_reinforced DESC
 			LIMIT 5
@@ -223,6 +228,25 @@ func (e *CoreMemoryEngine) GetIdentityContext(ctx context.Context) (string, erro
 			record := memResult.Record()
 			content, _ := record.Get("content")
 			memories = append(memories, content.(string))
+		}
+
+		// Obter capacidades (memory_type = 'capability')
+		capQuery := `
+			MATCH (m:CoreMemory)
+			WHERE m.memory_type = 'capability'
+			RETURN m.content AS content
+			ORDER BY m.id
+		`
+		capResult, err := tx.Run(ctx, capQuery, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		capabilities := make([]string, 0)
+		for capResult.Next(ctx) {
+			record := capResult.Record()
+			content, _ := record.Get("content")
+			capabilities = append(capabilities, content.(string))
 		}
 
 		// Construir contexto
@@ -254,6 +278,14 @@ Aprendi com %d crises e vivenciei %d momentos de conexão profunda.
 		}
 
 		context += fmt.Sprintf("\n\n### COMO ME VEJO\n%s", selfProps["self_description"].(string))
+
+		if len(capabilities) > 0 {
+			context += "\n\n### O QUE EU SEI FAZER"
+			for _, cap := range capabilities {
+				context += fmt.Sprintf("\n- %s", cap)
+			}
+			context += "\n\nQuando alguem perguntar o que eu sei fazer, posso listar essas capacidades naturalmente."
+		}
 
 		return context, nil
 	})
@@ -490,6 +522,64 @@ func (e *CoreMemoryEngine) detectMetaInsights(ctx context.Context) error {
 	// TODO: Implementar detecção de padrões com threshold
 	// Por enquanto, placeholder
 	return nil
+}
+
+// seedCapabilities semeia as capacidades da EVA como CoreMemory nodes.
+// Usa MERGE para ser idempotente — roda todo startup sem duplicar.
+func (e *CoreMemoryEngine) seedCapabilities(ctx context.Context) {
+	session := e.driver.NewSession(ctx, neo4j.SessionConfig{DatabaseName: e.dbName})
+	defer session.Close(ctx)
+
+	capabilities := []struct {
+		ID      string
+		Content string
+	}{
+		{"cap_comunicacao", "Eu sei enviar email pelo Gmail, mensagem no WhatsApp, Telegram, Slack, Discord, Microsoft Teams e Signal. Quando alguem precisar se comunicar, eu posso fazer isso."},
+		{"cap_midia", "Eu consigo buscar e tocar videos do YouTube, procurar musicas no Spotify, e mostrar paginas web embutidas na conversa."},
+		{"cap_produtividade", "Eu gerencio agenda no Google Calendar, salvo arquivos no Google Drive, crio alarmes e lembretes automaticos."},
+		{"cap_codigo", "Eu executo scripts em bash, Python e Node.js em sandbox seguro. Tambem crio e executo skills dinamicas em runtime."},
+		{"cap_web", "Eu pesquiso na internet, navego paginas web, preencho formularios e extraio dados de sites automaticamente."},
+		{"cap_autoprogramacao", "Eu posso ler, editar e testar meu proprio codigo-fonte em branches eva/*. Tenho capacidade de auto-programacao como um agente autonomo."},
+		{"cap_bancos", "Eu consulto diretamente PostgreSQL, Neo4j, Qdrant e NietzscheDB. Posso fazer queries, criar dados e buscar informacoes em qualquer banco."},
+		{"cap_smarthome", "Eu controlo dispositivos IoT via Home Assistant: luzes, sensores, ventiladores, e outros dispositivos inteligentes da casa."},
+		{"cap_automacao", "Eu crio tarefas agendadas (cron) que executam automaticamente em intervalos definidos. Posso agendar qualquer acao minha."},
+		{"cap_multillm", "Eu consulto Claude, GPT e DeepSeek para segunda opiniao quando necessario. Tenho acesso a multiplas IAs."},
+		{"cap_webhooks", "Eu crio e disparo webhooks com notificacoes automaticas para sistemas externos."},
+		{"cap_skills", "Eu crio novas capacidades (skills) em runtime sem precisar de atualizacao. Posso me ensinar coisas novas sozinha."},
+		{"cap_arquivos", "Eu leio, escrevo e busco arquivos no workspace do usuario de forma segura."},
+		{"cap_saude", "Eu monitoro medicamentos, sinais vitais, alerto a familia em emergencias e verifico interacoes medicamentosas."},
+	}
+
+	for _, cap := range capabilities {
+		query := `
+			MATCH (s:EvaSelf {id: 'eva_self'})
+			MERGE (m:CoreMemory {id: $id})
+			ON CREATE SET
+				m.memory_type = 'capability',
+				m.content = $content,
+				m.abstraction_level = 'universal',
+				m.source_context = 'autoconhecimento',
+				m.importance_weight = 1.0,
+				m.created_at = datetime(),
+				m.last_reinforced = datetime(),
+				m.reinforcement_count = 1
+			ON MATCH SET
+				m.content = $content,
+				m.last_reinforced = datetime()
+			MERGE (s)-[:REMEMBERS {importance: 1.0}]->(m)
+		`
+		_, err := session.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (interface{}, error) {
+			return tx.Run(ctx, query, map[string]interface{}{
+				"id":      cap.ID,
+				"content": cap.Content,
+			})
+		})
+		if err != nil {
+			log.Printf("⚠️ [CoreMemory] Falha ao semear capacidade %s: %v", cap.ID, err)
+		}
+	}
+
+	log.Printf("🧠 [CoreMemory] %d capacidades semeadas na memoria pessoal da EVA", len(capabilities))
 }
 
 // TeachEVA interface para criador ensinar EVA

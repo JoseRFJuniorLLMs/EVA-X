@@ -66,6 +66,19 @@ var CREATOR_CPF = getCreatorCPF()
 
 const CREATOR_NAME = "Jose R F Junior" // Nome do Criador da Matrix
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🦟 MALÁRIA - Acesso restrito por CPF
+// ═══════════════════════════════════════════════════════════════════════════════
+// Coleções de conhecimento sobre malária (Qdrant) - acesso exclusivo
+const MALARIA_ACCESS_CPF = "10275371387"
+
+// MalariaCollections define as coleções Qdrant de malária
+var MalariaCollections = []string{
+	"malaria_global",       // Epidemiologia, tratamento, prevenção mundial
+	"malaria_africa",       // Dados específicos do continente africano
+	"malaria_angola",       // Dados específicos de Angola
+}
+
 // getCreatorCPF obtém CPF do criador de forma segura
 func getCreatorCPF() string {
 	if cpf := os.Getenv("CREATOR_CPF"); cpf != "" {
@@ -330,6 +343,23 @@ func (u *UnifiedRetrieval) BuildUnifiedContext(
 
 	// Aguardar todas as queries paralelas
 	wg.Wait()
+
+	// ============================================================================
+	// 🦟 MALÁRIA: Coleções exclusivas por CPF (pós wg.Wait, CPF já disponível)
+	// ============================================================================
+	cleanCPFForMalaria := strings.ReplaceAll(strings.ReplaceAll(cpf, ".", ""), "-", "")
+	if u.wisdom != nil && cleanCPFForMalaria == MALARIA_ACCESS_CPF && currentText != "" {
+		log.Printf("🦟 [MALARIA] Acesso autorizado para CPF %s - buscando coleções de malária", cleanCPFForMalaria[:3]+"***")
+		malariaCtx := u.wisdom.GetWisdomContext(ctxWithTimeout, currentText, &knowledge.WisdomSearchOptions{
+			Collections: MalariaCollections,
+			Limit:       5,
+			MinScore:    0.65,
+		})
+		if malariaCtx != "" {
+			wisdomContext += "\n🦟 CONHECIMENTO ESPECIALIZADO - MALÁRIA:\n" + malariaCtx
+			log.Printf("🦟 [MALARIA] Contexto de malária injetado no prompt")
+		}
+	}
 
 	// ============================================================================
 	// Montar contexto unificado com resultados

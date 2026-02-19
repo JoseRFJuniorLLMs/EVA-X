@@ -61,7 +61,24 @@ type Config struct {
 	JWTSecret string
 
 	// Google Services
-	GoogleMapsAPIKey string
+	GoogleMapsAPIKey        string
+	GoogleOAuthClientID     string
+	GoogleOAuthClientSecret string
+	GoogleOAuthRedirectURL  string
+
+	// WhatsApp (Meta Graph API)
+	WhatsAppAccessToken   string
+	WhatsAppPhoneNumberID string
+
+	// Telegram Bot
+	TelegramBotToken string
+
+	// EVA Agent Capabilities
+	EVAWorkspaceDir string // Sandbox para filesystem
+	EVAProjectDir   string // Diretório do código-fonte EVA
+
+	// NietzscheDB
+	NietzscheDBURL string
 
 	// Neo4j - dados dos pacientes
 	Neo4jURI      string
@@ -86,6 +103,26 @@ type Config struct {
 
 	// Speaker Recognition
 	SpeakerModelPath string
+
+	// Multi-LLM
+	ClaudeAPIKey   string
+	OpenAIAPIKey   string
+	DeepSeekAPIKey string
+
+	// Messaging Channels
+	SlackBotToken   string
+	DiscordBotToken string
+	TeamsWebhookURL string
+	SignalCLIPath   string
+	SignalSenderNum string
+
+	// Smart Home (Home Assistant)
+	HomeAssistantURL   string
+	HomeAssistantToken string
+
+	// Skills
+	SkillsDir  string
+	SandboxDir string
 
 	// Feature Flags (V2)
 	EnableGoogleSearch   bool
@@ -183,6 +220,46 @@ func Load() (*Config, error) {
 
 		// Speaker Recognition
 		SpeakerModelPath: getEnvWithDefault("SPEAKER_MODEL_PATH", ""),
+
+		// Google OAuth
+		GoogleMapsAPIKey:        os.Getenv("GOOGLE_MAPS_API_KEY"),
+		GoogleOAuthClientID:     os.Getenv("GOOGLE_OAUTH_CLIENT_ID"),
+		GoogleOAuthClientSecret: os.Getenv("GOOGLE_OAUTH_CLIENT_SECRET"),
+		GoogleOAuthRedirectURL:  getEnvWithDefault("GOOGLE_OAUTH_REDIRECT_URL", "https://eva-mind.com/oauth/callback"),
+
+		// WhatsApp (Meta Graph API)
+		WhatsAppAccessToken:   os.Getenv("WHATSAPP_ACCESS_TOKEN"),
+		WhatsAppPhoneNumberID: os.Getenv("WHATSAPP_PHONE_NUMBER_ID"),
+
+		// Telegram
+		TelegramBotToken: os.Getenv("TELEGRAM_BOT_TOKEN"),
+
+		// EVA Agent
+		EVAWorkspaceDir: getEnvWithDefault("EVA_WORKSPACE_DIR", "/home/eva/workspace"),
+		EVAProjectDir:   getEnvWithDefault("EVA_PROJECT_DIR", "/opt/eva-mind"),
+
+		// NietzscheDB
+		NietzscheDBURL: getEnvWithDefault("NIETZSCHE_DB_URL", "http://localhost:3000"),
+
+		// Multi-LLM
+		ClaudeAPIKey:   os.Getenv("CLAUDE_API_KEY"),
+		OpenAIAPIKey:   os.Getenv("OPENAI_API_KEY"),
+		DeepSeekAPIKey: os.Getenv("DEEPSEEK_API_KEY"),
+
+		// Messaging Channels
+		SlackBotToken:   os.Getenv("SLACK_BOT_TOKEN"),
+		DiscordBotToken: os.Getenv("DISCORD_BOT_TOKEN"),
+		TeamsWebhookURL: os.Getenv("TEAMS_WEBHOOK_URL"),
+		SignalCLIPath:   getEnvWithDefault("SIGNAL_CLI_PATH", "signal-cli"),
+		SignalSenderNum: os.Getenv("SIGNAL_SENDER_NUMBER"),
+
+		// Smart Home
+		HomeAssistantURL:   getEnvWithDefault("HOME_ASSISTANT_URL", "http://localhost:8123"),
+		HomeAssistantToken: os.Getenv("HOME_ASSISTANT_TOKEN"),
+
+		// Skills & Sandbox
+		SkillsDir:  getEnvWithDefault("SKILLS_DIR", "/home/eva/skills"),
+		SandboxDir: getEnvWithDefault("SANDBOX_DIR", "/home/eva/sandbox"),
 
 		// Load Feature Flags (Default: false for safety/compatibility)
 		EnableGoogleSearch:   getEnvBool("ENABLE_GOOGLE_SEARCH", false),
