@@ -114,6 +114,7 @@ func (em *EvaMemory) StoreTurn(ctx context.Context, sessionID, role, content str
 
 	// 2. Create the turn node
 	turnResult, err := em.graph.InsertNode(ctx, nietzsche.InsertNodeOpts{
+		NodeType: "EvaTurn",
 		Content: map[string]interface{}{
 			"id":        turnID,
 			"role":      role,
@@ -364,6 +365,7 @@ func (em *EvaMemory) GenerateInsight(ctx context.Context, content, insightType s
 
 	// Create insight node
 	insightResult, err := em.graph.InsertNode(ctx, nietzsche.InsertNodeOpts{
+		NodeType: "EvaInsight",
 		Content: map[string]interface{}{
 			"id":         insightID,
 			"content":    content,

@@ -91,6 +91,7 @@ func (s *SignifierService) incrementSignifier(ctx context.Context, idosoID int64
 
 	// 3. CREATE Event node
 	eventResult, err := s.client.InsertNode(ctx, nietzsche.InsertNodeOpts{
+		NodeType: "Event",
 		Content: map[string]interface{}{
 			"type":      "utterance",
 			"content":   contextStr,

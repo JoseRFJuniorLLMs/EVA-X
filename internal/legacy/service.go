@@ -427,7 +427,7 @@ func (ls *LegacyService) IsPosMorte(ctx context.Context, idosoID int64) bool {
 func (ls *LegacyService) getTopSignifiers(ctx context.Context, idosoID int64, topN int) ([]map[string]interface{}, error) {
 	nql := `MATCH (s:Significante {idoso_id: $idosoId}) WHERE s.frequency >= 3 RETURN s LIMIT $limit`
 	queryResult, err := ls.graphClient.ExecuteNQL(ctx, nql, map[string]interface{}{
-		"idosoId": fmt.Sprintf("%d", idosoID),
+		"idosoId": idosoID,
 		"limit":   topN,
 	}, "")
 	if err != nil {
@@ -514,7 +514,7 @@ func (ls *LegacyService) calculateEmotionalProfile(ctx context.Context, idosoID 
 func (ls *LegacyService) getSignificantRelations(ctx context.Context, idosoID int64) ([]map[string]interface{}, error) {
 	nql := `MATCH (p:Person {id: $idosoId})-[:MENTIONED]->(person:Person) RETURN person LIMIT 20`
 	queryResult, err := ls.graphClient.ExecuteNQL(ctx, nql, map[string]interface{}{
-		"idosoId": fmt.Sprintf("%d", idosoID),
+		"idosoId": idosoID,
 	}, "")
 	if err != nil {
 		return nil, err

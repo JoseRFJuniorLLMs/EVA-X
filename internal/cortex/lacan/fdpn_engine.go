@@ -142,6 +142,7 @@ func (f *FDPNEngine) recordDemandInGraph(ctx context.Context, idosoID int64, add
 
 	// 3. CREATE Demand node
 	demandResult, err := f.graph.InsertNode(ctx, nietzsche.InsertNodeOpts{
+		NodeType: "Demand",
 		Content: map[string]interface{}{
 			"desire":    desire,
 			"text":      text,

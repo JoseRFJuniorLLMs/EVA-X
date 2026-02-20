@@ -330,6 +330,7 @@ func (d *NarrativeShiftDetector) StoreShiftEvents(ctx context.Context, patientID
 	for _, s := range shifts {
 		// Create NarrativeShift node
 		shiftNode, err := d.graph.InsertNode(ctx, nietzsche.InsertNodeOpts{
+			NodeType: "NarrativeShift",
 			Content: map[string]interface{}{
 				"shift_type":      string(s.ShiftType),
 				"cosine_delta":    s.CosineDelta,
