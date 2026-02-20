@@ -19,9 +19,7 @@ import (
 
 	"eva/internal/brainstem/config"
 	"eva/internal/brainstem/database"
-	"eva/internal/brainstem/infrastructure/graph"
-	"eva/internal/brainstem/infrastructure/redis"
-	"eva/internal/brainstem/infrastructure/vector"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	"eva/internal/brainstem/infrastructure/workerpool"
 	"eva/internal/cortex/alert"
 	"eva/internal/cortex/brain"
@@ -210,10 +208,11 @@ type SignalingServer struct {
 	zettelService *zettelkasten.ZettelService // ✅ Memória Externa Viva
 
 	// Services for Memory Saver
-	qdrantClient     *vector.QdrantClient
+	vectorAdapter    *nietzscheInfra.VectorAdapter
+	audioBuffer      *nietzscheInfra.AudioBuffer
+	cacheStore       *nietzscheInfra.CacheStore
 	embeddingService *memory.EmbeddingService
 	graphStore       *memory.GraphStore
-	redis            *redis.Client
 	sessions         sync.Map
 	clients          sync.Map
 
@@ -227,14 +226,14 @@ func NewSignalingServer(
 	cfg *config.Config,
 	db *sql.DB,
 	pushService *push.FirebaseService,
-	qdrant *vector.QdrantClient,
+	vectorAdapter *nietzscheInfra.VectorAdapter,
 	embedder *memory.EmbeddingService,
 ) *SignalingServer {
 	server := &SignalingServer{
 		cfg:              cfg,
 		db:               db,
 		pushService:      pushService,
-		qdrantClient:     qdrant,
+		vectorAdapter:    vectorAdapter,
 		embeddingService: embedder,
 	}
 
@@ -320,38 +319,46 @@ func NewSignalingServer(
 	})
 	log.Println("🛡️ Signaling: EthicalBoundaryEngine initialized for Ethics Monitoring")
 
-	// ✅ NOVO: Inicializar Knowledge Service (Neo4j Thinking)
-	neo4jClient, err := graph.NewNeo4jClient(cfg)
+	// ✅ NOVO: Inicializar NietzscheDB Client (substitui Neo4j)
+	nietzscheClient, err := nietzscheInfra.NewClient(cfg.NietzscheGRPCAddr)
 	if err != nil {
-		log.Printf("⚠️ Erro ao conectar Neo4j: %v", err)
-	} else {
-		server.knowledge = knowledge.NewGraphReasoningService(cfg, neo4jClient, ctxService)
-		log.Printf("✅ Graph Reasoning Service (Neo4j + Thinking) inicializado")
+		log.Printf("⚠️ NietzscheDB connect failed: %v", err)
+		nietzscheClient = nil
+	}
+	var nietzscheGraph *nietzscheInfra.GraphAdapter
+	var nietzscheVector *nietzscheInfra.VectorAdapter
+	if nietzscheClient != nil {
+		nietzscheGraph = nietzscheInfra.NewGraphAdapter(nietzscheClient, "patient_graph")
+		nietzscheVector = nietzscheInfra.NewVectorAdapter(nietzscheClient)
 	}
 
-	// ✅ NOVO: Inicializar Brain Service (Postgres + Qdrant + Neo4j Memory)
+	if nietzscheGraph != nil {
+		server.knowledge = knowledge.NewGraphReasoningService(cfg, nietzscheGraph, ctxService)
+		log.Printf("✅ Graph Reasoning Service (NietzscheDB + Thinking) inicializado")
+	}
+
+	// ✅ NOVO: Inicializar Brain Service (Postgres + NietzscheDB Memory)
 	server.brainService = brain.NewService(
 		db,
-		server.qdrantClient,
-		neo4jClient, // Pode ser nil se falhou
-		nil,         // unified retrieval (opcional)
+		nietzscheVector,
+		nietzscheGraph,
+		nil, // unified retrieval (opcional)
 		server.personalityService,
 		server.zetaRouter,
 		server.pushService,
 		server.embeddingService,
 		ingestion.NewIngestionPipeline(cfg),
 	)
-	log.Println("🧠 Signaling: BrainService initialized for Memory Storage (PG + Qdrant + Neo4j)")
+	log.Println("🧠 Signaling: BrainService initialized for Memory Storage (PG + NietzscheDB)")
 
 	// ============================================================================
 	// 🧠 MÓDULOS DE PSICOLOGIA E PERSONALIDADE
 	// ============================================================================
 
 	// ✅ Cognitive Load Orchestrator (Gerencia carga cognitiva, detecta ruminação)
-	if server.redis != nil {
-		server.cognitiveOrchestrator = cognitive.NewCognitiveLoadOrchestrator(db, server.redis.GetUnderlyingClient())
-		log.Println("🧠 Signaling: CognitiveLoadOrchestrator initialized (Carga Cognitiva + Ruminação)")
-	}
+	server.cacheStore = nietzscheInfra.NewCacheStore()
+	server.cognitiveOrchestrator = cognitive.NewCognitiveLoadOrchestrator(db, server.cacheStore)
+	log.Println("🧠 Signaling: CognitiveLoadOrchestrator initialized (Carga Cognitiva + Ruminação)")
 
 	// ✅ Crisis Predictor (Prediz risco de crises baseado em features)
 	server.crisisPredictor = prediction.NewCrisisPredictor(db)
@@ -378,28 +385,23 @@ func NewSignalingServer(
 	log.Println("🪞 Signaling: GrandAutreService initialized (EVA como Grande Outro)")
 
 	// ✅ Lacan: FDPN Engine (Grafo do Desejo - A quem o idoso dirige demandas)
-	if neo4jClient != nil {
-		server.fdpnEngine = lacan.NewFDPNEngine(neo4jClient)
+	if nietzscheGraph != nil {
+		server.fdpnEngine = lacan.NewFDPNEngine(nietzscheGraph)
 		log.Println("📊 Signaling: FDPNEngine initialized (Grafo do Desejo)")
 	}
 
 	// ============================================================================
 	// 📚 ZETTELKASTEN (Obsidian-like Knowledge Management)
 	// ============================================================================
-	if neo4jClient != nil {
-		server.zettelService = zettelkasten.NewZettelService(db, neo4jClient.GetDriver())
+	if nietzscheGraph != nil {
+		server.zettelService = zettelkasten.NewZettelService(db, nietzscheGraph)
 		log.Println("📚 Signaling: ZettelService initialized (Memória Externa Viva)")
 	}
 
-	// ✅ NOVO: Inicializar Redis Client (Audio Buffer)
-	redisClient, err := redis.NewClient(cfg)
-	if err != nil {
-		log.Printf("⚠️ Erro ao conectar Redis: %v", err)
-	} else {
-		server.redis = redisClient
-		server.audioAnalysis = knowledge.NewAudioAnalysisService(cfg, redisClient, ctxService) // ✅ Inicializa Serviço de Áudio com Contexto
-		log.Printf("✅ Redis Video Buffer + Audio Analysis inicializado")
-	}
+	// ✅ NOVO: Inicializar AudioBuffer + AudioAnalysis (substitui Redis)
+	server.audioBuffer = nietzscheInfra.NewAudioBuffer()
+	server.audioAnalysis = knowledge.NewAudioAnalysisService(cfg, server.audioBuffer, ctxService)
+	log.Printf("✅ NietzscheDB AudioBuffer + Audio Analysis inicializado")
 
 	go server.cleanupDeadSessions()
 	return server
@@ -724,16 +726,15 @@ Use isso para guiar sua resposta ao próximo áudio.
 		}
 	}
 
-	// ✅ REDIS: Salvar chunk no buffer distribuído para análise posterior
-	// PERFORMANCE FIX: Usar WorkerPool para controlar goroutines
-	if s.redis != nil {
+	// ✅ AudioBuffer: Salvar chunk para análise posterior
+	if s.audioBuffer != nil {
 		pcmCopy := make([]byte, len(pcmData))
 		copy(pcmCopy, pcmData)
 		sessionID := session.ID
 		workerpool.IOPool.TrySubmit(func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			s.redis.AppendAudioChunk(ctx, sessionID, pcmCopy)
+			s.audioBuffer.AppendAudioChunk(ctx, sessionID, pcmCopy)
 		})
 	}
 

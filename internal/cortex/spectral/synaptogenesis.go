@@ -317,17 +317,10 @@ func (s *SynaptogenesisEngine) closeTriads(ctx context.Context, patientID int64)
 				// Create triadic closure edge with inferred weight
 				inferredWeight := 0.2 // Default modest weight for triadic closure
 				_, err = s.graphAdapter.InsertEdge(ctx, nietzsche.InsertEdgeOpts{
-					FromID: aID,
-					ToID:   cID,
-					Label:  "SYNAPSE",
-					Weight: float32(inferredWeight),
-					Content: map[string]interface{}{
-						"created_at":       nietzscheInfra.NowUnix(),
-						"last_activation":  nietzscheInfra.NowUnix(),
-						"activation_count": 0,
-						"age":              0,
-						"source":           "triadic_closure",
-					},
+					From: aID,
+					To:   cID,
+					EdgeType:  "SYNAPSE",
+					Weight: float64(inferredWeight),
 				})
 				if err == nil {
 					closed++

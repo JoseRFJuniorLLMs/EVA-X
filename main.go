@@ -200,7 +200,7 @@ func main() {
 	alertService := voice.NewAlertService(db, cfg, logger)
 
 	// 4. Cortex (Logica de Negocio e IA)
-	geminiHandler := gemini.NewHandler(cfg, db, nzClient, vectorAdapter)
+	geminiHandler := gemini.NewHandler(cfg, db, graphAdapter, vectorAdapter)
 
 	// 5. Voice Handler (WebSocket & DSP)
 	voiceHandler := voice.NewHandler(db, cfg, logger, alertService, geminiHandler)
@@ -242,8 +242,7 @@ func main() {
 			log.Warn().Err(anonErr).Msg("AnonymizationService indisponivel - CoreMemory desabilitado")
 		} else {
 			coreMemoryEngine, err = evaSelf.NewCoreMemoryEngine(evaSelf.CoreMemoryConfig{
-				NietzscheClient:     nzClient,
-				Collection:          "eva_core",
+				GraphAdapter:        evaGraphAdapter,
 				SimilarityThreshold: 0.88,
 				MinOccurrences:      3,
 			}, reflectionSvc, anonSvc, nil)
@@ -521,7 +520,7 @@ func main() {
 	}
 
 	// 7.14 Memory Orchestrator (Voice -> FDPN -> Krylov -> Spectral -> REM consolidation)
-	hippoFDPN := memory.NewFDPNEngine(graphAdapter, nil, vectorAdapter)
+	hippoFDPN := memory.NewFDPNEngine(graphAdapter, nil)
 	memOrchestrator := internalmemory.NewMemoryOrchestrator(db.Conn, graphAdapter, vectorAdapter, hippoFDPN, krylovMgr)
 	log.Info().Msg("Memory Orchestrator inicializado (FDPN -> Krylov -> REM)")
 

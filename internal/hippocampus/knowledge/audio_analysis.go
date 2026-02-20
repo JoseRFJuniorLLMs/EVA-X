@@ -14,25 +14,25 @@ import (
 )
 
 type AudioAnalysisService struct {
-	cfg     *config.Config
-	redis   *redis.Client
-	context *ContextService
+	cfg         *config.Config
+	audioBuffer *nietzscheInfra.AudioBuffer
+	context     *ContextService
 }
 
-func NewAudioAnalysisService(cfg *config.Config, redis *redis.Client, ctxService *ContextService) *AudioAnalysisService {
+func NewAudioAnalysisService(cfg *config.Config, audioBuffer *nietzscheInfra.AudioBuffer, ctxService *ContextService) *AudioAnalysisService {
 	return &AudioAnalysisService{
-		cfg:     cfg,
-		redis:   redis,
-		context: ctxService,
+		cfg:         cfg,
+		audioBuffer: audioBuffer,
+		context:     ctxService,
 	}
 }
 
-// AnalyzeAudioContext recupera o áudio do Redis e analisa a prosódia/emoção
+// AnalyzeAudioContext recupera o áudio do buffer e analisa a prosódia/emoção
 func (s *AudioAnalysisService) AnalyzeAudioContext(ctx context.Context, sessionID string, idosoID int64) (string, error) {
-	// 1. Recuperar áudio completo do Redis e limpar buffer
-	audioData, err := s.redis.GetFullAudio(ctx, sessionID, true)
+	// 1. Recuperar áudio completo do buffer e limpar
+	audioData, err := s.audioBuffer.GetFullAudio(ctx, sessionID, true)
 	if err != nil {
-		return "", fmt.Errorf("erro ao ler audio do redis: %w", err)
+		return "", fmt.Errorf("erro ao ler audio do buffer: %w", err)
 	}
 
 	if len(audioData) < 10000 { // Ignorar áudios muito curtos/ruído

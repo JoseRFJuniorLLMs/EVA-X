@@ -107,19 +107,19 @@ func (h *HebbianRealTime) updatePairWeight(ctx context.Context, nodeA, nodeB str
 
 	if len(result.NodePairs) > 0 {
 		relExists = true
-		edge := result.NodePairs[0].Edge
+		edgeContent := result.NodePairs[0].To.Content
 		currentWeight = 0.5
-		if v, ok := edge.Content["fast_weight"]; ok {
+		if v, ok := edgeContent["fast_weight"]; ok {
 			if f, ok := v.(float64); ok {
 				currentWeight = f
 			}
-		} else if v, ok := edge.Content["weight"]; ok {
+		} else if v, ok := edgeContent["weight"]; ok {
 			if f, ok := v.(float64); ok {
 				currentWeight = f
 			}
 		}
 		lastActivated = time.Now() // default
-		if v, ok := edge.Content["last_activated"]; ok {
+		if v, ok := edgeContent["last_activated"]; ok {
 			if f, ok := v.(float64); ok {
 				lastActivated = time.Unix(int64(f), 0)
 			}
@@ -246,11 +246,11 @@ func (h *HebbianRealTime) BoostMemories(ctx context.Context, memoryIDs []string,
 
 		for _, pair := range result.NodePairs {
 			currentWeight := 0.5
-			if v, ok := pair.Edge.Content["fast_weight"]; ok {
+			if v, ok := pair.To.Content["fast_weight"]; ok {
 				if f, ok := v.(float64); ok {
 					currentWeight = f
 				}
-			} else if v, ok := pair.Edge.Content["weight"]; ok {
+			} else if v, ok := pair.To.Content["weight"]; ok {
 				if f, ok := v.(float64); ok {
 					currentWeight = f
 				}
@@ -264,7 +264,7 @@ func (h *HebbianRealTime) BoostMemories(ctx context.Context, memoryIDs []string,
 			_, err := h.graphAdapter.MergeEdge(ctx, nietzscheInfra.MergeEdgeOpts{
 				FromNodeID: pair.From.ID,
 				ToNodeID:   pair.To.ID,
-				EdgeType:   pair.Edge.Label,
+				EdgeType:   "Association",
 				OnMatchSet: map[string]interface{}{
 					"fast_weight":              newWeight,
 					"feedback_boost_at":        nietzscheInfra.NowUnix(),
@@ -306,11 +306,11 @@ func (h *HebbianRealTime) DecayMemories(ctx context.Context, memoryIDs []string,
 
 		for _, pair := range result.NodePairs {
 			currentWeight := 0.5
-			if v, ok := pair.Edge.Content["fast_weight"]; ok {
+			if v, ok := pair.To.Content["fast_weight"]; ok {
 				if f, ok := v.(float64); ok {
 					currentWeight = f
 				}
-			} else if v, ok := pair.Edge.Content["weight"]; ok {
+			} else if v, ok := pair.To.Content["weight"]; ok {
 				if f, ok := v.(float64); ok {
 					currentWeight = f
 				}
@@ -325,7 +325,7 @@ func (h *HebbianRealTime) DecayMemories(ctx context.Context, memoryIDs []string,
 			_, err := h.graphAdapter.MergeEdge(ctx, nietzscheInfra.MergeEdgeOpts{
 				FromNodeID: pair.From.ID,
 				ToNodeID:   pair.To.ID,
-				EdgeType:   pair.Edge.Label,
+				EdgeType:   "Association",
 				OnMatchSet: map[string]interface{}{
 					"fast_weight":              newWeight,
 					"feedback_decay_at":        nietzscheInfra.NowUnix(),
@@ -379,7 +379,7 @@ func (h *HebbianRealTime) GetStatistics(ctx context.Context, patientID int64) (*
 
 		for _, pair := range result.NodePairs {
 			fw := 0.5
-			if v, ok := pair.Edge.Content["fast_weight"]; ok {
+			if v, ok := pair.To.Content["fast_weight"]; ok {
 				if f, ok := v.(float64); ok {
 					fw = f
 				}
@@ -394,7 +394,7 @@ func (h *HebbianRealTime) GetStatistics(ctx context.Context, patientID int64) (*
 			}
 			first = false
 
-			if v, ok := pair.Edge.Content["co_activation_count"]; ok {
+			if v, ok := pair.To.Content["co_activation_count"]; ok {
 				switch c := v.(type) {
 				case float64:
 					totalCoActivations += int(c)

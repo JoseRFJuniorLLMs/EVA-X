@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"eva/internal/brainstem/config"
-	"eva/internal/brainstem/infrastructure/vector"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	"eva/internal/hippocampus/memory"
 	"fmt"
 	"log"
@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
-	"github.com/qdrant/go-client/qdrant"
 )
 
 // WisdomSource define uma fonte de sabedoria
@@ -205,21 +204,19 @@ func main() {
 		log.Fatal("❌ Nenhuma credencial encontrada (VERTEX_ACCESS_TOKEN ou GOOGLE_API_KEY)")
 	}
 
-	// Conectar Qdrant (usa config do .env)
-	qdrantHost := cfg.QdrantHost
-	qdrantPort := cfg.QdrantPort
-	if qdrantHost == "" {
-		qdrantHost = "localhost"
+	// Conectar NietzscheDB
+	nietzscheAddr := cfg.NietzscheGRPCAddr
+	if nietzscheAddr == "" {
+		nietzscheAddr = "localhost:50051"
 	}
-	if qdrantPort == 0 {
-		qdrantPort = 6333
-	}
-	log.Printf("🔌 Conectando ao Qdrant: %s:%d", qdrantHost, qdrantPort)
+	log.Printf("🔌 Conectando ao NietzscheDB: %s", nietzscheAddr)
 
-	qClient, err := vector.NewQdrantClient(qdrantHost, qdrantPort)
+	nietzscheClient, err := nietzscheInfra.NewClient(nietzscheAddr)
 	if err != nil {
-		log.Fatalf("❌ Erro ao conectar Qdrant: %v", err)
+		log.Fatalf("❌ Erro ao conectar NietzscheDB: %v", err)
 	}
+	defer nietzscheClient.Close()
+	vAdapter := nietzscheInfra.NewVectorAdapter(nietzscheClient)
 
 	// Criar embedder (detecta automaticamente Vertex AI ou API Key)
 	embedder := memory.NewEmbeddingServiceFromEnv()
@@ -235,17 +232,17 @@ func main() {
 
 	switch source {
 	case "all":
-		seedAll(ctx, qClient, embedder)
+		seedAll(ctx, vAdapter, embedder)
 	case "list":
 		listSources()
 	case "status":
-		checkStatus(ctx, qClient)
+		checkStatus(ctx, vAdapter)
 	default:
 		// Buscar fonte específica
 		found := false
 		for _, ws := range WisdomSources {
 			if ws.Name == source {
-				seedSource(ctx, qClient, embedder, ws)
+				seedSource(ctx, vAdapter, embedder, ws)
 				found = true
 				break
 			}
@@ -265,7 +262,7 @@ func printUsage() {
 	fmt.Println("\nComandos:")
 	fmt.Println("  all      - Seed de todas as fontes")
 	fmt.Println("  list     - Lista todas as fontes disponíveis")
-	fmt.Println("  status   - Verifica status das coleções no Qdrant")
+	fmt.Println("  status   - Verifica status das coleções no NietzscheDB")
 	fmt.Println("  <fonte>  - Seed de uma fonte específica")
 	fmt.Println("\nFontes disponíveis:")
 	for _, ws := range WisdomSources {
@@ -283,28 +280,23 @@ func listSources() {
 	}
 }
 
-func checkStatus(ctx context.Context, qClient *vector.QdrantClient) {
-	fmt.Println("\n📊 Status das Coleções no Qdrant")
+func checkStatus(_ context.Context, _ *nietzscheInfra.VectorAdapter) {
+	fmt.Println("\n📊 Status das Coleções no NietzscheDB")
 	fmt.Println("═══════════════════════════════════════════════════════════")
 	fmt.Printf("%-25s │ %s\n", "COLEÇÃO", "STATUS")
 	fmt.Println("──────────────────────────┼────────────────────────────────")
 
 	for _, ws := range WisdomSources {
-		info, err := qClient.GetCollectionInfo(ctx, ws.Collection)
-		if err != nil {
-			fmt.Printf("%-25s │ ❌ Não existe\n", ws.Collection)
-		} else {
-			fmt.Printf("%-25s │ ✅ %d pontos\n", ws.Collection, info.PointsCount)
-		}
+		fmt.Printf("%-25s │ ℹ️  (use NietzscheDB dashboard)\n", ws.Collection)
 	}
 }
 
-func seedAll(ctx context.Context, qClient *vector.QdrantClient, embedder *memory.EmbeddingService) {
+func seedAll(ctx context.Context, vAdapter *nietzscheInfra.VectorAdapter, embedder *memory.EmbeddingService) {
 	log.Println("🚀 Iniciando seed de TODAS as fontes...")
 	log.Println("")
 
 	for _, ws := range WisdomSources {
-		seedSource(ctx, qClient, embedder, ws)
+		seedSource(ctx, vAdapter, embedder, ws)
 		log.Println("")
 	}
 
@@ -312,24 +304,15 @@ func seedAll(ctx context.Context, qClient *vector.QdrantClient, embedder *memory
 	log.Println("🎉 Seed completo de todas as fontes!")
 }
 
-func seedSource(ctx context.Context, qClient *vector.QdrantClient, embedder *memory.EmbeddingService, ws WisdomSource) {
+func seedSource(ctx context.Context, vAdapter *nietzscheInfra.VectorAdapter, embedder *memory.EmbeddingService, ws WisdomSource) {
 	log.Printf("📖 [%s] Processando %s...", ws.Name, ws.File)
 
-	// Verificar se arquivo existe
 	content, err := os.ReadFile(ws.File)
 	if err != nil {
 		log.Printf("❌ [%s] Erro ao ler arquivo: %v", ws.Name, err)
 		return
 	}
 
-	// Criar coleção com dimensão correta (768 para Vertex AI)
-	dim := uint64(embedder.GetExpectedDimension())
-	err = qClient.CreateCollection(ctx, ws.Collection, dim)
-	if err != nil {
-		log.Printf("⚠️ [%s] Coleção já existe ou erro: %v", ws.Name, err)
-	}
-
-	// Parsear entradas
 	entries := parseEntries(string(content))
 	log.Printf("📚 [%s] Encontradas %d entradas", ws.Name, len(entries))
 
@@ -338,17 +321,12 @@ func seedSource(ctx context.Context, qClient *vector.QdrantClient, embedder *mem
 		return
 	}
 
-	// Processar em batches
-	var points []*qdrant.PointStruct
-	batchSize := 10
 	totalProcessed := 0
-
 	for i, entry := range entries {
 		if len(entry) < 10 {
-			continue // Pular entradas muito curtas
+			continue
 		}
 
-		// Gerar embedding
 		textToEmbed := fmt.Sprintf("%s (%s): %s", ws.Tradition, ws.Type, entry)
 		vec, err := embedder.GenerateEmbedding(ctx, textToEmbed)
 		if err != nil {
@@ -356,36 +334,24 @@ func seedSource(ctx context.Context, qClient *vector.QdrantClient, embedder *mem
 			continue
 		}
 
-		point := createPoint(uint64(i+1), vec, map[string]interface{}{
-			"id":        fmt.Sprintf("%s_%d", ws.Name, i+1),
+		pointID := fmt.Sprintf("%s_%d", ws.Name, i+1)
+		payload := map[string]interface{}{
+			"id":        pointID,
 			"content":   entry,
 			"source":    ws.Name,
 			"tradition": ws.Tradition,
 			"type":      ws.Type,
-			"tags":      ws.Tags,
-		})
-
-		points = append(points, point)
-		totalProcessed++
-
-		// Upsert em batches
-		if len(points) >= batchSize {
-			if err := qClient.Upsert(ctx, ws.Collection, points); err != nil {
-				log.Printf("❌ [%s] Erro no upsert batch: %v", ws.Name, err)
-			} else {
-				log.Printf("✅ [%s] Batch: %d entradas (total: %d)", ws.Name, len(points), totalProcessed)
-			}
-			points = nil
-			time.Sleep(500 * time.Millisecond) // Rate limit
+			"tags":      strings.Join(ws.Tags, ","),
 		}
-	}
 
-	// Upsert restante
-	if len(points) > 0 {
-		if err := qClient.Upsert(ctx, ws.Collection, points); err != nil {
-			log.Printf("❌ [%s] Erro no upsert final: %v", ws.Name, err)
+		if err := vAdapter.Upsert(ctx, ws.Collection, pointID, vec, payload); err != nil {
+			log.Printf("❌ [%s] Erro no upsert entrada %d: %v", ws.Name, i+1, err)
 		} else {
-			log.Printf("✅ [%s] Batch final: %d entradas", ws.Name, len(points))
+			totalProcessed++
+			if totalProcessed%10 == 0 {
+				log.Printf("✅ [%s] %d entradas processadas...", ws.Name, totalProcessed)
+				time.Sleep(100 * time.Millisecond)
+			}
 		}
 	}
 
@@ -450,41 +416,3 @@ func parseEntries(content string) []string {
 	return entries
 }
 
-func createPoint(id uint64, vec []float32, payload map[string]interface{}) *qdrant.PointStruct {
-	point := &qdrant.PointStruct{
-		Id: &qdrant.PointId{
-			PointIdOptions: &qdrant.PointId_Num{Num: id},
-		},
-		Vectors: &qdrant.Vectors{
-			VectorsOptions: &qdrant.Vectors_Vector{Vector: &qdrant.Vector{Data: vec}},
-		},
-		Payload: make(map[string]*qdrant.Value),
-	}
-
-	for k, v := range payload {
-		point.Payload[k] = toQdrantValue(v)
-	}
-
-	return point
-}
-
-func toQdrantValue(v interface{}) *qdrant.Value {
-	switch val := v.(type) {
-	case string:
-		return &qdrant.Value{Kind: &qdrant.Value_StringValue{StringValue: val}}
-	case int:
-		return &qdrant.Value{Kind: &qdrant.Value_IntegerValue{IntegerValue: int64(val)}}
-	case int64:
-		return &qdrant.Value{Kind: &qdrant.Value_IntegerValue{IntegerValue: val}}
-	case float64:
-		return &qdrant.Value{Kind: &qdrant.Value_DoubleValue{DoubleValue: val}}
-	case []string:
-		list := &qdrant.ListValue{}
-		for _, s := range val {
-			list.Values = append(list.Values, &qdrant.Value{Kind: &qdrant.Value_StringValue{StringValue: s}})
-		}
-		return &qdrant.Value{Kind: &qdrant.Value_ListValue{ListValue: list}}
-	default:
-		return &qdrant.Value{Kind: &qdrant.Value_StringValue{StringValue: fmt.Sprintf("%v", val)}}
-	}
-}

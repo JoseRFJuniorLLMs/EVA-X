@@ -390,13 +390,10 @@ func (e *CoreMemoryEngine) recordMemory(ctx context.Context, memory CoreMemory) 
 	// 3. Create REMEMBERS edge from EvaSelf to CoreMemory
 	_, err = e.graphAdapter.InsertEdge(ctx, nietzsche.InsertEdgeOpts{
 		Collection: "eva_core",
-		FromID:     selfResult.NodeID,
-		ToID:       memNode.ID,
-		Label:      "REMEMBERS",
-		Weight:     float32(memory.ImportanceWeight),
-		Content: map[string]interface{}{
-			"importance": memory.ImportanceWeight,
-		},
+		From:     selfResult.NodeID,
+		To:       memNode.ID,
+		EdgeType:      "REMEMBERS",
+		Weight:   float64(memory.ImportanceWeight),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create REMEMBERS edge: %w", err)

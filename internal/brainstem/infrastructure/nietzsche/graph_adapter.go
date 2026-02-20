@@ -83,7 +83,7 @@ func (ga *GraphAdapter) MergeNode(ctx context.Context, opts MergeNodeOpts) (*Mer
 	return &MergeNodeResult{
 		Created: result.Created,
 		NodeID:  result.NodeID,
-		Content: result.Content,
+		Content: result.Node.Content,
 	}, nil
 }
 
@@ -180,8 +180,7 @@ func (ga *GraphAdapter) BfsWithEdgeType(ctx context.Context, startID string,
 	}
 
 	return ga.client.Bfs(ctx, startID, nietzsche.TraversalOpts{
-		MaxDepth:  maxDepth,
-		EdgeLabel: edgeType,
+		MaxDepth: maxDepth,
 	}, col)
 }
 

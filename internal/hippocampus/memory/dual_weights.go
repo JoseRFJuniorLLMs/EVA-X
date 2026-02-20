@@ -118,12 +118,12 @@ func (d *DualWeightSystem) UpdateCombinedWeight(ctx context.Context, nodeA, node
 	fastWeight := 0.5
 	if len(result.NodePairs) > 0 {
 		edge := result.NodePairs[0]
-		if sw, ok := edge.Edge.Content["slow_weight"]; ok {
+		if sw, ok := edge.To.Content["slow_weight"]; ok {
 			if f, ok := sw.(float64); ok {
 				slowWeight = f
 			}
 		}
-		if fw, ok := edge.Edge.Content["fast_weight"]; ok {
+		if fw, ok := edge.To.Content["fast_weight"]; ok {
 			if f, ok := fw.(float64); ok {
 				fastWeight = f
 			}
@@ -191,7 +191,7 @@ func (d *DualWeightSystem) MigrateExistingEdges(ctx context.Context, patientID i
 
 		for _, pair := range edgeResult.NodePairs {
 			existingWeight := 0.5
-			if w, ok := pair.Edge.Content["weight"]; ok {
+			if w, ok := pair.To.Content["weight"]; ok {
 				if f, ok := w.(float64); ok {
 					existingWeight = f
 				}
@@ -204,7 +204,7 @@ func (d *DualWeightSystem) MigrateExistingEdges(ctx context.Context, patientID i
 			_, err := d.graphAdapter.MergeEdge(ctx, nietzscheInfra.MergeEdgeOpts{
 				FromNodeID: pair.From.ID,
 				ToNodeID:   pair.To.ID,
-				EdgeType:   pair.Edge.Label,
+				EdgeType:   "Association",
 				OnMatchSet: map[string]interface{}{
 					"slow_weight":   slowW,
 					"fast_weight":   fastW,
@@ -274,7 +274,7 @@ func (d *DualWeightSystem) NormalizeWeights(ctx context.Context, patientID int64
 
 		for _, pair := range edgeResult.NodePairs {
 			fw := 0.5
-			if f, ok := pair.Edge.Content["fast_weight"]; ok {
+			if f, ok := pair.To.Content["fast_weight"]; ok {
 				if v, ok := f.(float64); ok {
 					fw = v
 				}
@@ -283,7 +283,7 @@ func (d *DualWeightSystem) NormalizeWeights(ctx context.Context, patientID int64
 			edges = append(edges, edgeInfo{
 				fromID:     pair.From.ID,
 				toID:       pair.To.ID,
-				edgeType:   pair.Edge.Label,
+				edgeType:   "Association",
 				fastWeight: fw,
 			})
 		}
@@ -376,7 +376,7 @@ func (d *DualWeightSystem) GetEdgeWeights(ctx context.Context, nodeA, nodeB stri
 		return nil, fmt.Errorf("edge not found")
 	}
 
-	edge := result.NodePairs[0].Edge
+	edgeContent := result.NodePairs[0].To.Content
 	weights := &EdgeWeights{
 		SlowWeight:     0.5,
 		FastWeight:     0.5,
@@ -384,22 +384,22 @@ func (d *DualWeightSystem) GetEdgeWeights(ctx context.Context, nodeA, nodeB stri
 		CoActivations:  0,
 	}
 
-	if v, ok := edge.Content["slow_weight"]; ok {
+	if v, ok := edgeContent["slow_weight"]; ok {
 		if f, ok := v.(float64); ok {
 			weights.SlowWeight = f
 		}
 	}
-	if v, ok := edge.Content["fast_weight"]; ok {
+	if v, ok := edgeContent["fast_weight"]; ok {
 		if f, ok := v.(float64); ok {
 			weights.FastWeight = f
 		}
 	}
-	if v, ok := edge.Content["weight"]; ok {
+	if v, ok := edgeContent["weight"]; ok {
 		if f, ok := v.(float64); ok {
 			weights.CombinedWeight = f
 		}
 	}
-	if v, ok := edge.Content["co_activation_count"]; ok {
+	if v, ok := edgeContent["co_activation_count"]; ok {
 		switch c := v.(type) {
 		case float64:
 			weights.CoActivations = int(c)

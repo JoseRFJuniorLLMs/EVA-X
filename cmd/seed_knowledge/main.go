@@ -15,12 +15,11 @@ import (
 	"time"
 
 	"eva/internal/brainstem/config"
-	"eva/internal/brainstem/infrastructure/vector"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	"eva/internal/hippocampus/knowledge"
 
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
-	"github.com/qdrant/go-client/qdrant"
 )
 
 type KnowledgeEntry struct {
@@ -75,14 +74,16 @@ func main() {
 		log.Printf("WARN: Config load failed (Qdrant disabled): %v", err)
 	}
 
-	var qdrantClient *vector.QdrantClient
+	var vectorAdapter *nietzscheInfra.VectorAdapter
 	var embedSvc *knowledge.EmbeddingService
 	if cfg != nil {
-		qdrantClient, err = vector.NewQdrantClient(cfg.QdrantHost, cfg.QdrantPort)
-		if err != nil {
-			log.Printf("WARN: Qdrant unavailable: %v", err)
+		nietzscheClient, niErr := nietzscheInfra.NewClient(cfg.NietzscheGRPCAddr)
+		if niErr != nil {
+			log.Printf("WARN: NietzscheDB unavailable: %v", niErr)
 		} else {
-			embedSvc, err = knowledge.NewEmbeddingService(cfg, qdrantClient)
+			defer nietzscheClient.Close()
+			vectorAdapter = nietzscheInfra.NewVectorAdapter(nietzscheClient)
+			embedSvc, err = knowledge.NewEmbeddingService(cfg, vectorAdapter)
 			if err != nil {
 				log.Printf("WARN: Embedding service unavailable: %v", err)
 			}
@@ -122,14 +123,10 @@ func main() {
 	}
 	fmt.Printf("PostgreSQL: %d/%d entries seeded\n", pgCount, len(entries))
 
-	// 2. Qdrant
-	if qdrantClient != nil && embedSvc != nil {
+	// 2. NietzscheDB vector index
+	if vectorAdapter != nil && embedSvc != nil {
 		collName := "eva_self_knowledge"
-		qdrantClient.CreateCollection(ctx, collName, 3072)
-
-		qdCount := 0
-		batchSize := 3
-		var batch []*qdrant.PointStruct
+		nietzscheCount := 0
 
 		for i, e := range entries {
 			text := fmt.Sprintf("%s: %s\n%s", e.Title, e.Summary, e.Content)
@@ -143,8 +140,8 @@ func main() {
 				continue
 			}
 
-			pointID := uint64(time.Now().UnixNano()/1000000 + int64(i))
-			point := vector.CreatePoint(pointID, embedding, map[string]interface{}{
+			pointID := fmt.Sprintf("%d-%d", time.Now().UnixNano()/1000000, i)
+			payload := map[string]interface{}{
 				"key":        e.Key,
 				"type":       e.Type,
 				"title":      e.Title,
@@ -152,32 +149,22 @@ func main() {
 				"content":    e.Content,
 				"location":   e.Location,
 				"importance": int64(e.Importance),
-			})
-
-			batch = append(batch, point)
-
-			if len(batch) >= batchSize {
-				if err := qdrantClient.Upsert(ctx, collName, batch); err != nil {
-					log.Printf("WARN Upsert batch: %v", err)
-				} else {
-					qdCount += len(batch)
-				}
-				batch = batch[:0]
-				time.Sleep(500 * time.Millisecond)
 			}
-		}
 
-		if len(batch) > 0 {
-			if err := qdrantClient.Upsert(ctx, collName, batch); err != nil {
-				log.Printf("WARN Upsert final: %v", err)
+			if err := vectorAdapter.Upsert(ctx, collName, pointID, embedding, payload); err != nil {
+				log.Printf("WARN Upsert [%d] %s: %v", i, e.Key, err)
 			} else {
-				qdCount += len(batch)
+				nietzscheCount++
+			}
+
+			if (i+1)%3 == 0 {
+				time.Sleep(100 * time.Millisecond)
 			}
 		}
 
-		fmt.Printf("Qdrant: %d/%d entries indexed in '%s'\n", qdCount, len(entries), collName)
+		fmt.Printf("NietzscheDB: %d/%d entries indexed in '%s'\n", nietzscheCount, len(entries), collName)
 	} else {
-		fmt.Println("Qdrant: SKIPPED (unavailable)")
+		fmt.Println("NietzscheDB: SKIPPED (unavailable)")
 	}
 }
 

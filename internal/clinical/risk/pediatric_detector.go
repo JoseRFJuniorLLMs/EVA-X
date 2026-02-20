@@ -27,7 +27,7 @@ type PediatricRiskDetector struct {
 // NewPediatricRiskDetector creates a new pediatric risk detector
 func NewPediatricRiskDetector(db *sql.DB) *PediatricRiskDetector {
 	return &PediatricRiskDetector{
-		db:
+		db: db,
 		metaphors: map[string]float64{
 			// Death metaphors
 			"virar estrela":        0.7,

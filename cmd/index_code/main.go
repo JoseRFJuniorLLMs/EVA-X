@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"eva/internal/brainstem/config"
-	"eva/internal/brainstem/infrastructure/vector"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	"eva/internal/cortex/selfawareness"
 	"eva/internal/hippocampus/knowledge"
 
@@ -29,18 +29,18 @@ func main() {
 		log.Fatalf("Config load failed: %v", err)
 	}
 
-	qdrantClient, err := vector.NewQdrantClient(cfg.QdrantHost, cfg.QdrantPort)
+	nietzscheClient, err := nietzscheInfra.NewClient(cfg.NietzscheGRPCAddr)
 	if err != nil {
-		log.Fatalf("Qdrant connect failed: %v", err)
+		log.Fatalf("NietzscheDB connect failed: %v", err)
 	}
-	defer qdrantClient.Close()
+	vectorAdapter := nietzscheInfra.NewVectorAdapter(nietzscheClient)
 
-	embedSvc, err := knowledge.NewEmbeddingService(cfg, qdrantClient)
+	embedSvc, err := knowledge.NewEmbeddingService(cfg, vectorAdapter)
 	if err != nil {
 		log.Fatalf("Embedding service failed: %v", err)
 	}
 
-	svc := selfawareness.NewSelfAwarenessService(nil, qdrantClient, embedSvc, cfg)
+	svc := selfawareness.NewSelfAwarenessService(nil, vectorAdapter, embedSvc, cfg)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
 	defer cancel()

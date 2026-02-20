@@ -478,36 +478,36 @@ func (s *EVAMCPServer) handleToolsList() interface{} {
 			},
 		},
 		{
-			Name:        "eva_query_neo4j",
-			Description: "Executa query Cypher no Neo4j geral (:7687). Grafo de conhecimento: Person, Condition, Medication, Symptom, FDPNNode.",
+			Name:        "eva_query_nietzsche_graph",
+			Description: "Executa query NQL no NietzscheDB (grafo geral). Grafo de conhecimento: Person, Condition, Medication, Symptom, FDPNNode.",
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
-					"query":  {Type: "string", Description: "Query Cypher"},
+					"query":  {Type: "string", Description: "Query NQL"},
 					"params": {Type: "string", Description: "Parametros em JSON object (opcional)"},
 				},
 				Required: []string{"query"},
 			},
 		},
 		{
-			Name:        "eva_query_neo4j_core",
-			Description: "Executa query Cypher no Neo4j Core (:7688). Memoria pessoal da EVA: EvaSelf, CoreMemory, MetaInsight.",
+			Name:        "eva_query_nietzsche_core",
+			Description: "Executa query NQL no NietzscheDB eva_core. Memoria pessoal da EVA: EvaSelf, CoreMemory, MetaInsight.",
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
-					"query":  {Type: "string", Description: "Query Cypher"},
+					"query":  {Type: "string", Description: "Query NQL"},
 					"params": {Type: "string", Description: "Parametros em JSON object (opcional)"},
 				},
 				Required: []string{"query"},
 			},
 		},
 		{
-			Name:        "eva_query_qdrant",
-			Description: "Busca vetorial no Qdrant. 20+ colecoes com embeddings 3072-dim.",
+			Name:        "eva_query_nietzsche_vector",
+			Description: "Busca vetorial no NietzscheDB (KNN semantico). 20+ colecoes com embeddings 3072-dim.",
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
-					"collection": {Type: "string", Description: "Nome da colecao Qdrant"},
+					"collection": {Type: "string", Description: "Nome da colecao NietzscheDB"},
 					"query":      {Type: "string", Description: "Texto para busca semantica"},
 					"limit":      {Type: "string", Description: "Limite de resultados (default: 5)"},
 				},
@@ -775,9 +775,9 @@ var mcpToEVA = map[string]string{
 	"eva_web_search":     "web_search",
 	// Databases
 	"eva_query_postgres":   "query_postgresql",
-	"eva_query_neo4j":      "query_neo4j",
-	"eva_query_neo4j_core": "mcp_query_neo4j_core",
-	"eva_query_qdrant":     "query_qdrant",
+	"eva_query_nietzsche_graph":  "query_nietzsche_graph",
+	"eva_query_nietzsche_core":   "mcp_query_nietzsche_core",
+	"eva_query_nietzsche_vector": "query_nietzsche_vector",
 	// Code & Skills
 	"eva_execute_code": "execute_code",
 	"eva_create_skill": "create_skill",
