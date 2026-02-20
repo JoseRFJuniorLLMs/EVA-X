@@ -367,9 +367,19 @@ func (e *CoreMemoryEngine) recordMemory(ctx context.Context, memory CoreMemory) 
 	}
 
 	// 2. Create the CoreMemory node
+	// Convert float32 embedding to float64 for NietzscheDB coords
+	var coords []float64
+	if len(memory.Embedding) > 0 {
+		coords = make([]float64, len(memory.Embedding))
+		for i, f := range memory.Embedding {
+			coords[i] = float64(f)
+		}
+	}
+
 	memNode, err := e.graphAdapter.InsertNode(ctx, nietzsche.InsertNodeOpts{
 		Collection: "eva_core",
 		ID:         string(memory.ID),
+		Coords:     coords,
 		Content: map[string]interface{}{
 			"id":                  string(memory.ID),
 			"memory_type":         string(memory.MemoryType),
