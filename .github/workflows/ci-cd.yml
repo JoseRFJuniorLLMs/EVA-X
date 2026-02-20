@@ -21,6 +21,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Checkout NietzscheDB SDK
+        uses: actions/checkout@v4
+        with:
+          repository: JoseRFJuniorLLMs/NietzscheDB
+          path: ../Nietzsche-Database
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
