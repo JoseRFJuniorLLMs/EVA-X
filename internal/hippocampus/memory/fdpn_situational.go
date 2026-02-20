@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"log"
 
-	"eva-mind/internal/cortex/situation"
+	"eva/internal/cortex/situation"
 )
 
 // StreamingPrimeWithSituation ativa subgrafos com modulação situacional

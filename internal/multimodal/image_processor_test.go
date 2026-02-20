@@ -6,7 +6,7 @@ package multimodal_test
 import (
 	"bytes"
 	"context"
-	"eva-mind/internal/multimodal"
+	"eva/internal/multimodal"
 	"image"
 	"image/color"
 	"image/jpeg"

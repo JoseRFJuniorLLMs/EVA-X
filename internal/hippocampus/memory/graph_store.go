@@ -5,8 +5,8 @@ package memory
 
 import (
 	"context"
-	"eva-mind/internal/brainstem/config"
-	"eva-mind/internal/brainstem/infrastructure/graph"
+	"eva/internal/brainstem/config"
+	"eva/internal/brainstem/infrastructure/graph"
 	"fmt"
 	"log"
 	"time"

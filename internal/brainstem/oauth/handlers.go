@@ -8,7 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
-	"eva-mind/internal/brainstem/database"
+	"eva/internal/brainstem/database"
 	"log"
 	"net/http"
 )

@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"time"
 
-	"eva-mind/internal/brainstem/database"
-	"eva-mind/internal/brainstem/infrastructure/vector"
+	"eva/internal/brainstem/database"
+	"eva/internal/brainstem/infrastructure/vector"
 
 	"github.com/google/uuid"
 	"github.com/qdrant/go-client/qdrant"

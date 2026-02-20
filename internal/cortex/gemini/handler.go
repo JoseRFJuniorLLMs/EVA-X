@@ -11,11 +11,11 @@ import (
 	"log"
 	"regexp"
 
-	"eva-mind/internal/brainstem/config"
-	"eva-mind/internal/brainstem/database"
-	"eva-mind/internal/brainstem/infrastructure/graph"
-	"eva-mind/internal/brainstem/infrastructure/vector"
-	"eva-mind/internal/brainstem/infrastructure/workerpool"
+	"eva/internal/brainstem/config"
+	"eva/internal/brainstem/database"
+	"eva/internal/brainstem/infrastructure/graph"
+	"eva/internal/brainstem/infrastructure/vector"
+	"eva/internal/brainstem/infrastructure/workerpool"
 )
 
 type Handler struct {

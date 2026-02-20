@@ -5,8 +5,8 @@ package personality
 
 import (
 	"context"
-	"eva-mind/internal/hippocampus/stories"
-	"eva-mind/pkg/types"
+	"eva/internal/hippocampus/stories"
+	"eva/pkg/types"
 	"fmt"
 )
 

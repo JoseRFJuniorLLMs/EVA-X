@@ -8,11 +8,11 @@ import (
 	"database/sql"
 	"time"
 
-	"eva-mind/internal/brainstem/infrastructure/graph"
-	"eva-mind/internal/brainstem/infrastructure/vector"
-	"eva-mind/internal/hippocampus/memory"
-	"eva-mind/internal/memory/consolidation"
-	"eva-mind/internal/memory/krylov"
+	"eva/internal/brainstem/infrastructure/graph"
+	"eva/internal/brainstem/infrastructure/vector"
+	"eva/internal/hippocampus/memory"
+	"eva/internal/memory/consolidation"
+	"eva/internal/memory/krylov"
 
 	"github.com/rs/zerolog/log"
 )

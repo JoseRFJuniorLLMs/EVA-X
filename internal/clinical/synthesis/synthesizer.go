@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"eva-mind/internal/clinical/goals"
-	"eva-mind/internal/clinical/notes"
-	"eva-mind/internal/clinical/risk"
-	"eva-mind/internal/clinical/silence"
+	"eva/internal/clinical/goals"
+	"eva/internal/clinical/notes"
+	"eva/internal/clinical/risk"
+	"eva/internal/clinical/silence"
 
 	"github.com/rs/zerolog/log"
 )

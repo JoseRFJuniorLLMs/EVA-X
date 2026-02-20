@@ -2,9 +2,9 @@ package main
 
 import (
 	"context"
-	"eva-mind/internal/brainstem/config"
-	"eva-mind/internal/brainstem/infrastructure/vector"
-	"eva-mind/internal/hippocampus/memory"
+	"eva/internal/brainstem/config"
+	"eva/internal/brainstem/infrastructure/vector"
+	"eva/internal/hippocampus/memory"
 	"fmt"
 	"log"
 	"os"

@@ -7,7 +7,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
-	"eva-mind/internal/brainstem/config"
+	"eva/internal/brainstem/config"
 	"fmt"
 	"io"
 	"net/http"

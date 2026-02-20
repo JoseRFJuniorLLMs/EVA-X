@@ -5,9 +5,9 @@ package knowledge
 
 import (
 	"context"
-	"eva-mind/internal/brainstem/config"
-	"eva-mind/internal/cortex/gemini"
-	"eva-mind/internal/brainstem/infrastructure/graph"
+	"eva/internal/brainstem/config"
+	"eva/internal/cortex/gemini"
+	"eva/internal/brainstem/infrastructure/graph"
 	"fmt"
 )
 

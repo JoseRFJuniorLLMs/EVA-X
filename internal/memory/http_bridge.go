@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"time"
 
-	"eva-mind/internal/memory/krylov"
+	"eva/internal/memory/krylov"
 )
 
 // KrylovHTTPBridge expoe o KrylovMemoryManager via HTTP/JSON

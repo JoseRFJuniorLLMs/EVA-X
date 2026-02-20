@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"eva-mind/internal/brainstem/infrastructure/graph"
+	"eva/internal/brainstem/infrastructure/graph"
 
 	"github.com/rs/zerolog/log"
 )

@@ -10,7 +10,7 @@ import (
 	"net"
 	"time"
 
-	"eva-mind/internal/memory/krylov"
+	"eva/internal/memory/krylov"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"

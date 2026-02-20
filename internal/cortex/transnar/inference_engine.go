@@ -5,9 +5,9 @@ package transnar
 
 import (
 	"context"
-	"eva-mind/internal/cortex/lacan"
-	"eva-mind/internal/hippocampus/memory"
-	"eva-mind/internal/cortex/personality"
+	"eva/internal/cortex/lacan"
+	"eva/internal/hippocampus/memory"
+	"eva/internal/cortex/personality"
 	"fmt"
 	"log"
 )

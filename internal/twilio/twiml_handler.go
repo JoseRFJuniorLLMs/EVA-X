@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"text/template"
 
-	"eva-mind/internal/brainstem/config"
+	"eva/internal/brainstem/config"
 )
 
 type TwimlHandlerFunc struct {

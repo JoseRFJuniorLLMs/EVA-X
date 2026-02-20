@@ -11,10 +11,10 @@ import (
 	"runtime/debug"
 	"time"
 
-	"eva-mind/internal/brainstem/config"
-	"eva-mind/internal/motor/email"
-	"eva-mind/internal/cortex/gemini"
-	"eva-mind/internal/brainstem/push"
+	"eva/internal/brainstem/config"
+	"eva/internal/motor/email"
+	"eva/internal/cortex/gemini"
+	"eva/internal/brainstem/push"
 )
 
 type Scheduler struct {

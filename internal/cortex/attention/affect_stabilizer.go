@@ -3,7 +3,7 @@
 
 package attention
 
-import "eva-mind/internal/cortex/attention/models"
+import "eva/internal/cortex/attention/models"
 
 // AffectStabilizer - Mantém afeto estável (não espelha usuário)
 type AffectStabilizer struct {

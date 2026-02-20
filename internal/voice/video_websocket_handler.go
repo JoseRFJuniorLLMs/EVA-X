@@ -5,7 +5,7 @@ package voice
 
 import (
 	"encoding/json"
-	"eva-mind/internal/multimodal"
+	"eva/internal/multimodal"
 	"net/http"
 	"time"
 

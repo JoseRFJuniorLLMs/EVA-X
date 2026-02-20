@@ -4,9 +4,9 @@
 package voice_test
 
 import (
-	"eva-mind/internal/gemini"
-	"eva-mind/internal/multimodal"
-	"eva-mind/internal/voice"
+	"eva/internal/gemini"
+	"eva/internal/multimodal"
+	"eva/internal/voice"
 	"testing"
 	"time"
 

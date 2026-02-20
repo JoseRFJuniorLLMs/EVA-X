@@ -7,11 +7,11 @@ import (
 	"context"
 	"fmt"
 
-	"eva-mind/internal/brainstem/config"
-	"eva-mind/internal/brainstem/database"
-	"eva-mind/internal/gemini"
-	"eva-mind/internal/twilio"
-	"eva-mind/pkg/models"
+	"eva/internal/brainstem/config"
+	"eva/internal/brainstem/database"
+	"eva/internal/gemini"
+	"eva/internal/twilio"
+	"eva/pkg/models"
 
 	"github.com/rs/zerolog"
 )

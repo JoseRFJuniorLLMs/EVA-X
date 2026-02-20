@@ -7,7 +7,7 @@ import (
 	"context"
 	"time"
 
-	"eva-mind/internal/memory"
+	"eva/internal/memory"
 
 	"github.com/rs/zerolog/log"
 )

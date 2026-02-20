@@ -11,7 +11,7 @@ import (
 	"sort"
 	"sync"
 
-	"eva-mind/internal/brainstem/infrastructure/graph"
+	"eva/internal/brainstem/infrastructure/graph"
 
 	"gonum.org/v1/gonum/mat"
 )

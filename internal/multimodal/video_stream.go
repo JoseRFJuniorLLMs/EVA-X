@@ -5,7 +5,7 @@ package multimodal
 
 import (
 	"context"
-	"eva-mind/internal/gemini"
+	"eva/internal/gemini"
 	"fmt"
 	"log"
 	"sync"

@@ -6,7 +6,7 @@ package knowledge
 import (
 	"context"
 	"encoding/json"
-	"eva-mind/internal/brainstem/database"
+	"eva/internal/brainstem/database"
 	"fmt"
 	"log"
 )

@@ -6,7 +6,7 @@ package lacan
 import (
 	"context"
 	"database/sql"
-	"eva-mind/internal/brainstem/infrastructure/graph"
+	"eva/internal/brainstem/infrastructure/graph"
 	"strings"
 	"time"
 )

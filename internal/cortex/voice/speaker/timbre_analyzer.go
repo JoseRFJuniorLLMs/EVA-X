@@ -4,7 +4,7 @@
 package speaker
 
 import (
-	"eva-mind/internal/cortex/voice/dsp"
+	"eva/internal/cortex/voice/dsp"
 	"math"
 )
 

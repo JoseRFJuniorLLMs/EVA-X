@@ -12,8 +12,8 @@ import (
 	"os"
 	"time"
 
-	"eva-mind/internal/motor/email"
-	"eva-mind/internal/motor/sms"
+	"eva/internal/motor/email"
+	"eva/internal/motor/sms"
 
 	"github.com/rs/zerolog/log"
 )

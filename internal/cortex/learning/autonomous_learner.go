@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"eva-mind/internal/brainstem/config"
-	"eva-mind/internal/brainstem/infrastructure/vector"
-	"eva-mind/internal/hippocampus/knowledge"
+	"eva/internal/brainstem/config"
+	"eva/internal/brainstem/infrastructure/vector"
+	"eva/internal/hippocampus/knowledge"
 
 	"github.com/qdrant/go-client/qdrant"
 	"github.com/rs/zerolog/log"

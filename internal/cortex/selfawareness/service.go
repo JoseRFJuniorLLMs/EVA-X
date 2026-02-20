@@ -16,9 +16,9 @@ import (
 	"strings"
 	"time"
 
-	"eva-mind/internal/brainstem/config"
-	"eva-mind/internal/brainstem/infrastructure/vector"
-	"eva-mind/internal/hippocampus/knowledge"
+	"eva/internal/brainstem/config"
+	"eva/internal/brainstem/infrastructure/vector"
+	"eva/internal/hippocampus/knowledge"
 
 	"github.com/qdrant/go-client/qdrant"
 	"github.com/rs/zerolog/log"
@@ -320,7 +320,7 @@ func buildRichSummary(info *FileInfo, relPath string) string {
 	// Imports (only eva-mind internal)
 	var internalImports []string
 	for _, imp := range info.Imports {
-		if strings.HasPrefix(imp, "eva-mind/") {
+		if strings.HasPrefix(imp, "eva/") {
 			internalImports = append(internalImports, imp)
 		}
 	}

@@ -4,7 +4,7 @@
 package attention
 
 import (
-	"eva-mind/internal/cortex/attention/models"
+	"eva/internal/cortex/attention/models"
 	"strings"
 )
 

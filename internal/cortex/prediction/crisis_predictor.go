@@ -5,7 +5,7 @@ package prediction
 
 import (
 	"database/sql"
-	"eva-mind/internal/cortex/explainability"
+	"eva/internal/cortex/explainability"
 	"fmt"
 	"log"
 )

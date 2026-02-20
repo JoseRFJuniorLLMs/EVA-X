@@ -5,7 +5,7 @@ package main
 
 import (
 	"encoding/json"
-	"eva-mind/internal/cortex/gemini"
+	"eva/internal/cortex/gemini"
 	"net/http"
 
 	"github.com/rs/zerolog/log"

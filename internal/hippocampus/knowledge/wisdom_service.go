@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"eva-mind/internal/brainstem/infrastructure/vector"
+	"eva/internal/brainstem/infrastructure/vector"
 
 	"github.com/qdrant/go-client/qdrant"
 )

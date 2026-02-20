@@ -14,7 +14,7 @@ import (
 	"math"
 	"time"
 
-	"eva-mind/internal/brainstem/infrastructure/graph"
+	"eva/internal/brainstem/infrastructure/graph"
 )
 
 // HebbianRealTime atualiza pesos de arestas em tempo real

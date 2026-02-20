@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"log"
 
-	"eva-mind/internal/brainstem/push"
+	"eva/internal/brainstem/push"
 )
 
 // NotificationService gerencia notificações para cuidadores

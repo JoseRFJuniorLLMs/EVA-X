@@ -6,7 +6,7 @@ package memory
 import (
 	"context"
 	"database/sql"
-	"eva-mind/internal/brainstem/infrastructure/vector"
+	"eva/internal/brainstem/infrastructure/vector"
 	"fmt"
 	"log"
 	"math"

@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"strings"
 
-	svc "eva-mind/internal/cortex/selfawareness"
-	"eva-mind/internal/swarm"
+	svc "eva/internal/cortex/selfawareness"
+	"eva/internal/swarm"
 
 	"github.com/rs/zerolog/log"
 )

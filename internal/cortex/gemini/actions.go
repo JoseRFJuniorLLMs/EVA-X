@@ -5,7 +5,7 @@ package gemini
 
 import (
 	"database/sql"
-	"eva-mind/internal/brainstem/push"
+	"eva/internal/brainstem/push"
 	"fmt"
 	"log"
 	"time"

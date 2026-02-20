@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"eva-mind/internal/brainstem/infrastructure/graph"
+	"eva/internal/brainstem/infrastructure/graph"
 )
 
 // SynaptogenesisEngine implementa auto-organizacao fractal de conexoes no grafo

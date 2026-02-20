@@ -6,8 +6,8 @@ package ingestion
 import (
 	"context"
 	"encoding/json"
-	"eva-mind/internal/brainstem/config"
-	"eva-mind/internal/cortex/gemini"
+	"eva/internal/brainstem/config"
+	"eva/internal/cortex/gemini"
 	"fmt"
 	"log"
 	"time"

@@ -6,7 +6,7 @@ package gemini
 import (
 	"bytes"
 	"encoding/json"
-	"eva-mind/internal/brainstem/config"
+	"eva/internal/brainstem/config"
 	"fmt"
 	"net/http"
 	"strings"

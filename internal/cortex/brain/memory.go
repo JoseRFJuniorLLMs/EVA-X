@@ -5,8 +5,8 @@ package brain
 
 import (
 	"context"
-	"eva-mind/internal/hippocampus/memory"
-	"eva-mind/pkg/types"
+	"eva/internal/hippocampus/memory"
+	"eva/pkg/types"
 	"fmt"
 	"log"
 	"strings"
