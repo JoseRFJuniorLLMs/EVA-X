@@ -87,8 +87,20 @@ func (a *Agent) handleAlertFamily(ctx context.Context, call swarm.ToolCall) (*sw
 	log.Printf("🚨 [EMERGENCY] Alert família - reason=%s severity=%s userID=%d",
 		reason, severity, call.UserID)
 
-	// TODO: Integrar com motor/actions/actions.go AlertFamilyWithSeverity
-	// Por enquanto, retorna instrução para o motor layer
+	// Enviar notificacao REAL para cuidadores (push + email + SMS)
+	alertSent := false
+	if deps := a.Deps(); deps != nil && deps.AlertFamily != nil {
+		if err := deps.AlertFamily(ctx, call.UserID, reason, severity); err != nil {
+			log.Printf("❌ [EMERGENCY] Falha ao alertar familia: %v", err)
+		} else {
+			alertSent = true
+			log.Printf("✅ [EMERGENCY] Familia alertada com sucesso para userID=%d", call.UserID)
+		}
+	} else {
+		log.Printf("⚠️ [EMERGENCY] AlertFamily nao configurado — notificacao NAO enviada!")
+	}
+
+	_ = alertSent
 	result := &swarm.ToolResult{
 		Success:     true,
 		Message:     fmt.Sprintf("Alerta enviado à família: %s (severidade: %s)", reason, severity),

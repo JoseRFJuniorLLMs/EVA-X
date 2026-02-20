@@ -25,19 +25,41 @@ type ExecResult struct {
 type Service struct {
 	workDir    string
 	maxTimeout time.Duration
+	useDocker  bool
 }
 
-// NewService cria sandbox com diretório de trabalho isolado
+// NewService cria sandbox com diretório de trabalho isolado.
+// Detecta automaticamente se Docker está disponível para isolamento.
 func NewService(workDir string) *Service {
 	os.MkdirAll(workDir, 0755)
+
+	// Verificar se Docker está disponível
+	useDocker := false
+	if _, err := exec.LookPath("docker"); err == nil {
+		useDocker = true
+	}
+
 	return &Service{
 		workDir:    workDir,
 		maxTimeout: 2 * time.Minute,
+		useDocker:  useDocker,
 	}
 }
 
-// Execute executa código na linguagem especificada
+// Execute executa código na linguagem especificada.
+// Se Docker estiver disponível, executa dentro de container isolado.
+// Caso contrário, faz fallback para execução direta.
 func (s *Service) Execute(ctx context.Context, language, code string, timeout time.Duration) (*ExecResult, error) {
+	if s.useDocker {
+		return s.executeInDocker(ctx, language, code, timeout)
+	}
+
+	// Fallback: execução direta (sem Docker)
+	return s.executeDirect(ctx, language, code, timeout)
+}
+
+// executeDirect executa código diretamente no host (fallback sem Docker)
+func (s *Service) executeDirect(ctx context.Context, language, code string, timeout time.Duration) (*ExecResult, error) {
 	switch strings.ToLower(language) {
 	case "bash", "sh", "shell":
 		return s.executeBash(ctx, code, timeout)
@@ -48,6 +70,82 @@ func (s *Service) Execute(ctx context.Context, language, code string, timeout ti
 	default:
 		return nil, fmt.Errorf("linguagem não suportada: %s (use bash, python ou node)", language)
 	}
+}
+
+// executeInDocker executa código dentro de um container Docker isolado
+func (s *Service) executeInDocker(ctx context.Context, language, code string, timeout time.Duration) (*ExecResult, error) {
+	if timeout <= 0 || timeout > s.maxTimeout {
+		timeout = s.maxTimeout
+	}
+
+	// Determinar imagem e comando baseado na linguagem
+	var image, shell, flag string
+	switch strings.ToLower(language) {
+	case "bash", "sh", "shell":
+		image = "alpine:3.20"
+		shell = "sh"
+		flag = "-c"
+	case "python", "python3", "py":
+		image = "python:3.12-slim"
+		shell = "python"
+		flag = "-c"
+	case "node", "javascript", "js":
+		image = "node:20-slim"
+		shell = "node"
+		flag = "-e"
+	default:
+		return nil, fmt.Errorf("linguagem não suportada: %s (use bash, python ou node)", language)
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	// Security: bloquear comandos destrutivos para bash
+	if strings.ToLower(language) == "bash" || strings.ToLower(language) == "sh" || strings.ToLower(language) == "shell" {
+		normalized := strings.ToLower(code)
+		dangerous := []string{"rm -rf /", "mkfs", "dd if=", ":(){", "fork bomb", "shutdown", "reboot", "init 0"}
+		for _, d := range dangerous {
+			if strings.Contains(normalized, d) {
+				return nil, fmt.Errorf("comando bloqueado por segurança: contém '%s'", d)
+			}
+		}
+	}
+
+	// Montar comando Docker com flags de isolamento
+	args := []string{
+		"run", "--rm",
+		"--network", "none",
+		"--memory", "256m",
+		"--cpus", "0.5",
+		"-v", s.workDir + ":/workspace",
+		"-w", "/workspace",
+		image,
+		shell, flag, code,
+	}
+
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.Env = s.safeEnv()
+
+	start := time.Now()
+	output, err := cmd.CombinedOutput()
+	duration := time.Since(start)
+
+	result := &ExecResult{
+		Output:   truncateOutput(string(output), 50000),
+		Duration: duration,
+		Language: language,
+	}
+
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			result.ExitCode = exitErr.ExitCode()
+		} else {
+			// Se Docker falhar (ex: imagem não encontrada), tentar fallback direto
+			return s.executeDirect(ctx, language, code, timeout)
+		}
+	}
+
+	return result, nil
 }
 
 func (s *Service) executeBash(ctx context.Context, script string, timeout time.Duration) (*ExecResult, error) {

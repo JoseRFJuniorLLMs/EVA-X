@@ -70,6 +70,40 @@ func (db *DB) GetPendingAgendamentos(limit int) ([]Agendamento, error) {
 	return agendamentos, nil
 }
 
+// GetPendingAgendamentosByIdoso retorna agendamentos pendentes filtrados por idoso_id
+func (db *DB) GetPendingAgendamentosByIdoso(idosoID int64, limit int) ([]Agendamento, error) {
+	query := `
+		SELECT id, idoso_id, tipo, data_hora_agendada, data_hora_realizada, status, prioridade, dados_tarefa, max_retries, tentativas_realizadas
+		FROM agendamentos
+		WHERE status = 'agendado'
+		  AND idoso_id = $1
+		  AND data_hora_agendada <= $2
+		ORDER BY data_hora_agendada ASC
+		LIMIT $3
+	`
+
+	rows, err := db.Conn.Query(query, idosoID, time.Now(), limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query agendamentos by idoso: %w", err)
+	}
+	defer rows.Close()
+
+	var agendamentos []Agendamento
+	for rows.Next() {
+		var a Agendamento
+		err := rows.Scan(
+			&a.ID, &a.IdosoID, &a.Tipo, &a.DataHoraAgendada, &a.DataHoraRealizada,
+			&a.Status, &a.Prioridade, &a.DadosTarefa, &a.MaxRetries, &a.TentativasRealizadas,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan: %w", err)
+		}
+		agendamentos = append(agendamentos, a)
+	}
+
+	return agendamentos, nil
+}
+
 func (db *DB) GetIdoso(id int64) (*Idoso, error) {
 	query := `
 		SELECT 

@@ -51,6 +51,7 @@ type AttendantConnection struct {
 	UserType string
 	UserID   string
 	UserName string
+	writeMu  sync.Mutex // per-connection write mutex (gorilla/websocket nao e thread-safe para writes)
 }
 
 // AttendantPool manages web attendants waiting for calls
@@ -98,11 +99,17 @@ func (ap *AttendantPool) Remove(conn *websocket.Conn) {
 
 func (ap *AttendantPool) Broadcast(message map[string]interface{}) {
 	ap.mu.RLock()
-	defer ap.mu.RUnlock()
+	attendants := make([]*AttendantConnection, 0, len(ap.attendants))
+	for _, a := range ap.attendants {
+		attendants = append(attendants, a)
+	}
+	ap.mu.RUnlock()
 
-	log.Printf("📢 Broadcasting to %d admin attendants", len(ap.attendants))
-	for conn, attendant := range ap.attendants {
-		err := conn.WriteJSON(message)
+	log.Printf("📢 Broadcasting to %d admin attendants", len(attendants))
+	for _, attendant := range attendants {
+		attendant.writeMu.Lock()
+		err := attendant.Conn.WriteJSON(message)
+		attendant.writeMu.Unlock()
 		if err != nil {
 			log.Printf("⚠️ Failed to broadcast to %s: %v", attendant.UserName, err)
 		} else {

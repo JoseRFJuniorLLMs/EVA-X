@@ -30,7 +30,7 @@ __pycache__/
 .venv/
 venv/
 
-# Environment
+# Environment & Secrets
 .env
 *.env
 *.env.local
@@ -39,6 +39,7 @@ env_backup.txt
 *_backup.txt
 serviceAccountKey.json
 cloud-run-env.yaml
+.mcp.json
 
 # Scripts to ignore
 deploy.sh

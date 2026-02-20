@@ -115,9 +115,15 @@ func (h *HebbianRealTime) updatePairWeight(ctx context.Context, nodeA, nodeB str
 
 	if len(records) > 0 {
 		relExists = true
-		// TODO: Extrair corretamente do record baseado no driver Neo4j
-		currentWeight = 0.5 // Placeholder
-		lastActivated = time.Now().Add(-24 * time.Hour)
+		rec := records[0]
+		if v, ok := rec.Get("currentWeight"); ok {
+			currentWeight, _ = v.(float64)
+		}
+		if v, ok := rec.Get("lastActivated"); ok {
+			if t, ok := v.(time.Time); ok {
+				lastActivated = t
+			}
+		}
 	} else {
 		// Aresta não existe, será criada
 		relExists = false
@@ -307,12 +313,28 @@ func (h *HebbianRealTime) GetStatistics(ctx context.Context, patientID int64) (*
 	}
 
 	if len(records) > 0 {
-		// TODO: Extrair do record baseado no driver Neo4j
-		stats.TotalEdges = 0
-		stats.AvgWeight = 0.5
-		stats.MaxWeight = 1.0
-		stats.MinWeight = 0.0
-		stats.TotalCoActivations = 0
+		rec := records[0]
+		if v, ok := rec.Get("totalEdges"); ok {
+			stats.TotalEdges = int(v.(int64))
+		}
+		if v, ok := rec.Get("avgWeight"); ok {
+			if f, ok := v.(float64); ok {
+				stats.AvgWeight = f
+			}
+		}
+		if v, ok := rec.Get("maxWeight"); ok {
+			if f, ok := v.(float64); ok {
+				stats.MaxWeight = f
+			}
+		}
+		if v, ok := rec.Get("minWeight"); ok {
+			if f, ok := v.(float64); ok {
+				stats.MinWeight = f
+			}
+		}
+		if v, ok := rec.Get("totalCoActivations"); ok {
+			stats.TotalCoActivations = int(v.(int64))
+		}
 	}
 
 	return stats, nil

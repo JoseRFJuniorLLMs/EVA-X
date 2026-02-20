@@ -6,8 +6,12 @@ package tools
 import (
 	"context"
 	"eva-mind/internal/brainstem/database"
+	"eva-mind/internal/swarm"
+	"eva-mind/internal/brainstem/infrastructure/graph"
+	"eva-mind/internal/brainstem/infrastructure/vector"
 	"eva-mind/internal/brainstem/oauth"
 	"eva-mind/internal/brainstem/push"
+	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
 	"eva-mind/internal/cortex/alert"
 	"eva-mind/internal/hippocampus/habits"
 	"eva-mind/internal/hippocampus/spaced"
@@ -32,6 +36,15 @@ import (
 
 // WebSearchFunc tipo de função para pesquisa web (evita import cycle com cortex/learning)
 type WebSearchFunc func(ctx context.Context, topic string) (interface{}, error)
+
+// EmbedFunc tipo de função para gerar embeddings (evita import cycle com knowledge)
+type EmbedFunc func(ctx context.Context, text string) ([]float32, error)
+
+// SwarmRouter interface para rotear tool calls ao swarm orchestrator
+// Desacopla ToolsHandler de swarm.Orchestrator para evitar dependencia circular
+type SwarmRouter interface {
+	Route(ctx context.Context, call swarm.ToolCall) (*swarm.ToolResult, error)
+}
 
 type ToolsHandler struct {
 	db                *database.DB
@@ -59,7 +72,12 @@ type ToolsHandler struct {
 	smartHomeService  *smarthome.Service              // ✅ Smart Home (Home Assistant)
 	webhookService    *webhooks.Service               // ✅ Webhooks
 	skillsService     *skills.Service                 // ✅ Runtime Skills
+	neo4jClient       *graph.Neo4jClient               // ✅ Neo4j geral (porta 7687 — grafo de conhecimento)
+	neo4jCoreDriver   neo4j.DriverWithContext         // ✅ Neo4j Core (porta 7688 — memória pessoal EVA)
+	qdrantClient      *vector.QdrantClient            // ✅ Qdrant (busca vetorial)
+	embedFunc         EmbedFunc                       // ✅ Embedding func (text → vector para Qdrant)
 	debugMode         bool                            // ✅ Novas tools só habilitadas em debug
+	swarmRouter       SwarmRouter                     // ✅ Bridge para swarm orchestrator (tools sem case no switch)
 	NotifyFunc        func(idosoID int64, msgType string, payload interface{})
 }
 
@@ -177,9 +195,33 @@ func (h *ToolsHandler) SetSkillsService(svc *skills.Service) {
 	h.skillsService = svc
 }
 
+// SetNeo4jClient configura o client Neo4j geral (porta 7687 — grafo de conhecimento)
+func (h *ToolsHandler) SetNeo4jClient(client *graph.Neo4jClient) {
+	h.neo4jClient = client
+}
+
+// SetQdrantClient configura o client Qdrant para busca vetorial
+func (h *ToolsHandler) SetQdrantClient(client *vector.QdrantClient) {
+	h.qdrantClient = client
+}
+
+// SetEmbedFunc configura a funcao de embeddings (text → vector)
+func (h *ToolsHandler) SetEmbedFunc(fn EmbedFunc) {
+	h.embedFunc = fn
+}
+
+// SetNeo4jCoreDriver configura o driver Neo4j Core (porta 7688 — memória pessoal da EVA)
+func (h *ToolsHandler) SetNeo4jCoreDriver(driver neo4j.DriverWithContext) {
+	h.neo4jCoreDriver = driver
+}
+
 // SetDebugMode habilita/desabilita novas ferramentas (debug only)
 func (h *ToolsHandler) SetDebugMode(enabled bool) {
 	h.debugMode = enabled
+}
+
+func (h *ToolsHandler) SetSwarmRouter(router SwarmRouter) {
+	h.swarmRouter = router
 }
 
 // debugOnlyTools — tools novas que só funcionam em modo debug
@@ -201,6 +243,9 @@ var debugOnlyTools = map[string]bool{
 	"smart_home_control": true, "smart_home_status": true,
 	"create_webhook": true, "list_webhooks": true, "trigger_webhook": true,
 	"create_skill": true, "list_skills": true, "execute_skill": true, "delete_skill": true,
+	// Fase 3 — MCP Bridge tools
+	"mcp_remember": true, "mcp_recall": true, "mcp_teach_eva": true, "mcp_get_identity": true,
+	"mcp_learn_topic": true, "mcp_query_neo4j_core": true, "mcp_read_source": true, "mcp_edit_source": true,
 }
 
 // getGoogleAccessToken obtém um access token válido para Google APIs
@@ -249,6 +294,15 @@ func (h *ToolsHandler) ExecuteTool(name string, args map[string]interface{}, ido
 		return map[string]interface{}{
 			"status":  "bloqueado",
 			"message": fmt.Sprintf("Ferramenta '%s' disponível apenas em modo debug/development", name),
+		}, nil
+	}
+
+	// 🚦 Rate limiting
+	if err := checkRateLimit(name, idosoID); err != nil {
+		log.Printf("🚦 [TOOLS] Rate limit: %s para Idoso %d — %v", name, idosoID, err)
+		return map[string]interface{}{
+			"status":  "rate_limited",
+			"message": err.Error(),
 		}, nil
 	}
 
@@ -962,7 +1016,59 @@ func (h *ToolsHandler) ExecuteTool(name string, args map[string]interface{}, ido
 	case "delete_skill":
 		return h.handleDeleteSkill(idosoID, args)
 
+	// ============================================================================
+	// 🔌 MCP BRIDGE — Tools expostas via MCP Server (Claude Code)
+	// ============================================================================
+
+	case "mcp_remember":
+		return h.handleMCPRemember(idosoID, args)
+
+	case "mcp_recall":
+		return h.handleMCPRecall(idosoID, args)
+
+	case "mcp_teach_eva":
+		return h.handleMCPTeachEva(idosoID, args)
+
+	case "mcp_get_identity":
+		return h.handleMCPGetIdentity(idosoID, args)
+
+	case "mcp_learn_topic":
+		return h.handleMCPLearnTopic(idosoID, args)
+
+	case "mcp_query_neo4j_core":
+		return h.handleMCPQueryNeo4jCore(idosoID, args)
+
+	case "mcp_read_source":
+		return h.handleMCPReadSource(idosoID, args)
+
+	case "mcp_edit_source":
+		return h.handleMCPEditSource(idosoID, args)
+
 	default:
+		// Bridge para swarm orchestrator — tools registradas nos swarm agents
+		// mas sem case explicito no switch (ex: open_camera_analysis, change_voice, etc)
+		if h.swarmRouter != nil {
+			swarmCall := swarm.ToolCall{
+				Name:   name,
+				Args:   args,
+				UserID: idosoID,
+			}
+			swarmResult, swarmErr := h.swarmRouter.Route(context.Background(), swarmCall)
+			if swarmErr == nil && swarmResult != nil {
+				log.Printf("[SWARM-BRIDGE] Tool '%s' executada via swarm orchestrator", name)
+				result := map[string]interface{}{
+					"success": swarmResult.Success,
+					"message": swarmResult.Message,
+				}
+				if swarmResult.Data != nil {
+					result["data"] = swarmResult.Data
+				}
+				return result, nil
+			}
+			if swarmErr != nil {
+				log.Printf("[SWARM-BRIDGE] Swarm falhou para '%s': %v", name, swarmErr)
+			}
+		}
 		return nil, fmt.Errorf("ferramenta desconhecida: %s", name)
 	}
 }
@@ -1001,27 +1107,19 @@ func (h *ToolsHandler) handleGetVitals(idosoID int64, tipo string, limit int) (m
 }
 
 func (h *ToolsHandler) handleGetAgendamentos(idosoID int64, limit int) (map[string]interface{}, error) {
-	agendamentos, err := h.db.GetPendingAgendamentos(limit) // Precisa filtrar por idosoID na query idealmente!
-	// A query atual em queries.go 'GetPendingAgendamentos' NÃO filtra por idosoID, pega de todos!
-	// Preciso criar GetPendingAgendamentosByIdoso ou filtrar aqui se a lista for pequena (não ideal).
-	// Vamos assumir que criarei GetPendingAgendamentosByIdoso em breve.
-	// Por enquanto, uso GetPendingAgendamentos mas saiba que está bugado (pega geral).
-	// TODO: Fix db query
-
+	agendamentos, err := h.db.GetPendingAgendamentosByIdoso(idosoID, limit)
 	if err != nil {
 		return map[string]interface{}{"error": "Erro ao buscar agendamentos"}, nil
 	}
 
 	var resultList []map[string]interface{}
 	for _, a := range agendamentos {
-		if a.IdosoID == idosoID { // Filtragem manual temporária
-			resultList = append(resultList, map[string]interface{}{
-				"tipo":     a.Tipo,
-				"data":     a.DataHoraAgendada.Format("02/01 15:04"),
-				"status":   a.Status,
-				"detalhes": a.DadosTarefa,
-			})
-		}
+		resultList = append(resultList, map[string]interface{}{
+			"tipo":     a.Tipo,
+			"data":     a.DataHoraAgendada.Format("02/01 15:04"),
+			"status":   a.Status,
+			"detalhes": a.DadosTarefa,
+		})
 	}
 
 	if len(resultList) == 0 {

@@ -815,27 +815,22 @@ func (h *ToolsHandler) handleRunTests(idosoID int64, args map[string]interface{}
 		return map[string]interface{}{"error": "Serviço de auto-programação não configurado"}, nil
 	}
 
-	// Non-blocking — testes podem demorar
-	go func() {
-		output, testErr := h.selfcodeService.RunTests()
+	// Blocking — MCP caller precisa do resultado
+	output, testErr := h.selfcodeService.RunTests()
 
-		if h.NotifyFunc != nil {
-			if testErr != nil {
-				h.NotifyFunc(idosoID, "tests_failed", map[string]interface{}{
-					"output": output,
-					"error":  testErr.Error(),
-				})
-			} else {
-				h.NotifyFunc(idosoID, "tests_passed", map[string]interface{}{
-					"output": output,
-				})
-			}
-		}
-	}()
+	if testErr != nil {
+		return map[string]interface{}{
+			"status":  "falhou",
+			"output":  output,
+			"error":   testErr.Error(),
+			"message": "Testes falharam.",
+		}, nil
+	}
 
 	return map[string]interface{}{
-		"status":  "executando",
-		"message": "Executando testes...",
+		"status":  "sucesso",
+		"output":  output,
+		"message": "Todos os testes passaram.",
 	}, nil
 }
 

@@ -126,20 +126,37 @@ func (c *EdgeClassifier) GetConsolidatedEdges(ctx context.Context, patientID int
 
 	edges := make([]AssociationEdge, 0)
 
-	for range records {
-		// TODO: Extrair corretamente do record baseado no driver Neo4j
-		edge := AssociationEdge{
-			NodeA:         "node_placeholder",
-			NodeB:         "node_placeholder",
-			NodeAName:     "Name A",
-			NodeBName:     "Name B",
-			Weight:        0.8,
-			SlowWeight:    0.75,
-			FastWeight:    0.82,
-			CoActivations: 10,
-			LastActivated: time.Now(),
-			Zone:          ZoneConsolidated,
-			AgeInDays:     5,
+	for _, rec := range records {
+		edge := AssociationEdge{Zone: ZoneConsolidated}
+		if v, ok := rec.Get("nodeA"); ok {
+			edge.NodeA, _ = v.(string)
+		}
+		if v, ok := rec.Get("nodeB"); ok {
+			edge.NodeB, _ = v.(string)
+		}
+		if v, ok := rec.Get("nodeAName"); ok {
+			edge.NodeAName, _ = v.(string)
+		}
+		if v, ok := rec.Get("nodeBName"); ok {
+			edge.NodeBName, _ = v.(string)
+		}
+		if v, ok := rec.Get("weight"); ok {
+			edge.Weight, _ = v.(float64)
+		}
+		if v, ok := rec.Get("slowWeight"); ok {
+			edge.SlowWeight, _ = v.(float64)
+		}
+		if v, ok := rec.Get("fastWeight"); ok {
+			edge.FastWeight, _ = v.(float64)
+		}
+		if v, ok := rec.Get("coActivations"); ok {
+			edge.CoActivations = int(v.(int64))
+		}
+		if v, ok := rec.Get("lastActivated"); ok {
+			if t, ok := v.(time.Time); ok {
+				edge.LastActivated = t
+				edge.AgeInDays = int(time.Since(t).Hours() / 24)
+			}
 		}
 		edges = append(edges, edge)
 	}
@@ -186,10 +203,37 @@ func (c *EdgeClassifier) GetEmergingEdges(ctx context.Context, patientID int64) 
 
 	edges := make([]AssociationEdge, 0)
 
-	for range records {
-		// TODO: Extrair corretamente do record
-		edge := AssociationEdge{
-			Zone: ZoneEmerging,
+	for _, rec := range records {
+		edge := AssociationEdge{Zone: ZoneEmerging}
+		if v, ok := rec.Get("nodeA"); ok {
+			edge.NodeA, _ = v.(string)
+		}
+		if v, ok := rec.Get("nodeB"); ok {
+			edge.NodeB, _ = v.(string)
+		}
+		if v, ok := rec.Get("nodeAName"); ok {
+			edge.NodeAName, _ = v.(string)
+		}
+		if v, ok := rec.Get("nodeBName"); ok {
+			edge.NodeBName, _ = v.(string)
+		}
+		if v, ok := rec.Get("weight"); ok {
+			edge.Weight, _ = v.(float64)
+		}
+		if v, ok := rec.Get("slowWeight"); ok {
+			edge.SlowWeight, _ = v.(float64)
+		}
+		if v, ok := rec.Get("fastWeight"); ok {
+			edge.FastWeight, _ = v.(float64)
+		}
+		if v, ok := rec.Get("coActivations"); ok {
+			edge.CoActivations = int(v.(int64))
+		}
+		if v, ok := rec.Get("lastActivated"); ok {
+			if t, ok := v.(time.Time); ok {
+				edge.LastActivated = t
+				edge.AgeInDays = int(time.Since(t).Hours() / 24)
+			}
 		}
 		edges = append(edges, edge)
 	}
@@ -233,10 +277,25 @@ func (c *EdgeClassifier) GetWeakEdges(ctx context.Context, patientID int64) ([]A
 
 	edges := make([]AssociationEdge, 0)
 
-	for range records {
-		// TODO: Extrair corretamente do record
-		edge := AssociationEdge{
-			Zone: ZoneWeak,
+	for _, rec := range records {
+		edge := AssociationEdge{Zone: ZoneWeak}
+		if v, ok := rec.Get("nodeA"); ok {
+			edge.NodeA, _ = v.(string)
+		}
+		if v, ok := rec.Get("nodeB"); ok {
+			edge.NodeB, _ = v.(string)
+		}
+		if v, ok := rec.Get("nodeAName"); ok {
+			edge.NodeAName, _ = v.(string)
+		}
+		if v, ok := rec.Get("nodeBName"); ok {
+			edge.NodeBName, _ = v.(string)
+		}
+		if v, ok := rec.Get("weight"); ok {
+			edge.Weight, _ = v.(float64)
+		}
+		if v, ok := rec.Get("ageInDays"); ok {
+			edge.AgeInDays = int(v.(int64))
 		}
 		edges = append(edges, edge)
 	}
@@ -265,7 +324,7 @@ func (c *EdgeClassifier) PruneWeakEdges(ctx context.Context, patientID int64) (*
 		RETURN count(r) AS pruned
 	`
 
-	_, err := c.neo4j.ExecuteWrite(ctx, query, map[string]interface{}{
+	records, err := c.neo4j.ExecuteWriteAndReturn(ctx, query, map[string]interface{}{
 		"patientId":  patientID,
 		"threshold":  c.thresholdLow,
 		"pruningAge": c.pruningAge,
@@ -284,8 +343,11 @@ func (c *EdgeClassifier) PruneWeakEdges(ctx context.Context, patientID int64) (*
 		return result, err
 	}
 
-	// TODO: Extrair count do record
-	result.EdgesPruned = 0
+	if len(records) > 0 {
+		if v, ok := records[0].Get("pruned"); ok {
+			result.EdgesPruned = int(v.(int64))
+		}
+	}
 
 	log.Printf("✅ [EDGE_ZONES] Pruned %d weak edges for patient %d", result.EdgesPruned, patientID)
 
@@ -326,13 +388,31 @@ func (c *EdgeClassifier) GetZoneStatistics(ctx context.Context, patientID int64)
 	}
 
 	if len(records) > 0 {
-		// TODO: Extrair do record
-		stats.ConsolidatedCount = 0
-		stats.EmergingCount = 0
-		stats.WeakCount = 0
-		stats.AvgWeight = 0.5
-		stats.MaxWeight = 1.0
-		stats.MinWeight = 0.0
+		rec := records[0]
+		if v, ok := rec.Get("consolidated"); ok {
+			stats.ConsolidatedCount = int(v.(int64))
+		}
+		if v, ok := rec.Get("emerging"); ok {
+			stats.EmergingCount = int(v.(int64))
+		}
+		if v, ok := rec.Get("weak"); ok {
+			stats.WeakCount = int(v.(int64))
+		}
+		if v, ok := rec.Get("avgWeight"); ok {
+			if f, ok := v.(float64); ok {
+				stats.AvgWeight = f
+			}
+		}
+		if v, ok := rec.Get("maxWeight"); ok {
+			if f, ok := v.(float64); ok {
+				stats.MaxWeight = f
+			}
+		}
+		if v, ok := rec.Get("minWeight"); ok {
+			if f, ok := v.(float64); ok {
+				stats.MinWeight = f
+			}
+		}
 	}
 
 	return stats, nil

@@ -20,9 +20,12 @@ import (
 	"eva-mind/internal/cortex/alert"
 	"eva-mind/internal/cortex/eva_memory"
 	"eva-mind/internal/cortex/gemini"
+	"eva-mind/internal/cortex/consciousness"
 	"eva-mind/internal/cortex/lacan"
 	"eva-mind/internal/cortex/learning"
 	"eva-mind/internal/cortex/personality"
+	"eva-mind/internal/cortex/ram"
+	"eva-mind/internal/cortex/situation"
 	evaSelf "eva-mind/internal/cortex/self"
 	"eva-mind/internal/cortex/selfawareness"
 	"eva-mind/internal/cortex/voice/speaker"
@@ -31,6 +34,7 @@ import (
 	"eva-mind/internal/hippocampus/memory"
 	"eva-mind/internal/hippocampus/memory/superhuman"
 	"eva-mind/internal/hippocampus/spaced"
+	"eva-mind/internal/motor/actions"
 	"eva-mind/internal/motor/email"
 	"eva-mind/internal/cortex/llm"
 	"eva-mind/internal/cortex/skills"
@@ -44,7 +48,13 @@ import (
 	"eva-mind/internal/motor/telegram"
 	"eva-mind/internal/motor/webhooks"
 	"eva-mind/internal/brainstem/oauth"
+	"eva-mind/internal/integration"
+	internalmemory "eva-mind/internal/memory"
+	"eva-mind/internal/memory/krylov"
+	memscheduler "eva-mind/internal/memory/scheduler"
+	"eva-mind/internal/monitoring"
 	"eva-mind/internal/mcp"
+	"eva-mind/internal/research"
 	"eva-mind/internal/scheduler"
 	"eva-mind/internal/security"
 	"eva-mind/internal/swarm"
@@ -65,12 +75,62 @@ import (
 	"eva-mind/internal/voice"
 
 	"github.com/gorilla/mux"
+	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
 	"github.com/rs/zerolog/log"
 )
 
 type PCMClient struct {
 	CPF     string
 	IdosoID int64
+}
+
+// --- RAM Engine Adapters (bridge between existing services and ram interfaces) ---
+
+type ramLLMAdapter struct{ svc *llm.Service }
+
+func (a *ramLLMAdapter) GenerateText(ctx context.Context, prompt string, temperature float64) (string, error) {
+	resp, err := a.svc.Ask("claude", prompt)
+	if err != nil {
+		return "", err
+	}
+	return resp.Text, nil
+}
+
+func (a *ramLLMAdapter) GenerateMultiple(ctx context.Context, prompt string, n int, temperature float64) ([]string, error) {
+	results := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		text, err := a.GenerateText(ctx, prompt, temperature)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, text)
+	}
+	return results, nil
+}
+
+type ramEmbedAdapter struct{ svc *knowledge.EmbeddingService }
+
+func (a *ramEmbedAdapter) GenerateEmbedding(ctx context.Context, text string) ([]float32, error) {
+	return a.svc.GenerateEmbedding(ctx, text)
+}
+
+type ramRetrievalAdapter struct{ store *memory.MemoryStore }
+
+func (a *ramRetrievalAdapter) RetrieveRelevant(ctx context.Context, patientID int64, query string, k int) ([]ram.Memory, error) {
+	memories, err := a.store.GetRecent(ctx, patientID, k)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]ram.Memory, len(memories))
+	for i, m := range memories {
+		result[i] = ram.Memory{
+			ID:      m.ID,
+			Content: m.Content,
+			Timestamp: m.Timestamp,
+			Score:   m.Importance,
+		}
+	}
+	return result, nil
 }
 
 type SignalingServer struct {
@@ -96,6 +156,9 @@ type SignalingServer struct {
 	autonomousLearner  *learning.AutonomousLearner
 	speakerSvc         *speaker.SpeakerService
 	coreMemory         *evaSelf.CoreMemoryEngine
+	globalWorkspace    *consciousness.GlobalWorkspace
+	situationMod       *situation.SituationalModulator
+	ramEngine          *ram.RAMEngine
 }
 
 func main() {
@@ -236,6 +299,15 @@ func main() {
 
 	// 7.5 Tools Handler (120+ tools — medicamentos, alarmes, jogos, GTD, etc)
 	toolsHandler := tools.NewToolsHandler(db, pushService, emailSvc)
+	if neo4jClient != nil {
+		toolsHandler.SetNeo4jClient(neo4jClient)
+	}
+	if qdrantClient != nil {
+		toolsHandler.SetQdrantClient(qdrantClient)
+	}
+	if embedSvc != nil {
+		toolsHandler.SetEmbedFunc(embedSvc.GenerateEmbedding)
+	}
 	toolsHandler.SetSpacedService(spacedSvc)
 	toolsHandler.SetHabitTracker(habitTracker)
 
@@ -365,6 +437,25 @@ func main() {
 	toolsHandler.SetSkillsService(skillsSvc)
 	log.Info().Msgf("🧩 Skills Service: %s (%d skills carregadas)", cfg.SkillsDir, len(skillsSvc.List()))
 
+	// ✅ Neo4j Core Driver (porta 7688 — memória pessoal da EVA, para MCP bridge)
+	if cfg.Neo4jCoreURI != "" {
+		neo4jCoreDriver, neo4jCoreErr := neo4j.NewDriverWithContext(
+			cfg.Neo4jCoreURI,
+			neo4j.BasicAuth(cfg.Neo4jCoreUsername, cfg.Neo4jCorePassword, ""),
+		)
+		if neo4jCoreErr != nil {
+			log.Warn().Err(neo4jCoreErr).Msg("⚠️ Neo4j Core driver indisponivel — MCP tools de identidade/teaching limitadas")
+		} else {
+			if verifyErr := neo4jCoreDriver.VerifyConnectivity(context.Background()); verifyErr != nil {
+				log.Warn().Err(verifyErr).Msg("⚠️ Neo4j Core conectividade falhou — MCP tools de identidade/teaching limitadas")
+			} else {
+				toolsHandler.SetNeo4jCoreDriver(neo4jCoreDriver)
+				defer neo4jCoreDriver.Close(context.Background())
+				log.Info().Str("uri", cfg.Neo4jCoreURI).Msg("🧠 Neo4j Core driver configurado para MCP tools")
+			}
+		}
+	}
+
 	log.Info().Msg("🛠️ Tools Handler inicializado (150+ tools)")
 
 	// 7.6 Tools Client (Gemini 2.5 Flash REST — deteccao de intencao de tool)
@@ -384,6 +475,10 @@ func main() {
 	selfAwareAgent.SetService(selfAwareSvc)
 	log.Info().Msg("🪞 Self-Awareness Service inicializado")
 
+	// 7.8.1 Krylov Subspace Memory (1536D → 64D compression via modified Gram-Schmidt)
+	krylovMgr := krylov.NewKrylovMemoryManager(1536, 64, 1000)
+	log.Info().Msg("🔢 Krylov Memory Manager inicializado (1536D → 64D)")
+
 	// 7.9 Swarm Orchestrator (12 agentes especializados + circuit breaker)
 	scholarAgent := scholar.New()
 	scholarAgent.SetLearner(autonomousLearner)
@@ -395,6 +490,10 @@ func main() {
 		Push:         pushService,
 		Config:       cfg,
 		GoogleAPIKey: cfg.GoogleAPIKey,
+		Krylov:       krylovMgr,
+		AlertFamily: func(ctx context.Context, userID int64, reason, severity string) error {
+			return actions.AlertFamilyWithSeverity(db.Conn, pushService, emailSvc, userID, reason, severity)
+		},
 	}
 	orchestrator := swarm.NewOrchestrator(swarmDeps)
 	if err := swarm.SetupAllSwarms(orchestrator,
@@ -414,6 +513,10 @@ func main() {
 		log.Error().Err(err).Msg("Falha ao inicializar Swarm System")
 	}
 
+	// Bridge ToolsHandler -> Swarm Orchestrator (tools sem case no switch: open_camera_analysis, change_voice, etc)
+	toolsHandler.SetSwarmRouter(orchestrator)
+	log.Info().Msg("🐝 Swarm bridge configurado no ToolsHandler")
+
 	// 7.10 Speaker Recognition Service (Voice Fingerprinting + Timbre Analysis)
 	speakerSvc, err := speaker.NewSpeakerService(db, qdrantClient, cfg.SpeakerModelPath)
 	if err != nil {
@@ -421,6 +524,55 @@ func main() {
 	} else {
 		log.Info().Msg("Speaker Recognition Service initialized")
 	}
+
+	// 7.11 Global Workspace (Baars' Cognitive Theory of Consciousness)
+	globalWS := consciousness.NewGlobalWorkspace()
+	globalWS.RegisterModule(&consciousness.LacanModule{})
+	globalWS.RegisterModule(&consciousness.PersonalityModule{})
+	globalWS.RegisterModule(&consciousness.EthicsModule{})
+	log.Info().Msg("🧠 Global Workspace inicializado (3 modulos cognitivos)")
+
+	// 7.12 Situational Modulator (detecta contexto e modula pesos de personalidade)
+	situationMod := situation.NewModulator(nil, nil)
+	log.Info().Msg("🎭 Situational Modulator inicializado")
+
+	// 7.13 RAM Engine (Realistic Accuracy Model — interpretacoes + validacao historica)
+	var ramEng *ram.RAMEngine
+	if llmSvc != nil && embedSvc != nil {
+		interpGen := ram.NewInterpretationGenerator(
+			&ramLLMAdapter{svc: llmSvc},
+			&ramEmbedAdapter{svc: embedSvc},
+			&ramRetrievalAdapter{store: memoryStore},
+		)
+		histValidator := ram.NewHistoricalValidator(
+			&ramRetrievalAdapter{store: memoryStore},
+			&ramEmbedAdapter{svc: embedSvc},
+			nil, // GraphStore — será wired quando NER estiver completo
+		)
+		ramEng = ram.NewRAMEngine(interpGen, histValidator, nil, nil)
+		log.Info().Msg("🎯 RAM Engine inicializado (interpretacoes + validacao historica)")
+	} else {
+		log.Warn().Msg("⚠️ RAM Engine desabilitado (LLM ou EmbeddingService indisponivel)")
+	}
+
+	// 7.14 Memory Orchestrator (Voice → FDPN → Krylov → Spectral → REM consolidation)
+	var memOrchestrator *internalmemory.MemoryOrchestrator
+	if neo4jClient != nil {
+		hippoFDPN := memory.NewFDPNEngine(neo4jClient, nil, qdrantClient)
+		memOrchestrator = internalmemory.NewMemoryOrchestrator(db.Conn, neo4jClient, qdrantClient, hippoFDPN, krylovMgr)
+		log.Info().Msg("🧠 Memory Orchestrator inicializado (FDPN → Krylov → REM)")
+	} else {
+		log.Warn().Msg("⚠️ Memory Orchestrator desabilitado (Neo4j indisponivel)")
+	}
+
+	// 7.15 Krylov HTTP Bridge (porta 50052 — bridge HTTP/JSON para compressao vetorial)
+	krylovBridge := internalmemory.NewKrylovHTTPBridge(krylovMgr, 50052)
+	krylovBridge.StartAsync()
+	log.Info().Msg("🔌 Krylov HTTP Bridge iniciado na porta 50052")
+
+	// 7.16 Research Engine (pesquisa clinica longitudinal com anonimizacao LGPD)
+	researchEng := research.NewResearchEngine(db.Conn)
+	log.Info().Msg("🔬 Research Engine inicializado")
 
 	// 8. SignalingServer
 	server := &SignalingServer{
@@ -446,6 +598,9 @@ func main() {
 		autonomousLearner:  autonomousLearner,
 		speakerSvc:         speakerSvc,
 		coreMemory:         coreMemoryEngine,
+		globalWorkspace:    globalWS,
+		situationMod:       situationMod,
+		ramEngine:          ramEng,
 	}
 
 	// 9. Router & Servidor HTTP
@@ -494,8 +649,44 @@ func main() {
 
 	// MCP Server — Model Context Protocol
 	mcpServer := mcp.NewServer(db.Conn)
+	if embedSvc != nil && qdrantClient != nil {
+		mcpServer.SetEmbeddingFunc(func(ctx context.Context, text string) ([]float32, error) {
+			return embedSvc.GenerateEmbedding(ctx, text)
+		})
+		mcpServer.SetVectorSearchFunc(func(ctx context.Context, collection string, vec []float32, limit int) ([]mcp.VectorResult, error) {
+			points, err := qdrantClient.Search(ctx, collection, vec, uint64(limit), nil)
+			if err != nil {
+				return nil, err
+			}
+			results := make([]mcp.VectorResult, 0, len(points))
+			for _, p := range points {
+				content := ""
+				if p.Payload != nil {
+					if v, ok := p.Payload["content"]; ok {
+						content = v.GetStringValue()
+					}
+				}
+				results = append(results, mcp.VectorResult{
+					ID:      int64(p.Id.GetNum()),
+					Score:   p.Score,
+					Content: content,
+				})
+			}
+			return results, nil
+		})
+		log.Info().Msg("🔍 MCP Server com busca vetorial ativada")
+	}
 	router.PathPrefix("/mcp").Handler(mcpServer)
 	log.Info().Msg("🔌 MCP Server montado em /mcp")
+
+	// FHIR R4 Endpoints (HL7 interoperability)
+	fhirHandler := integration.NewFHIRHandler(db.Conn)
+	integration.RegisterFHIRRoutes(router, fhirHandler)
+	log.Info().Msg("🏥 FHIR R4 endpoints registrados em /api/v1/fhir")
+
+	// Prometheus metrics
+	router.Handle("/metrics", monitoring.PrometheusHandler())
+	log.Info().Msg("📊 Prometheus metrics registrado em /metrics")
 
 	// Tool Execution REST endpoint (para MCP stdio server)
 	v1.HandleFunc("/tools/execute", server.handleToolExecute).Methods("POST")
@@ -508,6 +699,10 @@ func main() {
 	} else {
 		log.Warn().Msg("⚠️ Rotas /api/v1/self/* não registradas (CoreMemoryEngine indisponivel)")
 	}
+
+	// Research Engine REST routes (/api/v1/research/*)
+	research.RegisterRoutes(v1, researchEng)
+	log.Info().Msg("🔬 Research Engine rotas REST registradas em /api/v1/research/*")
 
 	// 7. Scheduler (Background Jobs)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -531,6 +726,20 @@ func main() {
 		}()
 		autonomousLearner.Start(ctx)
 	}()
+
+	// Memory Scheduler (nightly REM consolidation 3AM + Krylov maintenance 6h)
+	if memOrchestrator != nil {
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Error().Interface("panic", r).Msg("CRITICO: Memory Scheduler panic")
+				}
+			}()
+			memSched := memscheduler.NewMemoryScheduler(memOrchestrator)
+			memSched.Start(ctx)
+		}()
+		log.Info().Msg("📅 Memory Scheduler iniciado (REM 3AM + Krylov 6h)")
+	}
 
 	// 8. Start Server
 	srv := &http.Server{
