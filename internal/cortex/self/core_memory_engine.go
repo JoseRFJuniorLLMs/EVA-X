@@ -212,7 +212,7 @@ func (e *CoreMemoryEngine) GetIdentityContext(ctx context.Context) (string, erro
 	}
 
 	// 3. Obter capacidades (memory_type = 'capability')
-	nqlCap := `MATCH (m:CoreMemory) WHERE m.memory_type = 'capability' RETURN m ORDER BY m.id`
+	nqlCap := `MATCH (m:CoreMemory) WHERE m.memory_type = "capability" RETURN m ORDER BY m.id`
 	capResult, err := e.graphAdapter.ExecuteNQL(ctx, nqlCap, nil, "eva_core")
 	if err != nil {
 		return "", fmt.Errorf("failed to query capabilities: %w", err)

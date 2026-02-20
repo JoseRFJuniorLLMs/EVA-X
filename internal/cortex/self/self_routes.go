@@ -113,7 +113,7 @@ func getMemoriesHandler(engine *CoreMemoryEngine) http.HandlerFunc {
 		nql := `MATCH (eva:EvaSelf)-[:REMEMBERS]->(mem:CoreMemory) RETURN mem`
 		if memoryType != "" {
 			nql = fmt.Sprintf(
-				`MATCH (eva:EvaSelf)-[:REMEMBERS]->(mem:CoreMemory) WHERE mem.memory_type = '%s' RETURN mem`,
+				`MATCH (eva:EvaSelf)-[:REMEMBERS]->(mem:CoreMemory) WHERE mem.memory_type = "%s" RETURN mem`,
 				memoryType,
 			)
 		}
