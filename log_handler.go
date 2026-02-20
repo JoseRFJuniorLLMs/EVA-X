@@ -47,7 +47,7 @@ func (s *SignalingServer) handleLogStream(w http.ResponseWriter, r *http.Request
 
 	// Start journalctl subprocess
 	cmd := exec.CommandContext(ctx, "journalctl",
-		"-u", "eva-mind",
+		"-u", "eva-x",
 		"-f",
 		"-o", "short-iso",
 		"-n", strconv.Itoa(lines),
