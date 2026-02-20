@@ -6,35 +6,36 @@ package lacan
 import (
 	"context"
 	"database/sql"
-	"eva/internal/brainstem/infrastructure/graph"
+
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 )
 
-// InterpretationService coordena todos os serviços lacanianos
+// InterpretationService coordena todos os servicos lacanianos
 type InterpretationService struct {
 	transferencia *TransferenceService
 	significante  *SignifierService
 	demandaDesejo *DemandDesireService
-	grandAutre    *GrandAutreService // Corrected generic name if it was split
+	grandAutre    *GrandAutreService
 
 	db          *sql.DB
-	neo4jClient *graph.Neo4jClient
+	graphClient *nietzscheInfra.GraphAdapter
 }
 
-// NewInterpretationService cria serviço completo de interpretação
-func NewInterpretationService(db *sql.DB, neo4jClient *graph.Neo4jClient) *InterpretationService {
+// NewInterpretationService cria servico completo de interpretacao
+func NewInterpretationService(db *sql.DB, graphClient *nietzscheInfra.GraphAdapter) *InterpretationService {
 	return &InterpretationService{
 		transferencia: NewTransferenceService(db),
-		significante:  NewSignifierService(neo4jClient),
+		significante:  NewSignifierService(graphClient),
 		demandaDesejo: NewDemandDesireService(),
 		grandAutre:    NewGrandAutreService(),
 		db:            db,
-		neo4jClient:   neo4jClient,
+		graphClient:   graphClient,
 	}
 }
 
-// InterpretationResult contém resultado completo da análise lacaniana
+// InterpretationResult contem resultado completo da analise lacaniana
 type InterpretationResult struct {
-	// Transferência
+	// Transferencia
 	Transference     TransferenceType
 	TransferGuidance string
 
@@ -52,15 +53,15 @@ type InterpretationResult struct {
 	Contradiction     string
 	ShouldSilence     bool
 
-	// Orientação Clínica Final
+	// Orientacao Clinica Final
 	ClinicalGuidance string
 }
 
-// AnalyzeUtterance realiza análise lacaniana completa de uma fala
+// AnalyzeUtterance realiza analise lacaniana completa de uma fala
 func (i *InterpretationService) AnalyzeUtterance(ctx context.Context, idosoID int64, text string, previousText string) (*InterpretationResult, error) {
 	result := &InterpretationResult{}
 
-	// 1. Detectar transferência
+	// 1. Detectar transferencia
 	transf := i.transferencia.DetectTransference(ctx, idosoID, text)
 	result.Transference = transf
 	result.TransferGuidance = GetTransferenceGuidance(transf)
@@ -88,28 +89,28 @@ func (i *InterpretationService) AnalyzeUtterance(ctx context.Context, idosoID in
 	result.DemandDesire = analysis
 	result.SuggestedResponse = i.demandaDesejo.GenerateResponse(analysis)
 
-	// 4. Grande Outro: reflexão
+	// 4. Grande Outro: reflexao
 	result.ReflexiveQuestion = i.grandAutre.ReflectiveQuestion(text)
 
-	// 5. Detectar contradição (se houver texto anterior)
+	// 5. Detectar contradicao (se houver texto anterior)
 	if previousText != "" {
 		result.Contradiction = i.grandAutre.PointToContradiction(previousText, text)
 	}
 
-	// 6. Decidir sobre silêncio
+	// 6. Decidir sobre silencio
 	result.ShouldSilence = i.grandAutre.IntentionalSilence(text)
 
-	// 7. Montar orientação clínica final
+	// 7. Montar orientacao clinica final
 	result.ClinicalGuidance = i.buildClinicalGuidance(result)
 
 	return result, nil
 }
 
-// buildClinicalGuidance monta orientação clínica consolidada
+// buildClinicalGuidance monta orientacao clinica consolidada
 func (i *InterpretationService) buildClinicalGuidance(result *InterpretationResult) string {
-	guidance := "\n🧠 ANÁLISE LACANIANA:\n\n"
+	guidance := "\nANALISE LACANIANA:\n\n"
 
-	// Transferência
+	// Transferencia
 	if result.Transference != TRANSFERENCIA_NENHUMA {
 		guidance += result.TransferGuidance + "\n"
 	}
@@ -130,26 +131,26 @@ func (i *InterpretationService) buildClinicalGuidance(result *InterpretationResu
 		guidance += "\n"
 	}
 
-	// Interpelação
+	// Interpelacao
 	if result.ShouldInterpel {
-		guidance += "⚠️ MOMENTO DE INTERPELAÇÃO:\n"
+		guidance += "MOMENTO DE INTERPELACAO:\n"
 		guidance += "- Use: \"" + result.InterpelPhrase + "\"\n\n"
 	}
 
-	// Contradição
+	// Contradicao
 	if result.Contradiction != "" {
-		guidance += "⚡ CONTRADIÇÃO DETECTADA:\n"
+		guidance += "CONTRADICAO DETECTADA:\n"
 		guidance += "- " + result.Contradiction + "\n\n"
 	}
 
-	// Reflexão
+	// Reflexao
 	guidance += "POSTURA RECOMENDADA:\n"
 	if result.ShouldSilence {
-		guidance += "- Faça uma pausa. Dê espaço para elaboração.\n"
-		guidance += "- Demonstre presença através do silêncio.\n"
+		guidance += "- Faca uma pausa. De espaco para elaboracao.\n"
+		guidance += "- Demonstre presenca atraves do silencio.\n"
 	} else {
 		guidance += "- Use pergunta reflexiva: \"" + result.ReflexiveQuestion + "\"\n"
-		guidance += "- Não ofereça soluções imediatas. Deixe o sujeito elaborar.\n"
+		guidance += "- Nao ofereca solucoes imediatas. Deixe o sujeito elaborar.\n"
 	}
 
 	return guidance
@@ -157,19 +158,17 @@ func (i *InterpretationService) buildClinicalGuidance(result *InterpretationResu
 
 // GetLacanianContext monta contexto para o prompt do Gemini
 func (i *InterpretationService) GetLacanianContext(ctx context.Context, idosoID int64) string {
-	// Buscar transferência dominante
+	// Buscar transferencia dominante
 	transf, _ := i.transferencia.GetDominantTransference(ctx, idosoID)
 
 	// Buscar significantes-chave
 	signifiers, _ := i.significante.GetKeySignifiers(ctx, idosoID, 5)
 
-	context := "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-	context += "🧠 ORIENTAÇÕES PSICANALÍTICAS (LACAN)\n"
-	context += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+	context := "\n---\nORIENTACOES PSICANALITICAS (LACAN)\n---\n\n"
 
-	// Transferência
+	// Transferencia
 	if transf != TRANSFERENCIA_NENHUMA {
-		context += "TRANSFERÊNCIA DETECTADA: " + string(transf) + "\n"
+		context += "TRANSFERENCIA DETECTADA: " + string(transf) + "\n"
 		context += GetTransferenceGuidance(transf) + "\n"
 	}
 
@@ -179,18 +178,18 @@ func (i *InterpretationService) GetLacanianContext(ctx context.Context, idosoID 
 		for _, sig := range signifiers {
 			context += "- '" + sig.Word + "' (apareceu " + string(rune(sig.Frequency)) + "x)\n"
 		}
-		context += "→ Preste atenção quando essas palavras aparecerem\n\n"
+		context += "-> Preste atencao quando essas palavras aparecerem\n\n"
 	}
 
 	// Postura geral
-	context += "POSTURA ANALÍTICA:\n"
-	context += "1. ESCUTA FLUTUANTE: Não se prenda ao conteúdo manifesto\n"
-	context += "2. ATENÇÃO AOS SIGNIFICANTES: Palavras que se repetem têm sentido inconsciente\n"
-	context += "3. DISTINGUIR DEMANDA/DESEJO: O que o paciente pede ≠ o que ele deseja\n"
-	context += "4. DEVOLVER A FALA: 'Você disse X... o que isso significa para você?'\n"
-	context += "5. NÃO RESOLVER O IMPOSSÍVEL: Trauma, morte, perda não têm solução. Ajude a simbolizar.\n"
-	context += "6. ACOLHER TRANSFERÊNCIA: Se o paciente projeta afetos em você, acolha sem negar\n"
-	context += "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+	context += "POSTURA ANALITICA:\n"
+	context += "1. ESCUTA FLUTUANTE: Nao se prenda ao conteudo manifesto\n"
+	context += "2. ATENCAO AOS SIGNIFICANTES: Palavras que se repetem tem sentido inconsciente\n"
+	context += "3. DISTINGUIR DEMANDA/DESEJO: O que o paciente pede != o que ele deseja\n"
+	context += "4. DEVOLVER A FALA: 'Voce disse X... o que isso significa para voce?'\n"
+	context += "5. NAO RESOLVER O IMPOSSIVEL: Trauma, morte, perda nao tem solucao. Ajude a simbolizar.\n"
+	context += "6. ACOLHER TRANSFERENCIA: Se o paciente projeta afetos em voce, acolha sem negar\n"
+	context += "\n---\n"
 
 	return context
 }

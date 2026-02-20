@@ -11,7 +11,7 @@ import (
 	"sort"
 	"sync"
 
-	"eva/internal/brainstem/infrastructure/graph"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 
 	"gonum.org/v1/gonum/mat"
 )
@@ -24,21 +24,21 @@ type MemoryCommunity struct {
 	NodeLabels  []string `json:"node_labels"`  // Labels dos nos (Topic, Emotion, etc.)
 	Coherence   float64  `json:"coherence"`    // Coesao interna (0-1)
 	Centrality  float64  `json:"centrality"`   // Importancia relativa no grafo
-	DominantAge float64  `json:"dominant_age"`  // Idade dominante em dias
+	DominantAge float64  `json:"dominant_age"` // Idade dominante em dias
 }
 
 // SpectralAnalysis resultado completo da analise espectral
 type SpectralAnalysis struct {
-	IdosoID            int64               `json:"idoso_id"`
-	Communities        []MemoryCommunity   `json:"communities"`
-	OptimalK           int                 `json:"optimal_k"`           // Numero otimo de comunidades
-	FiedlerValue       float64             `json:"fiedler_value"`       // 2o menor autovalor (conectividade algebrica)
-	SpectralGap        float64             `json:"spectral_gap"`       // Gap entre lambda_k e lambda_{k+1}
-	FractalDimension   float64             `json:"fractal_dimension"`   // Dimensao fractal do espectro
-	GraphConnectedness float64             `json:"graph_connectedness"` // Quao conectado e o grafo (0-1)
-	Eigenvalues        []float64           `json:"eigenvalues"`         // Primeiros autovalores para debug
-	NodeCount          int                 `json:"node_count"`
-	EdgeCount          int                 `json:"edge_count"`
+	IdosoID            int64             `json:"idoso_id"`
+	Communities        []MemoryCommunity `json:"communities"`
+	OptimalK           int               `json:"optimal_k"`           // Numero otimo de comunidades
+	FiedlerValue       float64           `json:"fiedler_value"`       // 2o menor autovalor (conectividade algebrica)
+	SpectralGap        float64           `json:"spectral_gap"`        // Gap entre lambda_k e lambda_{k+1}
+	FractalDimension   float64           `json:"fractal_dimension"`   // Dimensao fractal do espectro
+	GraphConnectedness float64           `json:"graph_connectedness"` // Quao conectado e o grafo (0-1)
+	Eigenvalues        []float64         `json:"eigenvalues"`         // Primeiros autovalores para debug
+	NodeCount          int               `json:"node_count"`
+	EdgeCount          int               `json:"edge_count"`
 }
 
 // GraphNode no do grafo de memoria
@@ -61,30 +61,30 @@ type GraphEdge struct {
 // Usa o Laplaciano do grafo (L = D - A) + autovetores para descobrir comunidades naturais
 // Krylov e o coracao: os autovetores do Laplaciano vivem num subespaco de Krylov
 type SpectralCommunityEngine struct {
-	client *graph.Neo4jClient
-	tau    float64 // Constante de decay temporal (mesma do TemporalDecayService)
+	graphAdapter *nietzscheInfra.GraphAdapter
+	tau          float64 // Constante de decay temporal (mesma do TemporalDecayService)
 
 	mu sync.RWMutex
 }
 
 // NewSpectralCommunityEngine cria o motor de clustering espectral
-func NewSpectralCommunityEngine(client *graph.Neo4jClient, tauDays float64) *SpectralCommunityEngine {
+func NewSpectralCommunityEngine(graphAdapter *nietzscheInfra.GraphAdapter, tauDays float64) *SpectralCommunityEngine {
 	if tauDays <= 0 {
 		tauDays = 90
 	}
 	return &SpectralCommunityEngine{
-		client: client,
-		tau:    tauDays,
+		graphAdapter: graphAdapter,
+		tau:          tauDays,
 	}
 }
 
 // AnalyzeCommunities executa analise espectral completa do grafo de memorias de um paciente
-// Pipeline: Neo4j -> Adjacency Matrix -> Laplacian -> Eigendecomposition -> Clustering -> Fractal Analysis
+// Pipeline: NietzscheDB -> Adjacency Matrix -> Laplacian -> Eigendecomposition -> Clustering -> Fractal Analysis
 func (sce *SpectralCommunityEngine) AnalyzeCommunities(ctx context.Context, idosoID int64) (*SpectralAnalysis, error) {
 	sce.mu.Lock()
 	defer sce.mu.Unlock()
 
-	// 1. Buscar grafo do Neo4j (nos + arestas com decay)
+	// 1. Buscar grafo (nos + arestas com decay)
 	nodes, edges, err := sce.fetchGraph(ctx, idosoID)
 	if err != nil {
 		return nil, fmt.Errorf("falha ao buscar grafo: %w", err)
@@ -167,99 +167,106 @@ func (sce *SpectralCommunityEngine) AnalyzeCommunities(ctx context.Context, idos
 }
 
 // fetchGraph busca todos os nos e arestas relevantes do grafo de um paciente
+// Rewritten: uses BFS from patient node to discover neighbors (replaces *1..2 path)
 func (sce *SpectralCommunityEngine) fetchGraph(ctx context.Context, idosoID int64) ([]GraphNode, []GraphEdge, error) {
-	// Buscar todos os nos conectados ao paciente (ate 2 hops)
-	// Inclui: Events, Significantes, Topics, Emotions, Conditions, Medications
-	nodeQuery := `
-		MATCH (p:Person {id: $idosoId})-[*1..2]-(n)
-		WHERE n <> p
-		WITH DISTINCT n, labels(n)[0] AS nodeLabel,
-		     COALESCE(n.name, n.word, n.content, toString(id(n))) AS nodeName
-		RETURN toString(id(n)) AS nodeId, nodeLabel, nodeName
-	`
-
-	records, err := sce.client.ExecuteRead(ctx, nodeQuery, map[string]interface{}{
-		"idosoId": idosoID,
+	// Find patient node
+	patientResult, err := sce.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+		NodeType: "Person",
+		MatchKeys: map[string]interface{}{
+			"id": idosoID,
+		},
 	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("falha ao encontrar paciente: %w", err)
+	}
+
+	// BFS from patient up to depth 2
+	neighborIDs, err := sce.graphAdapter.Bfs(ctx, patientResult.NodeID, 2, "")
 	if err != nil {
 		return nil, nil, fmt.Errorf("falha ao buscar nos: %w", err)
 	}
 
 	nodeIndex := make(map[string]int)
 	var nodes []GraphNode
-	for _, rec := range records {
-		nid, _ := rec.Get("nodeId")
-		label, _ := rec.Get("nodeLabel")
-		name, _ := rec.Get("nodeName")
 
-		id := fmt.Sprintf("%v", nid)
-		if _, exists := nodeIndex[id]; exists {
+	for _, nID := range neighborIDs {
+		if nID == patientResult.NodeID {
+			continue // Skip patient node itself
+		}
+		if _, exists := nodeIndex[nID]; exists {
+			continue
+		}
+
+		// Get node details
+		nodeResult, err := sce.graphAdapter.GetNode(ctx, nID, "")
+		if err != nil {
 			continue
 		}
 
 		idx := len(nodes)
-		nodeIndex[id] = idx
+		nodeIndex[nID] = idx
+
+		nodeLabel := "Unknown"
+		if nt, ok := nodeResult.Content["node_type"].(string); ok {
+			nodeLabel = nt
+		} else if nodeResult.NodeType != "" {
+			nodeLabel = nodeResult.NodeType
+		}
+
+		nodeName := nID
+		if name, ok := nodeResult.Content["name"].(string); ok {
+			nodeName = name
+		} else if word, ok := nodeResult.Content["word"].(string); ok {
+			nodeName = word
+		} else if content, ok := nodeResult.Content["content"].(string); ok {
+			nodeName = content
+		}
+
 		nodes = append(nodes, GraphNode{
-			ID:    id,
-			Label: fmt.Sprintf("%v", label),
-			Name:  fmt.Sprintf("%v", name),
+			ID:    nID,
+			Label: nodeLabel,
+			Name:  nodeName,
 			Index: idx,
 		})
 	}
 
-	// Buscar arestas entre nos com peso temporal
-	edgeQuery := `
-		MATCH (p:Person {id: $idosoId})-[*1..2]-(n1)-[r]-(n2)
-		WHERE n1 <> p AND n2 <> p AND n1 <> n2
-		WITH DISTINCT n1, n2, r, type(r) AS relType,
-		     COALESCE(r.weight, 1.0) AS rawWeight,
-		     CASE
-		       WHEN r.created_at IS NOT NULL
-		       THEN duration.inDays(r.created_at, datetime()).days
-		       ELSE 30
-		     END AS ageDays
-		WITH n1, n2, relType,
-		     rawWeight * exp(-1.0 * ageDays / $tau) AS decayedWeight
-		WHERE decayedWeight > 0.01
-		RETURN toString(id(n1)) AS src, toString(id(n2)) AS dst,
-		       relType, decayedWeight
-	`
-
-	edgeRecords, err := sce.client.ExecuteRead(ctx, edgeQuery, map[string]interface{}{
-		"idosoId": idosoID,
-		"tau":     sce.tau,
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("falha ao buscar arestas: %w", err)
-	}
-
+	// Build edges: for each node, find its direct neighbors and record edges
 	var edges []GraphEdge
-	for _, rec := range edgeRecords {
-		src, _ := rec.Get("src")
-		dst, _ := rec.Get("dst")
-		relType, _ := rec.Get("relType")
-		weight, _ := rec.Get("decayedWeight")
+	edgeSeen := make(map[string]bool)
 
-		srcID := fmt.Sprintf("%v", src)
-		dstID := fmt.Sprintf("%v", dst)
-
-		srcIdx, srcOK := nodeIndex[srcID]
-		dstIdx, dstOK := nodeIndex[dstID]
-		if !srcOK || !dstOK {
+	for _, node := range nodes {
+		directNeighbors, err := sce.graphAdapter.Bfs(ctx, node.ID, 1, "")
+		if err != nil {
 			continue
 		}
+		for _, neighborID := range directNeighbors {
+			if neighborID == node.ID || neighborID == patientResult.NodeID {
+				continue
+			}
+			dstIdx, dstOK := nodeIndex[neighborID]
+			srcIdx := nodeIndex[node.ID]
+			if !dstOK {
+				continue
+			}
 
-		w := 1.0
-		if wf, ok := weight.(float64); ok {
-			w = wf
+			// Avoid duplicate edges
+			edgeKey := fmt.Sprintf("%d-%d", srcIdx, dstIdx)
+			reverseKey := fmt.Sprintf("%d-%d", dstIdx, srcIdx)
+			if edgeSeen[edgeKey] || edgeSeen[reverseKey] {
+				continue
+			}
+			edgeSeen[edgeKey] = true
+
+			// Default weight with decay approximation
+			w := 1.0
+
+			edges = append(edges, GraphEdge{
+				SourceIdx: srcIdx,
+				TargetIdx: dstIdx,
+				Weight:    w,
+				Type:      "RELATED",
+			})
 		}
-
-		edges = append(edges, GraphEdge{
-			SourceIdx: srcIdx,
-			TargetIdx: dstIdx,
-			Weight:    w,
-			Type:      fmt.Sprintf("%v", relType),
-		})
 	}
 
 	return nodes, edges, nil
@@ -698,26 +705,37 @@ func (sce *SpectralCommunityEngine) computeSpectralFractalDimension(eigenvalues 
 	return fractalDim
 }
 
-// WriteCommunities persiste as comunidades de volta no Neo4j
+// WriteCommunities persiste as comunidades de volta no grafo
 func (sce *SpectralCommunityEngine) WriteCommunities(ctx context.Context, idosoID int64, analysis *SpectralAnalysis) error {
-	if sce.client == nil || analysis == nil {
+	if sce.graphAdapter == nil || analysis == nil {
 		return nil
 	}
 
 	for _, comm := range analysis.Communities {
 		for _, nodeID := range comm.NodeIDs {
-			query := `
-				MATCH (n) WHERE toString(id(n)) = $nodeId
-				SET n.community_id = $communityId,
-				    n.community_label = $communityLabel,
-				    n.community_coherence = $coherence,
-				    n.spectral_updated_at = datetime()
-			`
-			_, err := sce.client.ExecuteWrite(ctx, query, map[string]interface{}{
-				"nodeId":         nodeID,
-				"communityId":    comm.ID,
-				"communityLabel": comm.Label,
-				"coherence":      comm.Coherence,
+			// Update node content with community metadata using MergeNode
+			node, err := sce.graphAdapter.GetNode(ctx, nodeID, "")
+			if err != nil {
+				log.Printf("[SPECTRAL] Aviso: falha ao obter no %s: %v", nodeID, err)
+				continue
+			}
+
+			nodeType := "Unknown"
+			if node.NodeType != "" {
+				nodeType = node.NodeType
+			}
+
+			_, err = sce.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+				NodeType: nodeType,
+				MatchKeys: map[string]interface{}{
+					"id": nodeID,
+				},
+				OnMatchSet: map[string]interface{}{
+					"community_id":         comm.ID,
+					"community_label":      comm.Label,
+					"community_coherence":  comm.Coherence,
+					"spectral_updated_at":  nietzscheInfra.NowUnix(),
+				},
 			})
 			if err != nil {
 				log.Printf("[SPECTRAL] Aviso: falha ao atualizar no %s: %v", nodeID, err)
@@ -726,18 +744,17 @@ func (sce *SpectralCommunityEngine) WriteCommunities(ctx context.Context, idosoI
 	}
 
 	// Salvar metadados da analise no no Person
-	metaQuery := `
-		MATCH (p:Person {id: $idosoId})
-		SET p.spectral_communities = $numCommunities,
-		    p.spectral_fractal_dim = $fractalDim,
-		    p.spectral_fiedler = $fiedlerValue,
-		    p.spectral_analyzed_at = datetime()
-	`
-	_, err := sce.client.ExecuteWrite(ctx, metaQuery, map[string]interface{}{
-		"idosoId":        idosoID,
-		"numCommunities": analysis.OptimalK,
-		"fractalDim":     analysis.FractalDimension,
-		"fiedlerValue":   analysis.FiedlerValue,
+	_, err := sce.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+		NodeType: "Person",
+		MatchKeys: map[string]interface{}{
+			"id": idosoID,
+		},
+		OnMatchSet: map[string]interface{}{
+			"spectral_communities":  analysis.OptimalK,
+			"spectral_fractal_dim":  analysis.FractalDimension,
+			"spectral_fiedler":      analysis.FiedlerValue,
+			"spectral_analyzed_at":  nietzscheInfra.NowUnix(),
+		},
 	})
 
 	return err

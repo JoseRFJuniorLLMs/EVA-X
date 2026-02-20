@@ -7,29 +7,30 @@ import (
 	"context"
 	"eva/internal/brainstem/config"
 	"eva/internal/cortex/gemini"
-	"eva/internal/brainstem/infrastructure/graph"
 	"fmt"
+
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 )
 
-// GraphReasoningService orquestra o raciocínio clínico usando Neo4j e Gemini Thinking
+// GraphReasoningService orquestra o raciocinio clinico usando NietzscheDB e Gemini Thinking
 type GraphReasoningService struct {
-	neo4jClient  *graph.Neo4jClient
+	graphAdapter *nietzscheInfra.GraphAdapter
 	geminiClient *gemini.Client
 	cfg          *config.Config
-	context      *ContextService // ✅ NOVO
+	context      *ContextService
 }
 
-func NewGraphReasoningService(cfg *config.Config, neo4jClient *graph.Neo4jClient, ctxService *ContextService) *GraphReasoningService {
+func NewGraphReasoningService(cfg *config.Config, graphAdapter *nietzscheInfra.GraphAdapter, ctxService *ContextService) *GraphReasoningService {
 	return &GraphReasoningService{
-		neo4jClient: neo4jClient,
-		cfg:         cfg,
-		context:     ctxService,
+		graphAdapter: graphAdapter,
+		cfg:          cfg,
+		context:      ctxService,
 	}
 }
 
-// AnalyzeGraphContext extrai o contexto do grafo e pede análise do Gemini
+// AnalyzeGraphContext extrai o contexto do grafo e pede analise do Gemini
 func (s *GraphReasoningService) AnalyzeGraphContext(ctx context.Context, idosoID int64, currentTopic string) (string, error) {
-	// 1. Extrair Sub-grafo relevante (últimos nós ativados ou relacionados ao tópico)
+	// 1. Extrair Sub-grafo relevante (ultimos nos ativados ou relacionados ao topico)
 	graphData, err := s.fetchPatientContext(ctx, idosoID, currentTopic)
 	if err != nil {
 		return "", fmt.Errorf("erro ao buscar grafo: %w", err)
@@ -41,29 +42,28 @@ func (s *GraphReasoningService) AnalyzeGraphContext(ctx context.Context, idosoID
 
 	// 2. Construir Prompt de Thinking
 	prompt := fmt.Sprintf(`
-	Você é o Módulo de Raciocínio Clínico da EVA (Fractal Zeta Priming Network).
-	
-	CONTEXTO DO GRAFO (Neo4j):
+	Voce e o Modulo de Raciocinio Clinico da EVA (Fractal Zeta Priming Network).
+
+	CONTEXTO DO GRAFO (NietzscheDB):
 	%s
-	
-	TÓPICO ATUAL: "%s"
-	
+
+	TOPICO ATUAL: "%s"
+
 	TAREFAS:
-	1. Analise as relações causais no grafo (ex: Dor -> Humor).
-	2. Use raciocínio psicanalítico e médico.
-	3. Decida: Devemos focar no sintoma físico, na emoção ou em ambos?
-	
-	Responda APENAS com sua linha de raciocínio (Thoughts) e uma sugestão de abordagem técnica.
+	1. Analise as relacoes causais no grafo (ex: Dor -> Humor).
+	2. Use raciocinio psicanalitico e medico.
+	3. Decida: Devemos focar no sintoma fisico, na emocao ou em ambos?
+
+	Responda APENAS com sua linha de raciocinio (Thoughts) e uma sugestao de abordagem tecnica.
 	`, graphData, currentTopic)
 
-	// 3. Chamar Gemini Thinking (usando endpoint REST padrão por enquanto, simulando thinking via prompt)
-	// Nota: O Client atual de streaming não é ideal para isso, usaremos helper REST se disponível ou criaremos um on-the-fly.
+	// 3. Chamar Gemini Thinking
 	analysis, err := gemini.AnalyzeText(s.cfg, prompt)
 	if err != nil {
-		return "", fmt.Errorf("erro na análise do Gemini: %w", err)
+		return "", fmt.Errorf("erro na analise do Gemini: %w", err)
 	}
 
-	// ✅ FASE 3: Persistir Factual Memory
+	// Persistir Factual Memory
 	if s.context != nil {
 		go s.context.SaveAnalysis(context.Background(), idosoID, "GRAPH", analysis)
 	}
@@ -71,36 +71,79 @@ func (s *GraphReasoningService) AnalyzeGraphContext(ctx context.Context, idosoID
 	return analysis, nil
 }
 
-// fetchPatientContext busca nós conectados ao paciente e ao tópico recente
+// fetchPatientContext busca nos conectados ao paciente e ao topico recente
+// Rewritten: uses BFS from patient node instead of Cypher *1..2 path
 func (s *GraphReasoningService) fetchPatientContext(ctx context.Context, idosoID int64, topic string) (string, error) {
-	cypher := `
-	MATCH (p:Paciente {id: $idosoID})-[r*1..2]-(n)
-	WHERE n.timestamp > datetime() - duration({days: 30})
-	RETURN n.label AS Label, type(r[0]) AS Rel, n.name AS Name, n.value AS Value
-	LIMIT 10
-	`
-
-	params := map[string]interface{}{
-		"idosoID": idosoID,
-	}
-
-	records, err := s.neo4jClient.ExecuteRead(ctx, cypher, params)
+	// Find patient node
+	patientResult, err := s.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+		NodeType: "Paciente",
+		MatchKeys: map[string]interface{}{
+			"id": idosoID,
+		},
+	})
 	if err != nil {
 		return "", err
 	}
 
-	var contextStr string
-	for _, rec := range records {
-		label, _ := rec.Get("Label")
-		rel, _ := rec.Get("Rel")
-		name, _ := rec.Get("Name")
-		val, _ := rec.Get("Value")
+	// BFS from patient up to depth 2
+	neighborIDs, err := s.graphAdapter.Bfs(ctx, patientResult.NodeID, 2, "")
+	if err != nil {
+		return "", err
+	}
 
-		contextStr += fmt.Sprintf("(%v) -[%v]-> (%v: %v)\n", "Paciente", rel, label, name)
-		if val != nil {
-			contextStr += fmt.Sprintf("   Detalhe: %v\n", val)
+	thirtyDaysAgo := nietzscheInfra.DaysAgoUnix(30)
+	var contextStr string
+	count := 0
+
+	for _, nID := range neighborIDs {
+		if nID == patientResult.NodeID {
+			continue
+		}
+
+		node, err := s.graphAdapter.GetNode(ctx, nID, "")
+		if err != nil {
+			continue
+		}
+
+		// Filter by timestamp (last 30 days)
+		timestamp := toFloat64GraphReasoning(node.Content["timestamp"])
+		if timestamp > 0 && timestamp < thirtyDaysAgo {
+			continue
+		}
+
+		label := node.NodeType
+		name, _ := node.Content["name"].(string)
+		value, _ := node.Content["value"].(string)
+
+		contextStr += fmt.Sprintf("(Paciente) -[RELATED]-> (%s: %s)\n", label, name)
+		if value != "" {
+			contextStr += fmt.Sprintf("   Detalhe: %s\n", value)
+		}
+
+		count++
+		if count >= 10 {
+			break
 		}
 	}
 
 	return contextStr, nil
+}
+
+// Helper type conversion
+func toFloat64GraphReasoning(v interface{}) float64 {
+	if v == nil {
+		return 0
+	}
+	switch val := v.(type) {
+	case float64:
+		return val
+	case float32:
+		return float64(val)
+	case int:
+		return float64(val)
+	case int64:
+		return float64(val)
+	default:
+		return 0
+	}
 }

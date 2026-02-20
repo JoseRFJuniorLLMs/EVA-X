@@ -5,34 +5,35 @@ package stories
 
 import (
 	"context"
-	"eva/internal/brainstem/infrastructure/vector" // Correct package for EmbeddingService
+	"fmt"
+
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	"eva/internal/hippocampus/memory"
 	"eva/pkg/types"
-	"fmt"
 )
 
 type Repository struct {
-	qdrant   *vector.QdrantClient
-	embedder *memory.EmbeddingService
+	vectorAdapter *nietzscheInfra.VectorAdapter
+	embedder      *memory.EmbeddingService
 }
 
-func NewRepository(qdrant *vector.QdrantClient, embedder *memory.EmbeddingService) *Repository {
+func NewRepository(vectorAdapter *nietzscheInfra.VectorAdapter, embedder *memory.EmbeddingService) *Repository {
 	return &Repository{
-		qdrant:   qdrant,
-		embedder: embedder,
+		vectorAdapter: vectorAdapter,
+		embedder:      embedder,
 	}
 }
 
 // FindRelatedStories busca histórias baseadas na emoção ou contexto atual
 func (r *Repository) FindRelatedStories(ctx context.Context, query string, limit int) ([]*types.TherapeuticStory, error) {
 	// 1. Gerar embedding da query (emoção/contexto)
-	vector, err := r.embedder.GenerateEmbedding(ctx, query)
+	vec, err := r.embedder.GenerateEmbedding(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate embedding for story search: %w", err)
 	}
 
-	// 2. Buscar no Qdrant
-	results, err := r.qdrant.Search(ctx, "stories", vector, uint64(limit), nil)
+	// 2. Buscar no NietzscheDB
+	results, err := r.vectorAdapter.Search(ctx, "stories", vec, limit, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to search stories: %w", err)
 	}
@@ -45,23 +46,33 @@ func (r *Repository) FindRelatedStories(ctx context.Context, query string, limit
 
 		// Extrair campos do Payload
 		if title, ok := res.Payload["title"]; ok {
-			story.Title = title.GetStringValue()
+			if s, ok := title.(string); ok {
+				story.Title = s
+			}
 		}
 		if content, ok := res.Payload["content"]; ok {
-			story.Content = content.GetStringValue()
+			if s, ok := content.(string); ok {
+				story.Content = s
+			}
 		}
 		if archetype, ok := res.Payload["archetype"]; ok {
-			story.Archetype = archetype.GetStringValue()
+			if s, ok := archetype.(string); ok {
+				story.Archetype = s
+			}
 		}
 		if moral, ok := res.Payload["moral"]; ok {
-			story.Moral = moral.GetStringValue()
+			if s, ok := moral.(string); ok {
+				story.Moral = s
+			}
 		}
 
-		// Tags e TargetEmotions (Listas)
+		// Tags (lista)
 		if tags, ok := res.Payload["tags"]; ok {
-			if list := tags.GetListValue(); list != nil {
-				for _, v := range list.Values {
-					story.Tags = append(story.Tags, v.GetStringValue())
+			if tagList, ok := tags.([]interface{}); ok {
+				for _, v := range tagList {
+					if s, ok := v.(string); ok {
+						story.Tags = append(story.Tags, s)
+					}
 				}
 			}
 		}

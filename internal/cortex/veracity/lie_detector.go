@@ -5,7 +5,7 @@ package veracity
 
 import (
 	"context"
-	"eva/internal/brainstem/infrastructure/graph"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	"eva/internal/cortex/lacan"
 	"eva/internal/cortex/transnar"
 	"fmt"
@@ -16,19 +16,19 @@ import (
 
 // LieDetector motor de detecção de inconsistências
 type LieDetector struct {
-	neo4j        *graph.Neo4jClient
+	graph        *nietzscheInfra.GraphAdapter
 	lacanService *lacan.SignifierService
 	transnar     *transnar.Engine
 }
 
 // NewLieDetector cria um novo detector
 func NewLieDetector(
-	neo4j *graph.Neo4jClient,
+	graphAdapter *nietzscheInfra.GraphAdapter,
 	lacanService *lacan.SignifierService,
 	transnarEngine *transnar.Engine,
 ) *LieDetector {
 	return &LieDetector{
-		neo4j:        neo4j,
+		graph:        graphAdapter,
 		lacanService: lacanService,
 		transnar:     transnarEngine,
 	}
@@ -392,41 +392,29 @@ func (d *LieDetector) queryGraphForEntity(
 	userID int64,
 	entity string,
 ) []Evidence {
-
-	// Query genérica para buscar menções da entidade
-	query := `
-		MATCH (p:Person {id: $userId})-[r]->(n)
-		WHERE toLower(n.nome) CONTAINS toLower($entity)
-		  OR toLower(type(r)) CONTAINS toLower($entity)
-		RETURN type(r) as relacao, n.nome as entidade, r.timestamp as timestamp
-		ORDER BY r.timestamp DESC
-		LIMIT 5
-	`
-
-	params := map[string]interface{}{
-		"userId": userID,
-		"entity": entity,
+	if d.graph == nil {
+		return []Evidence{}
 	}
 
-	records, err := d.neo4j.ExecuteRead(ctx, query, params)
+	nql := `MATCH (p:Person {id: $userId})-[r]->(n) WHERE toLower(n.nome) CONTAINS toLower($entity) RETURN n LIMIT 5`
+	result, err := d.graph.ExecuteNQL(ctx, nql, map[string]interface{}{
+		"userId": fmt.Sprintf("%d", userID),
+		"entity": entity,
+	}, "")
 	if err != nil {
 		log.Printf("[LieDetector] Erro ao buscar entidade: %v", err)
 		return []Evidence{}
 	}
 
 	evidence := []Evidence{}
-	for _, record := range records {
-		relacao, _ := record.Get("relacao")
-		entidade, _ := record.Get("entidade")
-		timestamp, _ := record.Get("timestamp")
-
+	for _, node := range result.Nodes {
+		nome := fmt.Sprintf("%v", node.Content["nome"])
 		evidence = append(evidence, Evidence{
-			Fact:      relacao.(string) + " " + entidade.(string),
-			Timestamp: timestamp.(time.Time),
-			Source:    "Neo4j Graph",
+			Fact:      "RELATED: " + nome,
+			Timestamp: time.Now(),
+			Source:    "NietzscheDB Graph",
 		})
 	}
-
 	return evidence
 }
 
@@ -436,37 +424,28 @@ func (d *LieDetector) queryRecentEvents(
 	userID int64,
 	days int,
 ) []Evidence {
-
-	query := `
-		MATCH (p:Person {id: $userId})-[r]->(n)
-		WHERE r.timestamp > datetime() - duration({days: $days})
-		RETURN type(r) as tipo, n.nome as nome, r.timestamp as timestamp
-		ORDER BY r.timestamp DESC
-		LIMIT 10
-	`
-
-	params := map[string]interface{}{
-		"userId": userID,
-		"days":   days,
+	if d.graph == nil {
+		return []Evidence{}
 	}
 
-	records, err := d.neo4j.ExecuteRead(ctx, query, params)
+	cutoff := nietzscheInfra.DaysAgoUnix(days)
+	nql := `MATCH (p:Person {id: $userId})-[r]->(n) WHERE n.timestamp > $cutoff RETURN n LIMIT 10`
+	result, err := d.graph.ExecuteNQL(ctx, nql, map[string]interface{}{
+		"userId": fmt.Sprintf("%d", userID),
+		"cutoff": cutoff,
+	}, "")
 	if err != nil {
 		return []Evidence{}
 	}
 
 	evidence := []Evidence{}
-	for _, record := range records {
-		tipo, _ := record.Get("tipo")
-		nome, _ := record.Get("nome")
-		timestamp, _ := record.Get("timestamp")
-
+	for _, node := range result.Nodes {
+		nome := fmt.Sprintf("%v", node.Content["nome"])
 		evidence = append(evidence, Evidence{
-			Fact:      tipo.(string) + ": " + nome.(string),
-			Timestamp: timestamp.(time.Time),
-			Source:    "Neo4j Recent Events",
+			Fact:      "EVENT: " + nome,
+			Timestamp: time.Now(),
+			Source:    "NietzscheDB Recent Events",
 		})
 	}
-
 	return evidence
 }

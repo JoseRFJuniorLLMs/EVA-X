@@ -6,8 +6,6 @@ package knowledge
 import (
 	"context"
 	"encoding/json"
-	"eva/internal/brainstem/config"
-	"eva/internal/brainstem/infrastructure/vector" // Import wrapper
 	"fmt"
 	"io"
 	"log"
@@ -15,14 +13,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/qdrant/go-client/qdrant"
+	"eva/internal/brainstem/config"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 )
 
 // EmbeddingService rastreia cadeias de significantes via embeddings semânticos
 // Implementa "L'instance de la lettre" - a letra que circula e se repete
 type EmbeddingService struct {
 	cfg            *config.Config
-	qdrantClient   *vector.QdrantClient // Use wrapper
+	vectorAdapter  *nietzscheInfra.VectorAdapter
 	httpClient     *http.Client
 	collectionName string
 
@@ -42,23 +41,15 @@ type SignifierChain struct {
 }
 
 // NewEmbeddingService cria serviço de embeddings
-func NewEmbeddingService(cfg *config.Config, qdrantClient *vector.QdrantClient) (*EmbeddingService, error) {
+func NewEmbeddingService(cfg *config.Config, vectorAdapter *nietzscheInfra.VectorAdapter) (*EmbeddingService, error) {
 	svc := &EmbeddingService{
 		cfg:            cfg,
-		qdrantClient:   qdrantClient,
+		vectorAdapter:  vectorAdapter,
 		httpClient:     &http.Client{Timeout: 10 * time.Second},
 		collectionName: "signifier_chains",
 		// PERFORMANCE FIX: Inicializar caches (sem Redis por enquanto)
 		embeddingCache: NewEmbeddingCache(nil),
 		signifierCache: NewSignifierCache(nil),
-	}
-
-	// Criar coleção se não existir
-	// Check qdrantClient is not nil to avoid panic during testing if passed nil
-	if qdrantClient != nil {
-		if err := svc.ensureCollection(context.Background()); err != nil {
-			log.Printf("⚠️ Warning: Could not create Qdrant collection: %v", err)
-		}
 	}
 
 	log.Printf("✅ [EMBEDDING] Service initialized with caching enabled")
@@ -74,22 +65,9 @@ func (e *EmbeddingService) SetRedisClient(redisClient interface{}) {
 	}
 }
 
-// ensureCollection garante que a coleção existe
+// ensureCollection is no longer needed - NietzscheDB handles collection management.
+// Kept as no-op for backward compatibility of any callers.
 func (e *EmbeddingService) ensureCollection(ctx context.Context) error {
-	// wrapper provides GetCollectionInfo
-	_, err := e.qdrantClient.GetCollectionInfo(ctx, e.collectionName)
-	if err == nil {
-		return nil // Já existe
-	}
-
-	// Criar coleção (gemini-embedding-001 usa 3072 dimensões)
-	// wrapper provides CreateCollection
-	err = e.qdrantClient.CreateCollection(ctx, e.collectionName, 3072)
-	if err != nil {
-		return fmt.Errorf("failed to create collection: %w", err)
-	}
-
-	log.Printf("✅ Created Qdrant collection: %s", e.collectionName)
 	return nil
 }
 
@@ -179,7 +157,7 @@ func (e *EmbeddingService) generateEmbeddingFromAPI(ctx context.Context, text st
 
 // TrackSignifierChain rastreia cadeia de significantes
 func (e *EmbeddingService) TrackSignifierChain(ctx context.Context, idosoID int64, text string, emotionalCharge float64) error {
-	if e.qdrantClient == nil {
+	if e.vectorAdapter == nil {
 		return nil
 	}
 
@@ -192,8 +170,7 @@ func (e *EmbeddingService) TrackSignifierChain(ctx context.Context, idosoID int6
 	// Extrair palavras-chave (simples split por enquanto, ideal seria NLP)
 	keywords := strings.Fields(text)
 
-	// Criar ponto no Qdrant
-	pointID := uint64(time.Now().UnixNano())
+	pointID := fmt.Sprintf("%d", time.Now().UnixNano())
 
 	payload := map[string]interface{}{
 		"idoso_id":         idosoID,
@@ -203,22 +180,19 @@ func (e *EmbeddingService) TrackSignifierChain(ctx context.Context, idosoID int6
 		"timestamp":        time.Now().Unix(),
 	}
 
-	// Use wrapper's CreatePoint and Upsert
-	point := vector.CreatePoint(pointID, embedding, payload)
-
-	err = e.qdrantClient.Upsert(ctx, e.collectionName, []*qdrant.PointStruct{point})
+	err = e.vectorAdapter.Upsert(ctx, e.collectionName, pointID, embedding, payload)
 	if err != nil {
 		return fmt.Errorf("failed to upsert point: %w", err)
 	}
 
-	log.Printf("🔗 [QDRANT] Signifier chain tracked: idoso=%d", idosoID)
+	log.Printf("🔗 [VECTOR] Signifier chain tracked: idoso=%d", idosoID)
 	return nil
 }
 
 // FindRelatedSignifiers busca significantes semanticamente relacionados
 // PERFORMANCE FIX: Cache de signifiers (TTL 5min)
 func (e *EmbeddingService) FindRelatedSignifiers(ctx context.Context, idosoID int64, text string, limit int) ([]SignifierChain, error) {
-	if e.qdrantClient == nil {
+	if e.vectorAdapter == nil {
 		return nil, nil
 	}
 
@@ -235,27 +209,8 @@ func (e *EmbeddingService) FindRelatedSignifiers(ctx context.Context, idosoID in
 		return nil, err
 	}
 
-	// Buscar pontos similares usando wrapper
-	// Filter just for user_id
-	// Need to manually create filter for wrapper Search, or use SearchWithScore which has user filter built-in
-	// Let's use Search with explicit filter as wrapper's SearchWithScore enforces a min score which we can set to 0.7 maybe?
-
-	filter := &qdrant.Filter{
-		Must: []*qdrant.Condition{
-			{
-				ConditionOneOf: &qdrant.Condition_Field{
-					Field: &qdrant.FieldCondition{
-						Key: "idoso_id",
-						Match: &qdrant.Match{
-							MatchValue: &qdrant.Match_Integer{Integer: idosoID},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	searchResult, err := e.qdrantClient.Search(ctx, e.collectionName, embedding, uint64(limit), filter)
+	// Buscar pontos similares com filtro de usuario via VectorAdapter
+	searchResult, err := e.vectorAdapter.Search(ctx, e.collectionName, embedding, limit, idosoID)
 	if err != nil {
 		return nil, fmt.Errorf("search failed: %w", err)
 	}
@@ -265,10 +220,10 @@ func (e *EmbeddingService) FindRelatedSignifiers(ctx context.Context, idosoID in
 		chain := SignifierChain{}
 
 		if kw, ok := point.Payload["keywords"]; ok {
-			if list, ok := kw.GetKind().(*qdrant.Value_ListValue); ok {
-				for _, v := range list.ListValue.Values {
-					if s, ok := v.GetKind().(*qdrant.Value_StringValue); ok {
-						chain.RelatedWords = append(chain.RelatedWords, s.StringValue)
+			if kwList, ok := kw.([]interface{}); ok {
+				for _, v := range kwList {
+					if s, ok := v.(string); ok {
+						chain.RelatedWords = append(chain.RelatedWords, s)
 					}
 				}
 			}
@@ -279,20 +234,23 @@ func (e *EmbeddingService) FindRelatedSignifiers(ctx context.Context, idosoID in
 		}
 
 		if charge, ok := point.Payload["emotional_charge"]; ok {
-			if dbl, ok := charge.GetKind().(*qdrant.Value_DoubleValue); ok {
-				chain.EmotionalCharge = dbl.DoubleValue
+			if dbl, ok := charge.(float64); ok {
+				chain.EmotionalCharge = dbl
 			}
 		}
 
 		if txt, ok := point.Payload["text"]; ok {
-			if str, ok := txt.GetKind().(*qdrant.Value_StringValue); ok {
-				chain.Contexts = append(chain.Contexts, str.StringValue)
+			if str, ok := txt.(string); ok {
+				chain.Contexts = append(chain.Contexts, str)
 			}
 		}
 
 		if ts, ok := point.Payload["timestamp"]; ok {
-			if intVal, ok := ts.GetKind().(*qdrant.Value_IntegerValue); ok {
-				chain.LastOccurrence = time.Unix(intVal.IntegerValue, 0)
+			switch v := ts.(type) {
+			case int64:
+				chain.LastOccurrence = time.Unix(v, 0)
+			case float64:
+				chain.LastOccurrence = time.Unix(int64(v), 0)
 			}
 		}
 

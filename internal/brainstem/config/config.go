@@ -77,29 +77,9 @@ type Config struct {
 	EVAWorkspaceDir string // Sandbox para filesystem
 	EVAProjectDir   string // Diretório do código-fonte EVA
 
-	// NietzscheDB
-	NietzscheDBURL string
-
-	// Neo4j - dados dos pacientes
-	Neo4jURI      string
-	Neo4jUsername string
-	Neo4jPassword string
-
-	// Neo4j CORE - memória pessoal da EVA (porta 7688)
-	Neo4jCoreURI      string
-	Neo4jCoreUsername string
-	Neo4jCorePassword string
-	Neo4jCoreDB       string
-
-	// Redis
-	RedisHost     string
-	RedisPort     string
-	RedisPassword string
-
-	// Qdrant
-	QdrantHost string
-	QdrantPort int
-	AppURL     string
+	// NietzscheDB (replaces Neo4j + Qdrant + Redis)
+	NietzscheGRPCAddr string
+	AppURL            string
 
 	// Speaker Recognition
 	SpeakerModelPath string
@@ -197,26 +177,9 @@ func Load() (*Config, error) {
 		// Auth
 		JWTSecret: getEnvRequired("JWT_SECRET"),
 
-		// Neo4j - dados dos pacientes
-		Neo4jURI:      getEnvWithDefault("NEO4J_URI", "neo4j://localhost:7687"),
-		Neo4jUsername: getEnvWithDefault("NEO4J_USERNAME", "neo4j"),
-		Neo4jPassword: getEnvWithDefault("NEO4J_PASSWORD", "password"),
-
-		// Neo4j CORE - memória pessoal da EVA
-		Neo4jCoreURI:      getEnvWithDefault("NEO4J_CORE_URI", "bolt://localhost:7688"),
-		Neo4jCoreUsername: getEnvWithDefault("NEO4J_CORE_USER", "neo4j"),
-		Neo4jCorePassword: getEnvWithDefault("NEO4J_CORE_PASSWORD", "password"),
-		Neo4jCoreDB:       getEnvWithDefault("NEO4J_CORE_DB", "neo4j"),
-
-		// Redis
-		RedisHost:     getEnvWithDefault("REDIS_HOST", "localhost"),
-		RedisPort:     getEnvWithDefault("REDIS_PORT", "6379"),
-		RedisPassword: os.Getenv("REDIS_PASSWORD"),
-
-		// Qdrant
-		QdrantHost: getEnvWithDefault("QDRANT_HOST", "localhost"),
-		QdrantPort: getEnvInt("QDRANT_PORT", 6334),
-		AppURL:     getEnv("APP_URL", "https://eva-mind-fzpn.fly.dev"),
+		// NietzscheDB (replaces Neo4j + Qdrant + Redis)
+		NietzscheGRPCAddr: getEnvWithDefault("NIETZSCHE_GRPC_ADDR", "localhost:50051"),
+		AppURL:            getEnv("APP_URL", "https://eva-mind-fzpn.fly.dev"),
 
 		// Speaker Recognition
 		SpeakerModelPath: getEnvWithDefault("SPEAKER_MODEL_PATH", ""),
@@ -238,8 +201,7 @@ func Load() (*Config, error) {
 		EVAWorkspaceDir: getEnvWithDefault("EVA_WORKSPACE_DIR", "/home/eva/workspace"),
 		EVAProjectDir:   getEnvWithDefault("EVA_PROJECT_DIR", "/opt/eva-mind"),
 
-		// NietzscheDB
-		NietzscheDBURL: getEnvWithDefault("NIETZSCHE_DB_URL", "http://localhost:3000"),
+		// (NietzscheGRPCAddr already set above)
 
 		// Multi-LLM
 		ClaudeAPIKey:   os.Getenv("CLAUDE_API_KEY"),

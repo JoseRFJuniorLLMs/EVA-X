@@ -11,15 +11,13 @@ import (
 	"fmt"
 	"log"
 	"strings"
-
-	"github.com/qdrant/go-client/qdrant"
 )
 
-// RetrieveHybridWithFDPN busca memórias usando Qdrant + FDPN boost
+// RetrieveHybridWithFDPN busca memórias usando NietzscheDB + FDPN boost
 // O FDPN prima o grafo ANTES da busca e injeta energia no ranking
 func (r *RetrievalService) RetrieveHybridWithFDPN(ctx context.Context, idosoID int64, query string, k int) ([]*SearchResult, error) {
-	if r.qdrant == nil {
-		return nil, fmt.Errorf("qdrant client not initialized")
+	if r.vectorAdapter == nil {
+		return nil, fmt.Errorf("vector adapter not initialized")
 	}
 
 	log.Printf("🔍 [RETRIEVAL+FDPN] Query=\"%s\" (patient=%d)", query, idosoID)
@@ -41,10 +39,10 @@ func (r *RetrievalService) RetrieveHybridWithFDPN(ctx context.Context, idosoID i
 		}
 	}
 
-	// 3. Busca no Qdrant
-	qResults, err := r.qdrant.Search(ctx, "memories", queryEmbedding, uint64(k*2), nil) // 2x para ter margem pós-boost
+	// 3. Busca no NietzscheDB (2x para ter margem pós-boost)
+	qResults, err := r.vectorAdapter.Search(ctx, "memories", queryEmbedding, k*2, idosoID)
 	if err != nil {
-		return nil, fmt.Errorf("erro busca Qdrant: %w", err)
+		return nil, fmt.Errorf("erro busca vetorial: %w", err)
 	}
 
 	var allResults []*SearchResult
@@ -52,16 +50,23 @@ func (r *RetrievalService) RetrieveHybridWithFDPN(ctx context.Context, idosoID i
 	resultsMap := make(map[int64]*SearchResult)
 	var activatedNodeIDs []string
 
-	// 4. Processar resultados do Qdrant
+	// 4. Processar resultados do NietzscheDB
 	for _, qr := range qResults {
 		// Extrair ID do payload
 		p := qr.Payload
 		var memID int64
 
-		if idVal, ok := p["id"].GetKind().(*qdrant.Value_IntegerValue); ok {
-			memID = idVal.IntegerValue
-		} else if idVal, ok := p["id"].GetKind().(*qdrant.Value_DoubleValue); ok {
-			memID = int64(idVal.DoubleValue)
+		if idVal, ok := p["id"]; ok {
+			switch v := idVal.(type) {
+			case int64:
+				memID = v
+			case float64:
+				memID = int64(v)
+			case int:
+				memID = int64(v)
+			default:
+				continue
+			}
 		} else {
 			continue
 		}
@@ -69,8 +74,8 @@ func (r *RetrievalService) RetrieveHybridWithFDPN(ctx context.Context, idosoID i
 		// Criar SearchResult
 		result := &SearchResult{
 			Memory:     &Memory{ID: memID},
-			Similarity: float64(qr.Score),
-			Score:      float64(qr.Score), // Score inicial = similarity
+			Similarity: qr.Score,
+			Score:      qr.Score, // Score inicial = similarity
 		}
 
 		memoryIDs = append(memoryIDs, memID)
@@ -100,7 +105,7 @@ func (r *RetrievalService) RetrieveHybridWithFDPN(ctx context.Context, idosoID i
 		log.Printf("✅ [RETRIEVAL+FDPN] Boosted %d/%d memories", boostedCount, len(resultsMap))
 	}
 
-	// 6. Busca recursiva via Neo4j (top 3 semanticamente)
+	// 6. Busca recursiva via grafo (top 3 semanticamente)
 	var topSemanticIDs []int64
 	for i := 0; i < len(memoryIDs) && i < 3; i++ {
 		topSemanticIDs = append(topSemanticIDs, memoryIDs[i])
@@ -118,7 +123,7 @@ func (r *RetrievalService) RetrieveHybridWithFDPN(ctx context.Context, idosoID i
 
 			for _, relatedID := range relatedIDs {
 				if _, exists := resultsMap[relatedID]; !exists {
-					// Memória relacionada via grafo (não via Qdrant)
+					// Memória relacionada via grafo (não via busca vetorial)
 					result := &SearchResult{
 						Memory:     &Memory{ID: relatedID},
 						Similarity: 0.85, // Score "Associação Forte"

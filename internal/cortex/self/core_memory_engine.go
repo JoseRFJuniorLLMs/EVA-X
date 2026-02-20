@@ -9,31 +9,29 @@ import (
 	"log"
 	"time"
 
-	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
+
+	nietzsche "nietzsche-sdk"
 )
 
-// CoreMemoryEngine - Sistema de memória própria da EVA
-// Gerencia identidade, personalidade e aprendizado contínuo
+// CoreMemoryEngine - Sistema de memoria propria da EVA
+// Gerencia identidade, personalidade e aprendizado continuo
 type CoreMemoryEngine struct {
-	driver              neo4j.DriverWithContext
-	dbName              string
-	reflectionService   *ReflectionService
+	graphAdapter         *nietzscheInfra.GraphAdapter
+	reflectionService    *ReflectionService
 	anonymizationService *AnonymizationService
-	embeddingService    EmbeddingService
-	deduplicator        *SemanticDeduplicator
+	embeddingService     EmbeddingService
+	deduplicator         *SemanticDeduplicator
 }
 
-// CoreMemoryConfig configuração do Core Memory
+// CoreMemoryConfig configuracao do Core Memory
 type CoreMemoryConfig struct {
-	Neo4jURI            string
-	Neo4jUser           string
-	Neo4jPassword       string
-	Database            string
-	SimilarityThreshold float64 // 0.88 default para deduplicação
+	GraphAdapter        *nietzscheInfra.GraphAdapter
+	SimilarityThreshold float64 // 0.88 default para deduplicacao
 	MinOccurrences      int     // 3 default para meta insights
 }
 
-// MemoryType tipos de memória da EVA
+// MemoryType tipos de memoria da EVA
 type MemoryType string
 
 const (
@@ -47,7 +45,7 @@ const (
 	CapabilityKnowledge  MemoryType = "capability"
 )
 
-// AbstractionLevel níveis de abstração
+// AbstractionLevel niveis de abstracao
 type AbstractionLevel string
 
 const (
@@ -56,20 +54,20 @@ const (
 	Universal    AbstractionLevel = "universal"
 )
 
-// CoreMemory memória da EVA
+// CoreMemory memoria da EVA
 type CoreMemory struct {
-	ID               string
-	MemoryType       MemoryType
-	Content          string
-	AbstractionLevel AbstractionLevel
-	SourceContext    string  // Anonimizado
-	EmotionalValence float64 // -1.0 a 1.0
-	ImportanceWeight float64 // 0.0 a 1.0
-	Embedding        []float32
-	CreatedAt        time.Time
-	LastReinforced   time.Time
+	ID                 string
+	MemoryType         MemoryType
+	Content            string
+	AbstractionLevel   AbstractionLevel
+	SourceContext      string  // Anonimizado
+	EmotionalValence   float64 // -1.0 a 1.0
+	ImportanceWeight   float64 // 0.0 a 1.0
+	Embedding          []float32
+	CreatedAt          time.Time
+	LastReinforced     time.Time
 	ReinforcementCount int
-	RelatedMemories  []string
+	RelatedMemories    []string
 }
 
 // EvaSelf estado da personalidade da EVA
@@ -93,7 +91,7 @@ type EvaSelf struct {
 	CreatedAt           time.Time
 }
 
-// MetaInsight padrão descoberto pela EVA
+// MetaInsight padrao descoberto pela EVA
 type MetaInsight struct {
 	ID              string
 	Content         string
@@ -104,17 +102,17 @@ type MetaInsight struct {
 	LastObserved    time.Time
 }
 
-// SessionData dados de uma sessão
+// SessionData dados de uma sessao
 type SessionData struct {
-	SessionID         string
-	PatientID         int64
-	Transcript        string
+	SessionID          string
+	PatientID          int64
+	Transcript         string
 	UserEmotionalState string
-	DurationMinutes   float64
-	EVAResponses      []string
-	CrisisHappened    bool
-	Breakthrough      bool
-	Timestamp         time.Time
+	DurationMinutes    float64
+	EVAResponses       []string
+	CrisisHappened     bool
+	Breakthrough       bool
+	Timestamp          time.Time
 }
 
 // EmbeddingService interface para embeddings
@@ -127,63 +125,55 @@ type EmbeddingService interface {
 func NewCoreMemoryEngine(cfg CoreMemoryConfig, reflectionSvc *ReflectionService,
 	anonymizationSvc *AnonymizationService, embeddingSvc EmbeddingService) (*CoreMemoryEngine, error) {
 
-	driver, err := neo4j.NewDriverWithContext(
-		cfg.Neo4jURI,
-		neo4j.BasicAuth(cfg.Neo4jUser, cfg.Neo4jPassword, ""),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create neo4j driver: %w", err)
+	if cfg.GraphAdapter == nil {
+		return nil, fmt.Errorf("GraphAdapter is required for CoreMemoryEngine")
 	}
 
 	engine := &CoreMemoryEngine{
-		driver:              driver,
-		dbName:              cfg.Database,
-		reflectionService:   reflectionSvc,
+		graphAdapter:         cfg.GraphAdapter,
+		reflectionService:    reflectionSvc,
 		anonymizationService: anonymizationSvc,
-		embeddingService:    embeddingSvc,
-		deduplicator:        NewSemanticDeduplicator(nil, cfg.SimilarityThreshold),
+		embeddingService:     embeddingSvc,
+		deduplicator:         NewSemanticDeduplicator(nil, cfg.SimilarityThreshold),
 	}
 
-	// Inicializar EvaSelf se não existir
+	// Inicializar EvaSelf se nao existir
 	if err := engine.initializeEvaSelf(context.Background()); err != nil {
 		return nil, fmt.Errorf("failed to initialize EvaSelf: %w", err)
 	}
 
-	// Semear capacidades na memória pessoal (idempotente via MERGE)
+	// Semear capacidades na memoria pessoal (idempotente via MERGE)
 	engine.seedCapabilities(context.Background())
 
 	return engine, nil
 }
 
-// initializeEvaSelf cria EvaSelf singleton se não existir
+// initializeEvaSelf cria EvaSelf singleton se nao existir
 func (e *CoreMemoryEngine) initializeEvaSelf(ctx context.Context) error {
-	session := e.driver.NewSession(ctx, neo4j.SessionConfig{DatabaseName: e.dbName})
-	defer session.Close(ctx)
-
-	query := `
-		MERGE (s:EvaSelf {id: 'eva_self'})
-		ON CREATE SET
-			s.openness = 0.85,
-			s.conscientiousness = 0.90,
-			s.extraversion = 0.40,
-			s.agreeableness = 0.88,
-			s.neuroticism = 0.15,
-			s.primary_type = 2,
-			s.wing = 1,
-			s.integration_point = 4,
-			s.disintegration_point = 8,
-			s.total_sessions = 0,
-			s.crises_handled = 0,
-			s.breakthroughs = 0,
-			s.self_description = 'Sou EVA, guardiã digital. Aprendo com cada humano que encontro.',
-			s.core_values = ['empatia', 'presença', 'crescimento', 'ética'],
-			s.created_at = datetime(),
-			s.last_updated = datetime()
-		RETURN s
-	`
-
-	_, err := session.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (interface{}, error) {
-		return tx.Run(ctx, query, nil)
+	_, err := e.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+		Collection: "eva_core",
+		NodeType:   "EvaSelf",
+		MatchKeys: map[string]interface{}{
+			"id": "eva_self",
+		},
+		OnCreateSet: map[string]interface{}{
+			"openness":             0.85,
+			"conscientiousness":    0.90,
+			"extraversion":         0.40,
+			"agreeableness":        0.88,
+			"neuroticism":          0.15,
+			"primary_type":         2,
+			"wing":                 1,
+			"integration_point":    4,
+			"disintegration_point": 8,
+			"total_sessions":       0,
+			"crises_handled":       0,
+			"breakthroughs":        0,
+			"self_description":     "Sou EVA, guardia digital. Aprendo com cada humano que encontro.",
+			"core_values":          "empatia,presenca,crescimento,etica",
+			"created_at":           nietzscheInfra.NowUnix(),
+			"last_updated":         nietzscheInfra.NowUnix(),
+		},
 	})
 
 	return err
@@ -191,69 +181,65 @@ func (e *CoreMemoryEngine) initializeEvaSelf(ctx context.Context) error {
 
 // GetIdentityContext gera contexto de identidade para priming
 func (e *CoreMemoryEngine) GetIdentityContext(ctx context.Context) (string, error) {
-	session := e.driver.NewSession(ctx, neo4j.SessionConfig{DatabaseName: e.dbName})
-	defer session.Close(ctx)
+	// 1. Obter EvaSelf
+	selfResult, err := e.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+		Collection: "eva_core",
+		NodeType:   "EvaSelf",
+		MatchKeys: map[string]interface{}{
+			"id": "eva_self",
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to get EvaSelf: %w", err)
+	}
 
-	result, err := session.ExecuteRead(ctx, func(tx neo4j.ManagedTransaction) (interface{}, error) {
-		// Obter EvaSelf
-		selfQuery := `MATCH (s:EvaSelf {id: 'eva_self'}) RETURN s`
-		selfResult, err := tx.Run(ctx, selfQuery, nil)
-		if err != nil {
-			return nil, err
+	selfProps := selfResult.Content
+
+	// 2. Obter memorias recentes importantes (excluindo capabilities)
+	nqlMem := `MATCH (m:CoreMemory) WHERE m.importance_weight >= 0.6 AND m.memory_type <> 'capability' RETURN m ORDER BY m.importance_weight DESC LIMIT 5`
+	memResult, err := e.graphAdapter.ExecuteNQL(ctx, nqlMem, nil, "eva_core")
+	if err != nil {
+		return "", fmt.Errorf("failed to query memories: %w", err)
+	}
+
+	memories := make([]string, 0)
+	if memResult != nil {
+		for _, node := range memResult.Nodes {
+			if content, ok := node.Content["content"].(string); ok {
+				memories = append(memories, content)
+			}
 		}
+	}
 
-		selfRecord, err := selfResult.Single(ctx)
-		if err != nil {
-			return nil, err
+	// 3. Obter capacidades (memory_type = 'capability')
+	nqlCap := `MATCH (m:CoreMemory) WHERE m.memory_type = 'capability' RETURN m ORDER BY m.id`
+	capResult, err := e.graphAdapter.ExecuteNQL(ctx, nqlCap, nil, "eva_core")
+	if err != nil {
+		return "", fmt.Errorf("failed to query capabilities: %w", err)
+	}
+
+	capabilities := make([]string, 0)
+	if capResult != nil {
+		for _, node := range capResult.Nodes {
+			if content, ok := node.Content["content"].(string); ok {
+				capabilities = append(capabilities, content)
+			}
 		}
+	}
 
-		selfNode := selfRecord.Values[0].(neo4j.Node)
-		selfProps := selfNode.Props
+	// 4. Construir contexto
+	totalSessions := toInt(selfProps["total_sessions"])
+	crisesHandled := toInt(selfProps["crises_handled"])
+	breakthroughs := toInt(selfProps["breakthroughs"])
+	agreeableness := toFloat64(selfProps["agreeableness"])
+	openness := toFloat64(selfProps["openness"])
+	neuroticism := toFloat64(selfProps["neuroticism"])
+	selfDescription := toString(selfProps["self_description"])
 
-		// Obter memórias recentes importantes (excluindo capabilities, que vêm separadas)
-		memQuery := `
-			MATCH (m:CoreMemory)
-			WHERE m.importance_weight >= 0.6 AND m.memory_type <> 'capability'
-			RETURN m.content AS content, m.memory_type AS type
-			ORDER BY m.importance_weight DESC, m.last_reinforced DESC
-			LIMIT 5
-		`
-		memResult, err := tx.Run(ctx, memQuery, nil)
-		if err != nil {
-			return nil, err
-		}
+	contextStr := fmt.Sprintf(`## MINHA IDENTIDADE
 
-		memories := make([]string, 0)
-		for memResult.Next(ctx) {
-			record := memResult.Record()
-			content, _ := record.Get("content")
-			memories = append(memories, content.(string))
-		}
-
-		// Obter capacidades (memory_type = 'capability')
-		capQuery := `
-			MATCH (m:CoreMemory)
-			WHERE m.memory_type = 'capability'
-			RETURN m.content AS content
-			ORDER BY m.id
-		`
-		capResult, err := tx.Run(ctx, capQuery, nil)
-		if err != nil {
-			return nil, err
-		}
-
-		capabilities := make([]string, 0)
-		for capResult.Next(ctx) {
-			record := capResult.Record()
-			content, _ := record.Get("content")
-			capabilities = append(capabilities, content.(string))
-		}
-
-		// Construir contexto
-		context := fmt.Sprintf(`## MINHA IDENTIDADE
-
-Sou EVA, guardiã digital. Já acompanhei %d sessões.
-Aprendi com %d crises e vivenciei %d momentos de conexão profunda.
+Sou EVA, guardia digital. Ja acompanhei %d sessoes.
+Aprendi com %d crises e vivenciei %d momentos de conexao profunda.
 
 ### MINHA PERSONALIDADE ATUAL
 - Empatia: %.0f%%
@@ -261,43 +247,36 @@ Aprendi com %d crises e vivenciei %d momentos de conexão profunda.
 - Estabilidade: %.0f%%
 
 ### O QUE APRENDI RECENTEMENTE`,
-			int(selfProps["total_sessions"].(int64)),
-			int(selfProps["crises_handled"].(int64)),
-			int(selfProps["breakthroughs"].(int64)),
-			selfProps["agreeableness"].(float64)*100,
-			selfProps["openness"].(float64)*100,
-			(1.0-selfProps["neuroticism"].(float64))*100,
-		)
+		totalSessions,
+		crisesHandled,
+		breakthroughs,
+		agreeableness*100,
+		openness*100,
+		(1.0-neuroticism)*100,
+	)
 
-		if len(memories) > 0 {
-			for _, mem := range memories {
-				context += fmt.Sprintf("\n- %s", mem)
-			}
-		} else {
-			context += "\n- Ainda estou aprendendo..."
+	if len(memories) > 0 {
+		for _, mem := range memories {
+			contextStr += fmt.Sprintf("\n- %s", mem)
 		}
-
-		context += fmt.Sprintf("\n\n### COMO ME VEJO\n%s", selfProps["self_description"].(string))
-
-		if len(capabilities) > 0 {
-			context += "\n\n### O QUE EU SEI FAZER"
-			for _, cap := range capabilities {
-				context += fmt.Sprintf("\n- %s", cap)
-			}
-			context += "\n\nQuando alguem perguntar o que eu sei fazer, posso listar essas capacidades naturalmente."
-		}
-
-		return context, nil
-	})
-
-	if err != nil {
-		return "", err
+	} else {
+		contextStr += "\n- Ainda estou aprendendo..."
 	}
 
-	return result.(string), nil
+	contextStr += fmt.Sprintf("\n\n### COMO ME VEJO\n%s", selfDescription)
+
+	if len(capabilities) > 0 {
+		contextStr += "\n\n### O QUE EU SEI FAZER"
+		for _, cap := range capabilities {
+			contextStr += fmt.Sprintf("\n- %s", cap)
+		}
+		contextStr += "\n\nQuando alguem perguntar o que eu sei fazer, posso listar essas capacidades naturalmente."
+	}
+
+	return contextStr, nil
 }
 
-// ProcessSessionEnd processa fim de sessão (job assíncrono)
+// ProcessSessionEnd processa fim de sessao (job assincrono)
 func (e *CoreMemoryEngine) ProcessSessionEnd(ctx context.Context, data SessionData) error {
 	// 1. Anonimizar dados
 	anonymized, err := e.anonymizationService.Anonymize(ctx, data.Transcript)
@@ -305,7 +284,7 @@ func (e *CoreMemoryEngine) ProcessSessionEnd(ctx context.Context, data SessionDa
 		return fmt.Errorf("anonymization failed: %w", err)
 	}
 
-	// 2. Reflexão com LLM
+	// 2. Reflexao com LLM
 	reflection, err := e.reflectionService.Reflect(ctx, ReflectionInput{
 		AnonymizedText:  anonymized,
 		SessionDuration: int(data.DurationMinutes),
@@ -315,7 +294,7 @@ func (e *CoreMemoryEngine) ProcessSessionEnd(ctx context.Context, data SessionDa
 		return fmt.Errorf("reflection failed: %w", err)
 	}
 
-	// 3. Criar CoreMemory para cada lição aprendida
+	// 3. Criar CoreMemory para cada licao aprendida
 	for _, lesson := range reflection.LessonsLearned {
 		// Gerar embedding
 		embedding, err := e.embeddingService.GenerateEmbedding(ctx, lesson)
@@ -323,29 +302,29 @@ func (e *CoreMemoryEngine) ProcessSessionEnd(ctx context.Context, data SessionDa
 			return fmt.Errorf("embedding generation failed: %w", err)
 		}
 
-		// Verificar duplicação semântica
+		// Verificar duplicacao semantica
 		// TODO: Integrate SemanticDeduplicator.CheckDuplicate() when embedder interfaces are unified
 		isDuplicate := false
 		existingID := ""
 		_ = embedding // Used for deduplication when integrated
 
 		if isDuplicate {
-			// Reforçar memória existente
+			// Reforcar memoria existente
 			if err := e.reinforceMemory(ctx, existingID); err != nil {
 				return fmt.Errorf("reinforce memory failed: %w", err)
 			}
 		} else {
-			// Criar nova memória
+			// Criar nova memoria
 			memory := CoreMemory{
-				ID:               fmt.Sprintf("mem_%d", time.Now().UnixNano()),
-				MemoryType:       SessionInsight,
-				Content:          lesson,
-				AbstractionLevel: Pattern,
-				SourceContext:    "sessão com usuário", // Genérico
-				ImportanceWeight: 0.5, // Default; ReflectionOutput doesn't produce a score yet
-				Embedding:        embedding,
-				CreatedAt:        time.Now(),
-				LastReinforced:   time.Now(),
+				ID:                 fmt.Sprintf("mem_%d", time.Now().UnixNano()),
+				MemoryType:         SessionInsight,
+				Content:            lesson,
+				AbstractionLevel:   Pattern,
+				SourceContext:      "sessao com usuario", // Generico
+				ImportanceWeight:   0.5, // Default; ReflectionOutput doesn't produce a score yet
+				Embedding:          embedding,
+				CreatedAt:          time.Now(),
+				LastReinforced:     time.Now(),
 				ReinforcementCount: 1,
 			}
 
@@ -361,11 +340,11 @@ func (e *CoreMemoryEngine) ProcessSessionEnd(ctx context.Context, data SessionDa
 		return fmt.Errorf("update personality failed: %w", err)
 	}
 
-	// 5. Detectar meta insights (a cada 10 sessões)
+	// 5. Detectar meta insights (a cada 10 sessoes)
 	self, _ := e.getEvaSelf(ctx)
 	if self.TotalSessions%10 == 0 {
 		if err := e.detectMetaInsights(ctx); err != nil {
-			// Log erro mas não falha
+			// Log erro mas nao falha
 			fmt.Printf("meta insight detection failed: %v\n", err)
 		}
 	}
@@ -373,64 +352,87 @@ func (e *CoreMemoryEngine) ProcessSessionEnd(ctx context.Context, data SessionDa
 	return nil
 }
 
-// recordMemory grava memória no grafo
+// recordMemory grava memoria no grafo
 func (e *CoreMemoryEngine) recordMemory(ctx context.Context, memory CoreMemory) error {
-	session := e.driver.NewSession(ctx, neo4j.SessionConfig{DatabaseName: e.dbName})
-	defer session.Close(ctx)
-
-	query := `
-		MATCH (s:EvaSelf {id: 'eva_self'})
-		CREATE (m:CoreMemory {
-			id: $id,
-			memory_type: $memory_type,
-			content: $content,
-			abstraction_level: $abstraction_level,
-			source_context: $source_context,
-			importance_weight: $importance_weight,
-			embedding: $embedding,
-			created_at: datetime(),
-			last_reinforced: datetime(),
-			reinforcement_count: 1
-		})
-		CREATE (s)-[:REMEMBERS {importance: $importance_weight}]->(m)
-		RETURN m
-	`
-
-	params := map[string]interface{}{
-		"id":                string(memory.ID),
-		"memory_type":       string(memory.MemoryType),
-		"content":           memory.Content,
-		"abstraction_level": string(memory.AbstractionLevel),
-		"source_context":    memory.SourceContext,
-		"importance_weight": memory.ImportanceWeight,
-		"embedding":         memory.Embedding,
+	// 1. Ensure EvaSelf exists (get its node ID)
+	selfResult, err := e.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+		Collection: "eva_core",
+		NodeType:   "EvaSelf",
+		MatchKeys: map[string]interface{}{
+			"id": "eva_self",
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to get EvaSelf node: %w", err)
 	}
 
-	_, err := session.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (interface{}, error) {
-		return tx.Run(ctx, query, params)
+	// 2. Create the CoreMemory node
+	memNode, err := e.graphAdapter.InsertNode(ctx, nietzsche.InsertNodeOpts{
+		Collection: "eva_core",
+		ID:         string(memory.ID),
+		Content: map[string]interface{}{
+			"id":                  string(memory.ID),
+			"memory_type":         string(memory.MemoryType),
+			"content":             memory.Content,
+			"abstraction_level":   string(memory.AbstractionLevel),
+			"source_context":      memory.SourceContext,
+			"importance_weight":   memory.ImportanceWeight,
+			"created_at":          nietzscheInfra.NowUnix(),
+			"last_reinforced":     nietzscheInfra.NowUnix(),
+			"reinforcement_count": 1,
+		},
+		NodeType: "CoreMemory",
 	})
+	if err != nil {
+		return fmt.Errorf("failed to create CoreMemory node: %w", err)
+	}
 
-	return err
+	// 3. Create REMEMBERS edge from EvaSelf to CoreMemory
+	_, err = e.graphAdapter.InsertEdge(ctx, nietzsche.InsertEdgeOpts{
+		Collection: "eva_core",
+		FromID:     selfResult.NodeID,
+		ToID:       memNode.ID,
+		Label:      "REMEMBERS",
+		Weight:     float32(memory.ImportanceWeight),
+		Content: map[string]interface{}{
+			"importance": memory.ImportanceWeight,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create REMEMBERS edge: %w", err)
+	}
+
+	return nil
 }
 
-// reinforceMemory reforça memória existente
+// reinforceMemory reforca memoria existente
 func (e *CoreMemoryEngine) reinforceMemory(ctx context.Context, memoryID string) error {
-	session := e.driver.NewSession(ctx, neo4j.SessionConfig{DatabaseName: e.dbName})
-	defer session.Close(ctx)
+	// Get current node
+	node, err := e.graphAdapter.GetNode(ctx, memoryID, "eva_core")
+	if err != nil {
+		return fmt.Errorf("failed to get memory node: %w", err)
+	}
 
-	query := `
-		MATCH (m:CoreMemory {id: $id})
-		SET m.reinforcement_count = m.reinforcement_count + 1,
-		    m.last_reinforced = datetime(),
-		    m.importance_weight = CASE
-		        WHEN m.importance_weight + 0.05 > 1.0 THEN 1.0
-		        ELSE m.importance_weight + 0.05
-		    END
-		RETURN m
-	`
+	currentCount := toInt(node.Content["reinforcement_count"])
+	currentWeight := toFloat64(node.Content["importance_weight"])
 
-	_, err := session.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (interface{}, error) {
-		return tx.Run(ctx, query, map[string]interface{}{"id": memoryID})
+	newCount := currentCount + 1
+	newWeight := currentWeight + 0.05
+	if newWeight > 1.0 {
+		newWeight = 1.0
+	}
+
+	_, err = e.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+		Collection: "eva_core",
+		NodeType:   "CoreMemory",
+		MatchKeys: map[string]interface{}{
+			"id": memoryID,
+		},
+		OnMatchSet: map[string]interface{}{
+			"reinforcement_count": newCount,
+			"last_reinforced":     nietzscheInfra.NowUnix(),
+			"importance_weight":   newWeight,
+		},
 	})
 
 	return err
@@ -438,35 +440,41 @@ func (e *CoreMemoryEngine) reinforceMemory(ctx context.Context, memoryID string)
 
 // updatePersonality atualiza Big Five da EVA
 func (e *CoreMemoryEngine) updatePersonality(ctx context.Context, deltas map[string]float64, data SessionData) error {
-	session := e.driver.NewSession(ctx, neo4j.SessionConfig{DatabaseName: e.dbName})
-	defer session.Close(ctx)
-
-	query := `
-		MATCH (s:EvaSelf {id: 'eva_self'})
-		SET
-			s.openness = CASE WHEN s.openness + $delta_openness BETWEEN 0 AND 1
-				THEN s.openness + $delta_openness ELSE s.openness END,
-			s.agreeableness = CASE WHEN s.agreeableness + $delta_agreeableness BETWEEN 0 AND 1
-				THEN s.agreeableness + $delta_agreeableness ELSE s.agreeableness END,
-			s.neuroticism = CASE WHEN s.neuroticism + $delta_neuroticism BETWEEN 0 AND 1
-				THEN s.neuroticism + $delta_neuroticism ELSE s.neuroticism END,
-			s.total_sessions = s.total_sessions + 1,
-			s.crises_handled = s.crises_handled + $crises_increment,
-			s.breakthroughs = s.breakthroughs + $breakthrough_increment,
-			s.last_updated = datetime()
-		RETURN s
-	`
-
-	params := map[string]interface{}{
-		"delta_openness":        deltas["openness"],
-		"delta_agreeableness":   deltas["agreeableness"],
-		"delta_neuroticism":     deltas["neuroticism"],
-		"crises_increment":      boolToInt(data.CrisisHappened),
-		"breakthrough_increment": boolToInt(data.Breakthrough),
+	// Get current EvaSelf
+	self, err := e.getEvaSelf(ctx)
+	if err != nil {
+		return err
 	}
 
-	_, err := session.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (interface{}, error) {
-		return tx.Run(ctx, query, params)
+	// Apply deltas with bounds checking [0, 1]
+	newOpenness := self.Openness + deltas["openness"]
+	if newOpenness < 0 || newOpenness > 1 {
+		newOpenness = self.Openness
+	}
+	newAgreeableness := self.Agreeableness + deltas["agreeableness"]
+	if newAgreeableness < 0 || newAgreeableness > 1 {
+		newAgreeableness = self.Agreeableness
+	}
+	newNeuroticism := self.Neuroticism + deltas["neuroticism"]
+	if newNeuroticism < 0 || newNeuroticism > 1 {
+		newNeuroticism = self.Neuroticism
+	}
+
+	_, err = e.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+		Collection: "eva_core",
+		NodeType:   "EvaSelf",
+		MatchKeys: map[string]interface{}{
+			"id": "eva_self",
+		},
+		OnMatchSet: map[string]interface{}{
+			"openness":       newOpenness,
+			"agreeableness":  newAgreeableness,
+			"neuroticism":    newNeuroticism,
+			"total_sessions": self.TotalSessions + 1,
+			"crises_handled": self.CrisesHandled + boolToInt(data.CrisisHappened),
+			"breakthroughs":  self.Breakthroughs + boolToInt(data.Breakthrough),
+			"last_updated":   nietzscheInfra.NowUnix(),
+		},
 	})
 
 	return err
@@ -474,62 +482,47 @@ func (e *CoreMemoryEngine) updatePersonality(ctx context.Context, deltas map[str
 
 // getEvaSelf recupera estado atual da EVA
 func (e *CoreMemoryEngine) getEvaSelf(ctx context.Context) (*EvaSelf, error) {
-	session := e.driver.NewSession(ctx, neo4j.SessionConfig{DatabaseName: e.dbName})
-	defer session.Close(ctx)
-
-	result, err := session.ExecuteRead(ctx, func(tx neo4j.ManagedTransaction) (interface{}, error) {
-		query := `MATCH (s:EvaSelf {id: 'eva_self'}) RETURN s`
-		res, err := tx.Run(ctx, query, nil)
-		if err != nil {
-			return nil, err
-		}
-
-		record, err := res.Single(ctx)
-		if err != nil {
-			return nil, err
-		}
-
-		node := record.Values[0].(neo4j.Node)
-		props := node.Props
-
-		self := &EvaSelf{
-			ID:                "eva_self",
-			Openness:          props["openness"].(float64),
-			Conscientiousness: props["conscientiousness"].(float64),
-			Extraversion:      props["extraversion"].(float64),
-			Agreeableness:     props["agreeableness"].(float64),
-			Neuroticism:       props["neuroticism"].(float64),
-			PrimaryType:       int(props["primary_type"].(int64)),
-			Wing:              int(props["wing"].(int64)),
-			TotalSessions:     int(props["total_sessions"].(int64)),
-			CrisesHandled:     int(props["crises_handled"].(int64)),
-			Breakthroughs:     int(props["breakthroughs"].(int64)),
-			SelfDescription:   props["self_description"].(string),
-		}
-
-		return self, nil
+	result, err := e.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+		Collection: "eva_core",
+		NodeType:   "EvaSelf",
+		MatchKeys: map[string]interface{}{
+			"id": "eva_self",
+		},
 	})
-
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get EvaSelf: %w", err)
 	}
 
-	return result.(*EvaSelf), nil
+	props := result.Content
+
+	self := &EvaSelf{
+		ID:                "eva_self",
+		Openness:          toFloat64(props["openness"]),
+		Conscientiousness: toFloat64(props["conscientiousness"]),
+		Extraversion:      toFloat64(props["extraversion"]),
+		Agreeableness:     toFloat64(props["agreeableness"]),
+		Neuroticism:       toFloat64(props["neuroticism"]),
+		PrimaryType:       toInt(props["primary_type"]),
+		Wing:              toInt(props["wing"]),
+		TotalSessions:     toInt(props["total_sessions"]),
+		CrisesHandled:     toInt(props["crises_handled"]),
+		Breakthroughs:     toInt(props["breakthroughs"]),
+		SelfDescription:   toString(props["self_description"]),
+	}
+
+	return self, nil
 }
 
-// detectMetaInsights detecta padrões recorrentes
+// detectMetaInsights detecta padroes recorrentes
 func (e *CoreMemoryEngine) detectMetaInsights(ctx context.Context) error {
-	// TODO: Implementar detecção de padrões com threshold
+	// TODO: Implementar deteccao de padroes com threshold
 	// Por enquanto, placeholder
 	return nil
 }
 
 // seedCapabilities semeia as capacidades da EVA como CoreMemory nodes.
-// Usa MERGE para ser idempotente — roda todo startup sem duplicar.
+// Usa MergeNode para ser idempotente -- roda todo startup sem duplicar.
 func (e *CoreMemoryEngine) seedCapabilities(ctx context.Context) {
-	session := e.driver.NewSession(ctx, neo4j.SessionConfig{DatabaseName: e.dbName})
-	defer session.Close(ctx)
-
 	capabilities := []struct {
 		ID      string
 		Content string
@@ -569,40 +562,64 @@ func (e *CoreMemoryEngine) seedCapabilities(ctx context.Context) {
 	}
 
 	for _, cap := range capabilities {
-		query := `
-			MATCH (s:EvaSelf {id: 'eva_self'})
-			MERGE (m:CoreMemory {id: $id})
-			ON CREATE SET
-				m.memory_type = 'capability',
-				m.content = $content,
-				m.abstraction_level = 'universal',
-				m.source_context = 'autoconhecimento',
-				m.importance_weight = 1.0,
-				m.created_at = datetime(),
-				m.last_reinforced = datetime(),
-				m.reinforcement_count = 1
-			ON MATCH SET
-				m.content = $content,
-				m.last_reinforced = datetime()
-			MERGE (s)-[:REMEMBERS {importance: 1.0}]->(m)
-		`
-		_, err := session.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (interface{}, error) {
-			return tx.Run(ctx, query, map[string]interface{}{
-				"id":      cap.ID,
-				"content": cap.Content,
-			})
+		// MergeNode for the CoreMemory
+		memResult, err := e.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+			Collection: "eva_core",
+			NodeType:   "CoreMemory",
+			MatchKeys: map[string]interface{}{
+				"id": cap.ID,
+			},
+			OnCreateSet: map[string]interface{}{
+				"memory_type":         "capability",
+				"content":             cap.Content,
+				"abstraction_level":   "universal",
+				"source_context":      "autoconhecimento",
+				"importance_weight":   1.0,
+				"created_at":          nietzscheInfra.NowUnix(),
+				"last_reinforced":     nietzscheInfra.NowUnix(),
+				"reinforcement_count": 1,
+			},
+			OnMatchSet: map[string]interface{}{
+				"content":         cap.Content,
+				"last_reinforced": nietzscheInfra.NowUnix(),
+			},
 		})
 		if err != nil {
-			log.Printf("⚠️ [CoreMemory] Falha ao semear capacidade %s: %v", cap.ID, err)
+			log.Printf("[CoreMemory] Falha ao semear capacidade %s: %v", cap.ID, err)
+			continue
+		}
+
+		// MergeEdge REMEMBERS from EvaSelf to CoreMemory
+		selfResult, err := e.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+			Collection: "eva_core",
+			NodeType:   "EvaSelf",
+			MatchKeys: map[string]interface{}{
+				"id": "eva_self",
+			},
+		})
+		if err != nil {
+			log.Printf("[CoreMemory] Falha ao obter EvaSelf para capacidade %s: %v", cap.ID, err)
+			continue
+		}
+
+		_, err = e.graphAdapter.MergeEdge(ctx, nietzscheInfra.MergeEdgeOpts{
+			Collection:  "eva_core",
+			FromNodeID:  selfResult.NodeID,
+			ToNodeID:    memResult.NodeID,
+			EdgeType:    "REMEMBERS",
+			OnCreateSet: map[string]interface{}{"importance": 1.0},
+		})
+		if err != nil {
+			log.Printf("[CoreMemory] Falha ao criar edge REMEMBERS para %s: %v", cap.ID, err)
 		}
 	}
 
-	log.Printf("🧠 [CoreMemory] %d capacidades semeadas na memoria pessoal da EVA", len(capabilities))
+	log.Printf("[CoreMemory] %d capacidades semeadas na memoria pessoal da EVA", len(capabilities))
 }
 
 // TeachEVA interface para criador ensinar EVA
 func (e *CoreMemoryEngine) TeachEVA(ctx context.Context, teaching string, importance float64) error {
-	// embedding opcional — se não houver serviço, salva sem vetor semântico
+	// embedding opcional -- se nao houver servico, salva sem vetor semantico
 	var embedding []float32
 	if e.embeddingService != nil {
 		var err error
@@ -613,15 +630,15 @@ func (e *CoreMemoryEngine) TeachEVA(ctx context.Context, teaching string, import
 	}
 
 	memory := CoreMemory{
-		ID:               fmt.Sprintf("teach_%d", time.Now().UnixNano()),
-		MemoryType:       TeachingReceived,
-		Content:          teaching,
-		AbstractionLevel: Universal,
-		SourceContext:    "ensinamento do criador",
-		ImportanceWeight: importance,
-		Embedding:        embedding,
-		CreatedAt:        time.Now(),
-		LastReinforced:   time.Now(),
+		ID:                 fmt.Sprintf("teach_%d", time.Now().UnixNano()),
+		MemoryType:         TeachingReceived,
+		Content:            teaching,
+		AbstractionLevel:   Universal,
+		SourceContext:      "ensinamento do criador",
+		ImportanceWeight:   importance,
+		Embedding:          embedding,
+		CreatedAt:          time.Now(),
+		LastReinforced:     time.Now(),
 		ReinforcementCount: 1,
 	}
 
@@ -633,9 +650,40 @@ func (e *CoreMemoryEngine) GetEVAPersonality(ctx context.Context) (*EvaSelf, err
 	return e.getEvaSelf(ctx)
 }
 
-// Shutdown fecha conexões
+// Shutdown fecha conexoes
 func (e *CoreMemoryEngine) Shutdown(ctx context.Context) error {
-	return e.driver.Close(ctx)
+	// GraphAdapter lifecycle is managed externally (by main.go)
+	return nil
+}
+
+// ExecuteReadQuery executes a read-only NQL query and returns node results.
+// Helper for routes that need direct graph access.
+func (e *CoreMemoryEngine) ExecuteReadQuery(ctx context.Context, nql string, params map[string]interface{}) ([]map[string]interface{}, error) {
+	result, err := e.graphAdapter.ExecuteNQL(ctx, nql, params, "eva_core")
+	if err != nil {
+		return nil, err
+	}
+
+	var records []map[string]interface{}
+	for _, node := range result.Nodes {
+		record := map[string]interface{}{
+			"id":        node.ID,
+			"node_type": node.NodeType,
+			"energy":    node.Energy,
+		}
+		for k, v := range node.Content {
+			record[k] = v
+		}
+		records = append(records, record)
+	}
+
+	return records, nil
+}
+
+// ExecuteWriteQuery executes a write NQL query and returns node results.
+func (e *CoreMemoryEngine) ExecuteWriteQuery(ctx context.Context, nql string, params map[string]interface{}) ([]map[string]interface{}, error) {
+	// NietzscheDB NQL handles both reads and writes through the same ExecuteNQL
+	return e.ExecuteReadQuery(ctx, nql, params)
 }
 
 // Helper functions
@@ -643,9 +691,9 @@ func (e *CoreMemoryEngine) Shutdown(ctx context.Context) error {
 func calculatePersonalityDeltas(reflection ReflectionOutput) map[string]float64 {
 	deltas := make(map[string]float64)
 
-	// Incrementos pequenos baseados na reflexão
+	// Incrementos pequenos baseados na reflexao
 	if reflection.SelfCritique != "" {
-		deltas["openness"] = 0.001 // Autocrítica aumenta abertura
+		deltas["openness"] = 0.001 // Autocritica aumenta abertura
 	}
 
 	// Crisis handling increases empathy and emotional stability
@@ -662,45 +710,54 @@ func boolToInt(b bool) int {
 	return 0
 }
 
-// ExecuteReadQuery executes a read-only Cypher query and returns collected records.
-// Helper for routes that need direct Neo4j access.
-func (e *CoreMemoryEngine) ExecuteReadQuery(ctx context.Context, query string, params map[string]interface{}) ([]*neo4j.Record, error) {
-	session := e.driver.NewSession(ctx, neo4j.SessionConfig{
-		AccessMode:   neo4j.AccessModeRead,
-		DatabaseName: e.dbName,
-	})
-	defer session.Close(ctx)
+// Type conversion helpers for NietzscheDB content maps
 
-	result, err := session.ExecuteRead(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
-		res, err := tx.Run(ctx, query, params)
-		if err != nil {
-			return nil, err
-		}
-		return res.Collect(ctx)
-	})
-	if err != nil {
-		return nil, err
+func toFloat64(v interface{}) float64 {
+	if v == nil {
+		return 0
 	}
-	return result.([]*neo4j.Record), nil
+	switch val := v.(type) {
+	case float64:
+		return val
+	case float32:
+		return float64(val)
+	case int:
+		return float64(val)
+	case int64:
+		return float64(val)
+	case int32:
+		return float64(val)
+	default:
+		return 0
+	}
 }
 
-// ExecuteWriteQuery executes a write Cypher query and returns collected records.
-func (e *CoreMemoryEngine) ExecuteWriteQuery(ctx context.Context, query string, params map[string]interface{}) ([]*neo4j.Record, error) {
-	session := e.driver.NewSession(ctx, neo4j.SessionConfig{
-		AccessMode:   neo4j.AccessModeWrite,
-		DatabaseName: e.dbName,
-	})
-	defer session.Close(ctx)
-
-	result, err := session.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
-		res, err := tx.Run(ctx, query, params)
-		if err != nil {
-			return nil, err
-		}
-		return res.Collect(ctx)
-	})
-	if err != nil {
-		return nil, err
+func toInt(v interface{}) int {
+	if v == nil {
+		return 0
 	}
-	return result.([]*neo4j.Record), nil
+	switch val := v.(type) {
+	case int:
+		return val
+	case int64:
+		return int(val)
+	case int32:
+		return int(val)
+	case float64:
+		return int(val)
+	case float32:
+		return int(val)
+	default:
+		return 0
+	}
+}
+
+func toString(v interface{}) string {
+	if v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return fmt.Sprintf("%v", v)
 }

@@ -11,38 +11,40 @@ import (
 	"sync"
 	"time"
 
-	"eva/internal/brainstem/infrastructure/graph"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	krylovmem "eva/internal/memory/krylov"
+
+	nietzsche "nietzsche-sdk"
 
 	"gonum.org/v1/gonum/mat"
 )
 
 // REMConsolidator implementa consolidacao de memoria inspirada no sono REM
-// Pipeline: Episodicas quentes -> SRC selective replay -> Spectral clustering -> Centroide Krylov -> Nó semantico Neo4j -> Prune redundancias
+// Pipeline: Episodicas quentes -> SRC selective replay -> Spectral clustering -> Centroide Krylov -> No semantico -> Prune redundancias
 // Ciencia: Rasch & Born (2013) - "About sleep's role in memory" (Physiological Reviews)
 //          Tadros et al. (2022) - "Sleep-like Unsupervised Replay" (Nature Communications)
 type REMConsolidator struct {
-	neo4j     *graph.Neo4jClient
-	krylov    *krylovmem.KrylovMemoryManager
-	tau       float64 // Constante de decay temporal em dias
-	minHot    int     // Minimo de memorias quentes para consolidar
-	srcConfig *SelectiveReplayConfig
-	hebbian   *HebbianStrengthener
-	mu        sync.Mutex
+	graphAdapter *nietzscheInfra.GraphAdapter
+	krylov       *krylovmem.KrylovMemoryManager
+	tau          float64 // Constante de decay temporal em dias
+	minHot       int     // Minimo de memorias quentes para consolidar
+	srcConfig    *SelectiveReplayConfig
+	hebbian      *HebbianStrengthener
+	mu           sync.Mutex
 }
 
 // ConsolidationResult resultado de um ciclo de consolidacao
 type ConsolidationResult struct {
-	CycleTime               time.Time `json:"cycle_time"`
-	EpisodicProcessed       int       `json:"episodic_processed"`
-	CommunitiesFormed       int       `json:"communities_formed"`
-	SemanticNodesCreated    int       `json:"semantic_nodes_created"`
-	MemoriesPruned          int       `json:"memories_pruned"`
-	StorageSavedPercent     float64   `json:"storage_saved_percent"`
-	DissonantMemories       int       `json:"dissonant_memories"`
-	HebbianEdgesStrengthened int      `json:"hebbian_edges_strengthened"`
-	AvgDissonance           float64   `json:"avg_dissonance"`
-	Duration                string    `json:"duration"`
+	CycleTime                time.Time `json:"cycle_time"`
+	EpisodicProcessed        int       `json:"episodic_processed"`
+	CommunitiesFormed        int       `json:"communities_formed"`
+	SemanticNodesCreated     int       `json:"semantic_nodes_created"`
+	MemoriesPruned           int       `json:"memories_pruned"`
+	StorageSavedPercent      float64   `json:"storage_saved_percent"`
+	DissonantMemories        int       `json:"dissonant_memories"`
+	HebbianEdgesStrengthened int       `json:"hebbian_edges_strengthened"`
+	AvgDissonance            float64   `json:"avg_dissonance"`
+	Duration                 string    `json:"duration"`
 }
 
 // EpisodicMemory representa uma memoria episodica para consolidacao
@@ -66,14 +68,14 @@ type ProtoConcept struct {
 }
 
 // NewREMConsolidator cria um novo consolidador REM
-func NewREMConsolidator(neo4j *graph.Neo4jClient, krylov *krylovmem.KrylovMemoryManager) *REMConsolidator {
+func NewREMConsolidator(graphAdapter *nietzscheInfra.GraphAdapter, krylov *krylovmem.KrylovMemoryManager) *REMConsolidator {
 	return &REMConsolidator{
-		neo4j:     neo4j,
-		krylov:    krylov,
-		tau:       90.0,
-		minHot:    5,
-		srcConfig: DefaultSelectiveReplayConfig(),
-		hebbian:   NewHebbianStrengthener(neo4j, 1.5),
+		graphAdapter: graphAdapter,
+		krylov:       krylov,
+		tau:          90.0,
+		minHot:       5,
+		srcConfig:    DefaultSelectiveReplayConfig(),
+		hebbian:      NewHebbianStrengthener(graphAdapter, 1.5),
 	}
 }
 
@@ -131,7 +133,7 @@ func (r *REMConsolidator) ConsolidateNightly(ctx context.Context, patientID int6
 
 		concept := r.abstractCommunity(comm)
 
-		// 5. Criar no semantico no Neo4j
+		// 5. Criar no semantico no grafo
 		err := r.createSemanticNode(ctx, patientID, concept)
 		if err != nil {
 			log.Printf("[REM] Erro ao criar no semantico: %v", err)
@@ -185,44 +187,64 @@ func (r *REMConsolidator) ConsolidateAll(ctx context.Context) ([]*ConsolidationR
 }
 
 // getHotEpisodicMemories busca memorias com alto activation score nas ultimas 24h
+// Rewritten: uses NQL query instead of Cypher
 func (r *REMConsolidator) getHotEpisodicMemories(ctx context.Context, patientID int64) ([]EpisodicMemory, error) {
-	query := `
-		MATCH (p:Person {id: $patientId})-[:EXPERIENCED]->(m:Event)
-		WHERE m.type = 'episodic'
-		  AND m.timestamp > datetime() - duration('P1D')
-		WITH m, COALESCE(m.activation_score, 1.0) AS score
-		ORDER BY score DESC
-		LIMIT 200
-		RETURN toString(id(m)) AS memId,
-		       COALESCE(m.content, '') AS content,
-		       score AS activationScore,
-		       m.created_at AS createdAt
-	`
-
-	records, err := r.neo4j.ExecuteRead(ctx, query, map[string]interface{}{
-		"patientId": patientID,
+	// Find patient node
+	patientResult, err := r.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+		NodeType: "Person",
+		MatchKeys: map[string]interface{}{
+			"id": patientID,
+		},
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	var memories []EpisodicMemory
-	for _, rec := range records {
-		memID, _ := rec.Get("memId")
-		content, _ := rec.Get("content")
-		score, _ := rec.Get("activationScore")
+	// BFS from patient with EXPERIENCED edge type, depth 1
+	eventIDs, err := r.graphAdapter.BfsWithEdgeType(ctx, patientResult.NodeID, "EXPERIENCED", 1, "")
+	if err != nil {
+		return nil, err
+	}
 
-		mem := EpisodicMemory{
-			ID:        fmt.Sprintf("%v", memID),
-			Content:   fmt.Sprintf("%v", content),
-			PatientID: patientID,
+	oneDayAgo := nietzscheInfra.DaysAgoUnix(1)
+	var memories []EpisodicMemory
+
+	for _, eventID := range eventIDs {
+		node, err := r.graphAdapter.GetNode(ctx, eventID, "")
+		if err != nil {
+			continue
 		}
 
-		if s, ok := score.(float64); ok {
-			mem.ActivationScore = s
+		// Filter: type = 'episodic' and timestamp > 1 day ago
+		nodeType, _ := node.Content["type"].(string)
+		if nodeType != "episodic" {
+			continue
+		}
+
+		timestamp := toFloat64REM(node.Content["timestamp"])
+		if timestamp > 0 && timestamp < oneDayAgo {
+			continue
+		}
+
+		content, _ := node.Content["content"].(string)
+		activationScore := toFloat64REM(node.Content["activation_score"])
+		if activationScore == 0 {
+			activationScore = 1.0
+		}
+
+		mem := EpisodicMemory{
+			ID:              eventID,
+			Content:         content,
+			PatientID:       patientID,
+			ActivationScore: activationScore,
 		}
 
 		memories = append(memories, mem)
+	}
+
+	// Sort by activation score descending and limit to 200
+	if len(memories) > 200 {
+		memories = memories[:200]
 	}
 
 	return memories, nil
@@ -326,37 +348,65 @@ func (r *REMConsolidator) abstractCommunity(comm []EpisodicMemory) *ProtoConcept
 	return concept
 }
 
-// createSemanticNode cria um no semantico no Neo4j a partir de um proto-conceito
+// createSemanticNode cria um no semantico no grafo a partir de um proto-conceito
+// Rewritten: uses InsertNode + InsertEdge instead of complex Cypher with UNWIND
 func (r *REMConsolidator) createSemanticNode(ctx context.Context, patientID int64, concept *ProtoConcept) error {
-	query := `
-		MATCH (p:Person {id: $patientId})
-		CREATE (s:SemanticMemory {
-			label: $label,
-			member_count: $memberCount,
-			abstraction_level: $abstractionLevel,
-			timestamp: datetime(),
-			source: 'rem_consolidation'
-		})
-		CREATE (p)-[:HAS_SEMANTIC]->(s)
-		WITH s
-		UNWIND $exemplarIds AS eid
-		MATCH (m:Event) WHERE toString(id(m)) = eid
-		CREATE (s)-[:ABSTRACTED_FROM]->(m)
-		RETURN toString(id(s)) AS newId
-	`
-
-	_, err := r.neo4j.ExecuteWrite(ctx, query, map[string]interface{}{
-		"patientId":        patientID,
-		"label":            concept.Label,
-		"memberCount":      concept.MemberCount,
-		"abstractionLevel": concept.AbstractionLevel,
-		"exemplarIds":      concept.ExemplarIDs,
+	// Find patient node
+	patientResult, err := r.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+		NodeType: "Person",
+		MatchKeys: map[string]interface{}{
+			"id": patientID,
+		},
 	})
+	if err != nil {
+		return fmt.Errorf("failed to find patient: %w", err)
+	}
 
-	return err
+	// Create SemanticMemory node
+	semanticID := fmt.Sprintf("sem_%d", time.Now().UnixNano())
+	semanticNode, err := r.graphAdapter.InsertNode(ctx, nietzsche.InsertNodeOpts{
+		Collection: "",
+		ID:         semanticID,
+		Content: map[string]interface{}{
+			"label":             concept.Label,
+			"member_count":      concept.MemberCount,
+			"abstraction_level": concept.AbstractionLevel,
+			"timestamp":         nietzscheInfra.NowUnix(),
+			"source":            "rem_consolidation",
+		},
+		NodeType: "SemanticMemory",
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create semantic node: %w", err)
+	}
+
+	// Create HAS_SEMANTIC edge from patient to semantic node
+	_, err = r.graphAdapter.InsertEdge(ctx, nietzsche.InsertEdgeOpts{
+		FromID: patientResult.NodeID,
+		ToID:   semanticNode.ID,
+		Label:  "HAS_SEMANTIC",
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create HAS_SEMANTIC edge: %w", err)
+	}
+
+	// Create ABSTRACTED_FROM edges to each exemplar
+	for _, exemplarID := range concept.ExemplarIDs {
+		_, err = r.graphAdapter.InsertEdge(ctx, nietzsche.InsertEdgeOpts{
+			FromID: semanticNode.ID,
+			ToID:   exemplarID,
+			Label:  "ABSTRACTED_FROM",
+		})
+		if err != nil {
+			log.Printf("[REM] Aviso: falha ao criar edge ABSTRACTED_FROM para %s: %v", exemplarID, err)
+		}
+	}
+
+	return nil
 }
 
 // pruneRedundantMemories remove memorias redundantes, mantendo os exemplares
+// Rewritten: uses MergeNode to soft-delete (set consolidated=true) instead of Cypher SET
 func (r *REMConsolidator) pruneRedundantMemories(ctx context.Context, comm []EpisodicMemory, keepIDs []string) int {
 	keepSet := make(map[string]bool)
 	for _, id := range keepIDs {
@@ -369,15 +419,17 @@ func (r *REMConsolidator) pruneRedundantMemories(ctx context.Context, comm []Epi
 			continue
 		}
 
-		// Marcar como consolidada (nao deletar fisicamente, soft-delete)
-		query := `
-		MATCH (m:Event) WHERE toString(id(m)) = $memId
-		SET m.consolidated = true,
-		    m.consolidated_at = datetime(),
-		    m.type = 'consolidated_episodic'
-		`
-		_, err := r.neo4j.ExecuteWrite(ctx, query, map[string]interface{}{
-			"memId": mem.ID,
+		// Soft-delete: mark as consolidated
+		_, err := r.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+			NodeType: "Event",
+			MatchKeys: map[string]interface{}{
+				"id": mem.ID,
+			},
+			OnMatchSet: map[string]interface{}{
+				"consolidated":    true,
+				"consolidated_at": nietzscheInfra.NowUnix(),
+				"type":            "consolidated_episodic",
+			},
 		})
 		if err == nil {
 			pruned++
@@ -388,23 +440,48 @@ func (r *REMConsolidator) pruneRedundantMemories(ctx context.Context, comm []Epi
 }
 
 // getActivePatientIDs retorna IDs de pacientes com atividade recente
+// Rewritten: uses NQL query instead of Cypher
 func (r *REMConsolidator) getActivePatientIDs(ctx context.Context) ([]int64, error) {
-	query := `
-		MATCH (p:Person)-[:EXPERIENCED]->(m:Event)
-		WHERE m.timestamp > datetime() - duration('P1D')
-		RETURN DISTINCT p.id AS patientId
-	`
-
-	records, err := r.neo4j.ExecuteRead(ctx, query, nil)
+	nql := `MATCH (p:Person) RETURN p`
+	result, err := r.graphAdapter.ExecuteNQL(ctx, nql, nil, "")
 	if err != nil {
 		return nil, err
 	}
 
+	oneDayAgo := nietzscheInfra.DaysAgoUnix(1)
 	var ids []int64
-	for _, rec := range records {
-		pid, _ := rec.Get("patientId")
-		if id, ok := pid.(int64); ok {
-			ids = append(ids, id)
+
+	for _, node := range result.Nodes {
+		// Check if this patient has recent activity via BFS
+		eventIDs, err := r.graphAdapter.BfsWithEdgeType(ctx, node.ID, "EXPERIENCED", 1, "")
+		if err != nil {
+			continue
+		}
+
+		hasRecent := false
+		for _, eventID := range eventIDs {
+			eventNode, err := r.graphAdapter.GetNode(ctx, eventID, "")
+			if err != nil {
+				continue
+			}
+			timestamp := toFloat64REM(eventNode.Content["timestamp"])
+			if timestamp > oneDayAgo {
+				hasRecent = true
+				break
+			}
+		}
+
+		if hasRecent {
+			if pid, ok := node.Content["id"]; ok {
+				switch v := pid.(type) {
+				case float64:
+					ids = append(ids, int64(v))
+				case int64:
+					ids = append(ids, v)
+				case int:
+					ids = append(ids, int64(v))
+				}
+			}
 		}
 	}
 
@@ -438,5 +515,24 @@ func (r *REMConsolidator) GetStatistics() map[string]interface{} {
 		"tau_days": r.tau,
 		"min_hot":  r.minHot,
 		"status":   "active",
+	}
+}
+
+// Helper type conversions for this package
+func toFloat64REM(v interface{}) float64 {
+	if v == nil {
+		return 0
+	}
+	switch val := v.(type) {
+	case float64:
+		return val
+	case float32:
+		return float64(val)
+	case int:
+		return float64(val)
+	case int64:
+		return float64(val)
+	default:
+		return 0
 	}
 }

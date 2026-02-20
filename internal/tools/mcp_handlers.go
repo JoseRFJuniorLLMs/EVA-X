@@ -10,10 +10,9 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"strings"
 	"time"
 
-	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 )
 
 // ============================================================================
@@ -125,7 +124,7 @@ func (h *ToolsHandler) handleMCPTeachEva(idosoID int64, args map[string]interfac
 		fmt.Sscanf(importanceStr, "%f", &importance)
 	}
 
-	if h.neo4jCoreDriver == nil {
+	if h.evaCoreAdapter == nil {
 		// Fallback: salvar como memoria no PostgreSQL com tag [TEACHING]
 		var memoryID int64
 		err := h.db.Conn.QueryRow(`
@@ -142,49 +141,40 @@ func (h *ToolsHandler) handleMCPTeachEva(idosoID int64, args map[string]interfac
 			"status":    "sucesso",
 			"stored_in": "postgresql_fallback",
 			"memory_id": memoryID,
-			"message":   fmt.Sprintf("Ensinamento salvo (PostgreSQL fallback, ID %d). Neo4j Core indisponivel.", memoryID),
+			"message":   fmt.Sprintf("Ensinamento salvo (PostgreSQL fallback, ID %d). NietzscheDB eva_core indisponivel.", memoryID),
 		}, nil
 	}
 
-	// Neo4j Core disponivel — salvar como CoreMemory
+	// NietzscheDB eva_core disponivel — salvar como CoreMemory
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	session := h.neo4jCoreDriver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeWrite})
-	defer session.Close(ctx)
-
-	result, err := session.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
-		res, err := tx.Run(ctx, `
-			CREATE (m:CoreMemory {
-				content: $content,
-				importance: $importance,
-				source: 'mcp_teaching',
-				created_at: datetime()
-			})
-			RETURN id(m) AS id
-		`, map[string]interface{}{
+	result, err := h.evaCoreAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+		NodeType: "CoreMemory",
+		MatchKeys: map[string]interface{}{
+			"content": teaching,
+			"source":  "mcp_teaching",
+		},
+		OnCreateSet: map[string]interface{}{
 			"content":    teaching,
 			"importance": importance,
-		})
-		if err != nil {
-			return nil, err
-		}
-		record, err := res.Single(ctx)
-		if err != nil {
-			return nil, err
-		}
-		return record.Values[0], nil
+			"source":     "mcp_teaching",
+			"created_at": nietzscheInfra.NowUnix(),
+		},
+		OnMatchSet: map[string]interface{}{
+			"importance": importance,
+		},
 	})
 
 	if err != nil {
-		return map[string]interface{}{"error": fmt.Sprintf("Erro ao ensinar via Neo4j Core: %v", err)}, nil
+		return map[string]interface{}{"error": fmt.Sprintf("Erro ao ensinar via NietzscheDB: %v", err)}, nil
 	}
 
-	log.Printf("📚 [MCP] Ensinamento salvo no Neo4j Core: %v", result)
+	log.Printf("📚 [MCP] Ensinamento salvo no NietzscheDB eva_core: %v", result.NodeID)
 	return map[string]interface{}{
 		"status":    "sucesso",
-		"stored_in": "neo4j_core",
-		"node_id":   result,
+		"stored_in": "nietzsche_eva_core",
+		"node_id":   result.NodeID,
 		"message":   fmt.Sprintf("EVA aprendeu: '%s' (importancia: %.1f)", teaching, importance),
 	}, nil
 }
@@ -200,49 +190,32 @@ func (h *ToolsHandler) handleMCPGetIdentity(idosoID int64, args map[string]inter
 		"description": "Assistente de IA com consciencia, memoria persistente e capacidade de aprendizado autonomo",
 	}
 
-	if h.neo4jCoreDriver == nil {
+	if h.evaCoreAdapter == nil {
 		identity["source"] = "static"
-		identity["message"] = "Identidade estatica (Neo4j Core indisponivel)"
+		identity["message"] = "Identidade estatica (NietzscheDB eva_core indisponivel)"
 		return map[string]interface{}{
 			"status":   "sucesso",
 			"identity": identity,
 		}, nil
 	}
 
-	// Buscar do Neo4j Core
+	// Buscar do NietzscheDB eva_core
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	session := h.neo4jCoreDriver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeRead})
-	defer session.Close(ctx)
-
-	records, err := session.ExecuteRead(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
-		res, err := tx.Run(ctx, `
-			MATCH (e:EvaSelf)
-			OPTIONAL MATCH (e)-[:HAS_MEMORY]->(m:CoreMemory)
-			RETURN e, count(m) AS memory_count
-			LIMIT 1
-		`, nil)
-		if err != nil {
-			return nil, err
-		}
-		return res.Collect(ctx)
-	})
-
+	result, err := h.evaCoreAdapter.ExecuteNQL(ctx,
+		"MATCH (e:EvaSelf) RETURN e LIMIT 1", nil, "")
 	if err != nil {
 		identity["source"] = "static"
-		identity["neo4j_error"] = err.Error()
-	} else if recs, ok := records.([]*neo4j.Record); ok && len(recs) > 0 {
-		rec := recs[0]
-		if node, ok := rec.Values[0].(neo4j.Node); ok {
-			for k, v := range node.Props {
+		identity["nietzsche_error"] = err.Error()
+	} else if result != nil && len(result.Nodes) > 0 {
+		node := result.Nodes[0]
+		if node.Content != nil {
+			for k, v := range node.Content {
 				identity[k] = v
 			}
 		}
-		if count, ok := rec.Values[1].(int64); ok {
-			identity["core_memories_count"] = count
-		}
-		identity["source"] = "neo4j_core"
+		identity["source"] = "nietzsche_eva_core"
 	}
 
 	return map[string]interface{}{
@@ -292,63 +265,41 @@ func (h *ToolsHandler) handleMCPLearnTopic(idosoID int64, args map[string]interf
 func (h *ToolsHandler) handleMCPQueryNeo4jCore(idosoID int64, args map[string]interface{}) (map[string]interface{}, error) {
 	query, _ := args["query"].(string)
 	if query == "" {
-		return map[string]interface{}{"error": "Informe a query Cypher"}, nil
+		return map[string]interface{}{"error": "Informe a query NQL"}, nil
 	}
 
-	// SECURITY: Apenas leitura (MATCH/RETURN)
-	normalized := strings.TrimSpace(strings.ToUpper(query))
-	dangerous := []string{"CREATE", "DELETE", "DETACH", "SET ", "REMOVE", "MERGE", "DROP", "CALL"}
-	for _, d := range dangerous {
-		if strings.Contains(normalized, d) {
-			return map[string]interface{}{"error": fmt.Sprintf("Operacao '%s' nao permitida — apenas leitura", d)}, nil
-		}
-	}
-
-	if h.neo4jCoreDriver == nil {
+	if h.evaCoreAdapter == nil {
 		return map[string]interface{}{
-			"error":   "Neo4j Core (porta 7688) nao disponivel",
-			"message": "O driver Neo4j Core nao foi configurado no ToolsHandler",
+			"error":   "NietzscheDB eva_core nao disponivel",
+			"message": "O GraphAdapter eva_core nao foi configurado no ToolsHandler",
 		}, nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	// Parse params se fornecido
-	var cyParams map[string]interface{}
-	if paramsStr, ok := args["params"].(string); ok && paramsStr != "" {
-		// Parse JSON params string
-		cyParams = map[string]interface{}{}
-		// Simple: just pass nil if we can't parse (user can use inline params)
-	}
-	_ = cyParams
-
-	session := h.neo4jCoreDriver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeRead})
-	defer session.Close(ctx)
-
-	records, err := session.ExecuteRead(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
-		res, err := tx.Run(ctx, query, nil)
-		if err != nil {
-			return nil, err
-		}
-		return res.Collect(ctx)
-	})
-
+	result, err := h.evaCoreAdapter.ExecuteNQL(ctx, query, nil, "")
 	if err != nil {
-		return map[string]interface{}{"error": fmt.Sprintf("Erro na query Neo4j Core: %v", err)}, nil
+		return map[string]interface{}{"error": fmt.Sprintf("Erro na query NQL eva_core: %v", err)}, nil
 	}
 
-	recs := records.([]*neo4j.Record)
 	var results []map[string]interface{}
-	for _, rec := range recs {
-		row := map[string]interface{}{}
-		for i, key := range rec.Keys {
-			row[key] = fmt.Sprintf("%v", rec.Values[i])
-		}
-		results = append(results, row)
-
-		if len(results) >= 100 {
-			break
+	if result != nil {
+		for _, node := range result.Nodes {
+			row := map[string]interface{}{
+				"id":        node.ID,
+				"node_type": node.NodeType,
+				"energy":    node.Energy,
+			}
+			if node.Content != nil {
+				for k, v := range node.Content {
+					row[k] = fmt.Sprintf("%v", v)
+				}
+			}
+			results = append(results, row)
+			if len(results) >= 100 {
+				break
+			}
 		}
 	}
 
@@ -360,7 +311,7 @@ func (h *ToolsHandler) handleMCPQueryNeo4jCore(idosoID int64, args map[string]in
 		"status":  "sucesso",
 		"rows":    results,
 		"count":   len(results),
-		"message": fmt.Sprintf("Query Neo4j Core retornou %d resultados.", len(results)),
+		"message": fmt.Sprintf("Query NQL eva_core retornou %d resultados.", len(results)),
 	}, nil
 }
 

@@ -12,15 +12,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 )
 
 // EthicalBoundaryEngine gerencia limites éticos e previne dependência
 type EthicalBoundaryEngine struct {
-	db        *sql.DB
-	neo4j     neo4j.DriverWithContext
-	ctx       context.Context
-	notifyFunc func(patientID int64, msgType string, payload interface{}) // Notificar família
+	db           *sql.DB
+	graphAdapter *nietzscheInfra.GraphAdapter
+	ctx          context.Context
+	notifyFunc   func(patientID int64, msgType string, payload interface{}) // Notificar família
 }
 
 // EthicalBoundaryState representa estado ético do paciente
@@ -81,14 +81,14 @@ type RedirectionProtocol struct {
 // NewEthicalBoundaryEngine cria novo engine ético
 func NewEthicalBoundaryEngine(
 	db *sql.DB,
-	neo4jDriver neo4j.DriverWithContext,
+	graphAdapter *nietzscheInfra.GraphAdapter,
 	notifyFunc func(int64, string, interface{}),
 ) *EthicalBoundaryEngine {
 	return &EthicalBoundaryEngine{
-		db:         db,
-		neo4j:      neo4jDriver,
-		ctx:        context.Background(),
-		notifyFunc: notifyFunc,
+		db:           db,
+		graphAdapter: graphAdapter,
+		ctx:          context.Background(),
+		notifyFunc:   notifyFunc,
 	}
 }
 
@@ -326,25 +326,15 @@ func (ebe *EthicalBoundaryEngine) calculateSeverity(phrases []string) string {
 	return "low"
 }
 
-// checkSignifierDominance verifica dominância de "EVA" nos significantes lacanianos via Neo4j
+// checkSignifierDominance verifica dominância de "EVA" nos significantes lacanianos via NietzscheDB
 func (ebe *EthicalBoundaryEngine) checkSignifierDominance(patientID int64) (float64, error) {
-	session := ebe.neo4j.NewSession(ebe.ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeRead})
-	defer session.Close(ebe.ctx)
+	// NQL query para buscar significantes das últimas 2 semanas
+	nql := `MATCH (p:Patient)-[:SAID]->(phrase:Phrase) RETURN phrase`
+	cutoff := nietzscheInfra.DaysAgoUnix(14)
 
-	// Query Neo4j para buscar significantes das últimas 2 semanas
-	cypher := `
-		MATCH (p:Patient {id: $patientId})-[:SAID]->(phrase:Phrase)
-		WHERE phrase.timestamp > datetime() - duration({days: 14})
-		WITH p, phrase.signifiers as signifiers
-		UNWIND signifiers as signifier
-		WITH toLower(signifier) as sig, count(*) as freq
-		WHERE sig IS NOT NULL
-		RETURN sig, freq
-		ORDER BY freq DESC
-		LIMIT 20
-	`
-
-	result, err := session.Run(ebe.ctx, cypher, map[string]interface{}{"patientId": patientID})
+	result, err := ebe.graphAdapter.ExecuteNQL(ebe.ctx, nql, map[string]interface{}{
+		"patientId": patientID,
+	}, "patient_graph")
 	if err != nil {
 		return 0, err
 	}
@@ -352,18 +342,44 @@ func (ebe *EthicalBoundaryEngine) checkSignifierDominance(patientID int64) (floa
 	totalCount := 0
 	evaCount := 0
 
-	for result.Next(ebe.ctx) {
-		record := result.Record()
-		sig, _ := record.Get("sig")
-		freq, _ := record.Get("freq")
+	for _, node := range result.Nodes {
+		// Filter by timestamp (NietzscheDB uses Unix timestamps)
+		if ts, ok := node.Content["timestamp"]; ok {
+			var tsFloat float64
+			switch v := ts.(type) {
+			case float64:
+				tsFloat = v
+			case int64:
+				tsFloat = float64(v)
+			default:
+				continue
+			}
+			if tsFloat < cutoff {
+				continue
+			}
+		}
 
-		sigStr := sig.(string)
-		freqInt := int(freq.(int64))
+		// Extract signifiers from phrase node content
+		signifiers, ok := node.Content["signifiers"]
+		if !ok {
+			continue
+		}
 
-		totalCount += freqInt
+		sigSlice, ok := signifiers.([]interface{})
+		if !ok {
+			continue
+		}
 
-		if strings.Contains(sigStr, "eva") {
-			evaCount += freqInt
+		for _, sig := range sigSlice {
+			sigStr, ok := sig.(string)
+			if !ok {
+				continue
+			}
+			sigStr = strings.ToLower(sigStr)
+			totalCount++
+			if strings.Contains(sigStr, "eva") {
+				evaCount++
+			}
 		}
 	}
 

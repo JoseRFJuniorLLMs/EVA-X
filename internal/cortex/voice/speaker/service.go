@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"eva/internal/brainstem/database"
-	"eva/internal/brainstem/infrastructure/vector"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 
 	"github.com/rs/zerolog/log"
 )
@@ -56,8 +56,8 @@ type SpeakerService struct {
 
 // NewSpeakerService creates a new speaker service.
 // embedder can be nil if ONNX is not available (timbre-only mode).
-func NewSpeakerService(db *database.DB, qdrant *vector.QdrantClient, modelPath string) (*SpeakerService, error) {
-	store := NewSpeakerStore(db, qdrant)
+func NewSpeakerService(db *database.DB, vectorAdapter *nietzscheInfra.VectorAdapter, modelPath string) (*SpeakerService, error) {
+	store := NewSpeakerStore(db, vectorAdapter)
 	timbre := NewTimbreAnalyzer()
 
 	var embedder *SpeakerEmbedder
@@ -69,12 +69,12 @@ func NewSpeakerService(db *database.DB, qdrant *vector.QdrantClient, modelPath s
 		}
 	}
 
-	// Ensure Qdrant collection exists
-	if qdrant != nil {
+	// Ensure speaker_embeddings collection exists
+	if vectorAdapter != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := store.EnsureQdrantCollection(ctx); err != nil {
-			log.Warn().Err(err).Msg("Failed to ensure Qdrant collection for speakers")
+			log.Warn().Err(err).Msg("Failed to ensure speaker_embeddings collection")
 		}
 	}
 

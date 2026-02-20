@@ -10,14 +10,14 @@ import (
 	"sync"
 	"time"
 
-	"eva/internal/brainstem/infrastructure/graph"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 )
 
 // SynapticPruning implementa poda sinaptica baseada em reforco
-// Conexoes nao reforçadas sao eliminadas (20% por ciclo noturno)
+// Conexoes nao reforcadas sao eliminadas (20% por ciclo noturno)
 // Ciencia: Tononi & Cirelli (2006) - Synaptic Homeostasis Hypothesis
 type SynapticPruning struct {
-	neo4j               *graph.Neo4jClient
+	graphAdapter        *nietzscheInfra.GraphAdapter
 	activationThreshold int     // Minimo de ativacoes para sobreviver
 	pruningRate         float64 // % de conexoes a remover (0.2 = 20%)
 	maxAgeDays          int     // Idade maxima sem reforco antes de poda
@@ -47,9 +47,9 @@ type EdgeInfo struct {
 }
 
 // NewSynapticPruning cria um novo motor de poda sinaptica
-func NewSynapticPruning(neo4j *graph.Neo4jClient) *SynapticPruning {
+func NewSynapticPruning(graphAdapter *nietzscheInfra.GraphAdapter) *SynapticPruning {
 	return &SynapticPruning{
-		neo4j:               neo4j,
+		graphAdapter:        graphAdapter,
 		activationThreshold: 2,
 		pruningRate:         0.20, // 20%
 		maxAgeDays:          30,
@@ -103,62 +103,137 @@ func (s *SynapticPruning) PruneNightly(ctx context.Context, patientID int64) (*P
 }
 
 // ageUnactivatedEdges incrementa idade de conexoes nao ativadas hoje
+// Rewritten as Go loop: BFS from patient, then check each neighbor's edges
 func (s *SynapticPruning) ageUnactivatedEdges(ctx context.Context, patientID int64) (int, error) {
-	if s.neo4j == nil {
+	if s.graphAdapter == nil {
 		return 0, nil
 	}
 
-	query := `
-		MATCH (p:Person {id: $patientId})-[:EXPERIENCED|ASSOCIATED_WITH*1..2]-(n1)-[r:CO_ACTIVATED|RELATED_TO|ASSOCIATED_WITH]-(n2)
-		WHERE n1 <> p AND n2 <> p
-		  AND (r.last_activation IS NULL OR r.last_activation < datetime() - duration('P1D'))
-		SET r.age = COALESCE(r.age, 0) + 1
-		RETURN count(r) AS aged
-	`
-
-	_, err := s.neo4j.ExecuteWrite(ctx, query, map[string]interface{}{
-		"patientId": patientID,
+	// Find patient node
+	patientResult, err := s.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+		NodeType: "Person",
+		MatchKeys: map[string]interface{}{
+			"id": patientID,
+		},
 	})
 	if err != nil {
 		return 0, err
 	}
 
-	return 0, nil
+	// BFS from patient with edge types EXPERIENCED|ASSOCIATED_WITH to depth 2
+	neighborIDs, err := s.graphAdapter.Bfs(ctx, patientResult.NodeID, 2, "")
+	if err != nil {
+		return 0, err
+	}
+
+	aged := 0
+	oneDayAgo := nietzscheInfra.DaysAgoUnix(1)
+
+	for _, nID := range neighborIDs {
+		if nID == patientResult.NodeID {
+			continue
+		}
+
+		// For each neighbor, find CO_ACTIVATED/RELATED_TO/ASSOCIATED_WITH edges
+		for _, edgeType := range []string{"CO_ACTIVATED", "RELATED_TO", "ASSOCIATED_WITH"} {
+			edgeNeighbors, err := s.graphAdapter.BfsWithEdgeType(ctx, nID, edgeType, 1, "")
+			if err != nil {
+				continue
+			}
+
+			for _, targetID := range edgeNeighbors {
+				if targetID == nID || targetID == patientResult.NodeID {
+					continue
+				}
+				// Get edge node to check last_activation
+				node, err := s.graphAdapter.GetNode(ctx, targetID, "")
+				if err != nil {
+					continue
+				}
+
+				lastActivation := toFloat64Pruning(node.Content["last_activation"])
+				if lastActivation == 0 || lastActivation < oneDayAgo {
+					currentAge := toIntPruning(node.Content["age"])
+					_, err := s.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+						NodeType: node.NodeType,
+						MatchKeys: map[string]interface{}{
+							"id": targetID,
+						},
+						OnMatchSet: map[string]interface{}{
+							"age": currentAge + 1,
+						},
+					})
+					if err == nil {
+						aged++
+					}
+				}
+			}
+		}
+	}
+
+	return aged, nil
 }
 
 // countEdges conta total de edges e edges fracos
+// Rewritten as Go loop: BFS from patient, inspect edge metadata
 func (s *SynapticPruning) countEdges(ctx context.Context, patientID int64) (total int, weak int, err error) {
-	if s.neo4j == nil {
+	if s.graphAdapter == nil {
 		return 0, 0, nil
 	}
 
-	query := `
-		MATCH (p:Person {id: $patientId})-[*1..2]-(n1)-[r:CO_ACTIVATED|RELATES_TO|ASSOCIATED_WITH]-(n2)
-		WHERE n1 <> p AND n2 <> p
-		WITH r, COALESCE(r.age, 0) AS age, COALESCE(r.activation_count, 0) AS actCount
-		RETURN count(r) AS total,
-		       sum(CASE WHEN age > $maxAge OR actCount < $minAct THEN 1 ELSE 0 END) AS weak
-	`
-
-	records, err := s.neo4j.ExecuteRead(ctx, query, map[string]interface{}{
-		"patientId": patientID,
-		"maxAge":    s.maxAgeDays,
-		"minAct":    s.activationThreshold,
+	// Find patient node
+	patientResult, err := s.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+		NodeType: "Person",
+		MatchKeys: map[string]interface{}{
+			"id": patientID,
+		},
 	})
 	if err != nil {
 		return 0, 0, err
 	}
 
-	if len(records) > 0 {
-		rec := records[0]
-		if v, ok := rec.Get("total"); ok {
-			if n, ok := v.(int64); ok {
-				total = int(n)
-			}
+	// BFS from patient to depth 2
+	neighborIDs, err := s.graphAdapter.Bfs(ctx, patientResult.NodeID, 2, "")
+	if err != nil {
+		return 0, 0, err
+	}
+
+	seen := make(map[string]bool)
+
+	for _, nID := range neighborIDs {
+		if nID == patientResult.NodeID {
+			continue
 		}
-		if v, ok := rec.Get("weak"); ok {
-			if n, ok := v.(int64); ok {
-				weak = int(n)
+
+		for _, edgeType := range []string{"CO_ACTIVATED", "RELATES_TO", "ASSOCIATED_WITH"} {
+			edgeNeighbors, err := s.graphAdapter.BfsWithEdgeType(ctx, nID, edgeType, 1, "")
+			if err != nil {
+				continue
+			}
+
+			for _, targetID := range edgeNeighbors {
+				if targetID == nID || targetID == patientResult.NodeID {
+					continue
+				}
+				edgeKey := nID + "-" + targetID + "-" + edgeType
+				if seen[edgeKey] {
+					continue
+				}
+				seen[edgeKey] = true
+
+				total++
+
+				// Check if this edge is weak
+				node, err := s.graphAdapter.GetNode(ctx, targetID, "")
+				if err != nil {
+					continue
+				}
+				age := toIntPruning(node.Content["age"])
+				actCount := toIntPruning(node.Content["activation_count"])
+
+				if age > s.maxAgeDays || actCount < s.activationThreshold {
+					weak++
+				}
 			}
 		}
 	}
@@ -167,50 +242,92 @@ func (s *SynapticPruning) countEdges(ctx context.Context, patientID int64) (tota
 }
 
 // pruneWeakEdges deleta conexoes fracas
+// Rewritten as Go loop: BFS from patient, find CO_ACTIVATED edges that are old and unused, delete them
 func (s *SynapticPruning) pruneWeakEdges(ctx context.Context, patientID int64) (int, error) {
-	if s.neo4j == nil {
+	if s.graphAdapter == nil {
 		return 0, nil
 	}
 
-	query := `
-		MATCH (p:Person {id: $patientId})-[:EXPERIENCED|ASSOCIATED_WITH*1..2]-(n1)-[r:CO_ACTIVATED]-(n2)
-		WHERE n1 <> p AND n2 <> p
-		  AND COALESCE(r.age, 0) > $maxAge
-		  AND COALESCE(r.activation_count, 0) < $minAct
-		WITH r LIMIT 100
-		DELETE r
-		RETURN count(*) AS pruned
-	`
-
-	_, err := s.neo4j.ExecuteWrite(ctx, query, map[string]interface{}{
-		"patientId": patientID,
-		"maxAge":    s.maxAgeDays,
-		"minAct":    s.activationThreshold,
+	// Find patient node
+	patientResult, err := s.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+		NodeType: "Person",
+		MatchKeys: map[string]interface{}{
+			"id": patientID,
+		},
 	})
 	if err != nil {
 		return 0, err
 	}
 
-	return 0, nil
+	// BFS from patient to depth 2
+	neighborIDs, err := s.graphAdapter.Bfs(ctx, patientResult.NodeID, 2, "")
+	if err != nil {
+		return 0, err
+	}
+
+	pruned := 0
+	seen := make(map[string]bool)
+
+	for _, nID := range neighborIDs {
+		if nID == patientResult.NodeID {
+			continue
+		}
+
+		coActNeighbors, err := s.graphAdapter.BfsWithEdgeType(ctx, nID, "CO_ACTIVATED", 1, "")
+		if err != nil {
+			continue
+		}
+
+		for _, targetID := range coActNeighbors {
+			if targetID == nID || targetID == patientResult.NodeID {
+				continue
+			}
+			edgeKey := nID + "-" + targetID
+			reverseKey := targetID + "-" + nID
+			if seen[edgeKey] || seen[reverseKey] {
+				continue
+			}
+			seen[edgeKey] = true
+
+			node, err := s.graphAdapter.GetNode(ctx, targetID, "")
+			if err != nil {
+				continue
+			}
+
+			age := toIntPruning(node.Content["age"])
+			actCount := toIntPruning(node.Content["activation_count"])
+
+			if age > s.maxAgeDays && actCount < s.activationThreshold {
+				// Delete the edge (using edge ID if available, or the node-based approach)
+				err := s.graphAdapter.DeleteEdge(ctx, targetID, "")
+				if err == nil {
+					pruned++
+				}
+			}
+
+			if pruned >= 100 {
+				return pruned, nil
+			}
+		}
+	}
+
+	return pruned, nil
 }
 
 // ResetEdgeAge reseta idade de uma conexao quando e ativada (reforco Hebbiano)
 func (s *SynapticPruning) ResetEdgeAge(ctx context.Context, sourceID, targetID string) error {
-	if s.neo4j == nil {
+	if s.graphAdapter == nil {
 		return nil
 	}
 
-	query := `
-		MATCH (n1)-[r:CO_ACTIVATED]-(n2)
-		WHERE toString(id(n1)) = $src AND toString(id(n2)) = $dst
-		SET r.age = 0,
-		    r.activation_count = COALESCE(r.activation_count, 0) + 1,
-		    r.last_activation = datetime()
-	`
-
-	_, err := s.neo4j.ExecuteWrite(ctx, query, map[string]interface{}{
-		"src": sourceID,
-		"dst": targetID,
+	_, err := s.graphAdapter.MergeEdge(ctx, nietzscheInfra.MergeEdgeOpts{
+		FromNodeID: sourceID,
+		ToNodeID:   targetID,
+		EdgeType:   "CO_ACTIVATED",
+		OnMatchSet: map[string]interface{}{
+			"age":             0,
+			"last_activation": nietzscheInfra.NowUnix(),
+		},
 	})
 
 	return err
@@ -224,5 +341,42 @@ func (s *SynapticPruning) GetStatistics() map[string]any {
 		"pruning_rate":         s.pruningRate,
 		"max_age_days":         s.maxAgeDays,
 		"status":               "active",
+	}
+}
+
+// Helper type conversions for this package
+func toFloat64Pruning(v interface{}) float64 {
+	if v == nil {
+		return 0
+	}
+	switch val := v.(type) {
+	case float64:
+		return val
+	case float32:
+		return float64(val)
+	case int:
+		return float64(val)
+	case int64:
+		return float64(val)
+	default:
+		return 0
+	}
+}
+
+func toIntPruning(v interface{}) int {
+	if v == nil {
+		return 0
+	}
+	switch val := v.(type) {
+	case int:
+		return val
+	case int64:
+		return int(val)
+	case float64:
+		return int(val)
+	case float32:
+		return int(val)
+	default:
+		return 0
 	}
 }

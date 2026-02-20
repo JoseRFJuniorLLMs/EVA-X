@@ -17,10 +17,9 @@ import (
 	"time"
 
 	"eva/internal/brainstem/config"
-	"eva/internal/brainstem/infrastructure/vector"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	"eva/internal/hippocampus/knowledge"
 
-	"github.com/qdrant/go-client/qdrant"
 	"github.com/rs/zerolog/log"
 )
 
@@ -33,19 +32,19 @@ const (
 // SelfAwarenessService provides EVA with introspection capabilities:
 // search own codebase, query own databases, update self-knowledge.
 type SelfAwarenessService struct {
-	db       *sql.DB
-	qdrant   *vector.QdrantClient
-	embedSvc *knowledge.EmbeddingService
-	cfg      *config.Config
+	db            *sql.DB
+	vectorAdapter *nietzscheInfra.VectorAdapter
+	embedSvc      *knowledge.EmbeddingService
+	cfg           *config.Config
 }
 
 // NewSelfAwarenessService creates the self-awareness service.
-func NewSelfAwarenessService(db *sql.DB, qdrant *vector.QdrantClient, embedSvc *knowledge.EmbeddingService, cfg *config.Config) *SelfAwarenessService {
+func NewSelfAwarenessService(db *sql.DB, vectorAdapter *nietzscheInfra.VectorAdapter, embedSvc *knowledge.EmbeddingService, cfg *config.Config) *SelfAwarenessService {
 	return &SelfAwarenessService{
-		db:       db,
-		qdrant:   qdrant,
-		embedSvc: embedSvc,
-		cfg:      cfg,
+		db:            db,
+		vectorAdapter: vectorAdapter,
+		embedSvc:      embedSvc,
+		cfg:           cfg,
 	}
 }
 
@@ -407,8 +406,8 @@ type CodeResult struct {
 
 // SearchCode performs semantic search on the indexed codebase.
 func (s *SelfAwarenessService) SearchCode(ctx context.Context, query string, limit int) ([]CodeResult, error) {
-	if s.qdrant == nil || s.embedSvc == nil {
-		return nil, fmt.Errorf("qdrant ou embedding service indisponivel")
+	if s.vectorAdapter == nil || s.embedSvc == nil {
+		return nil, fmt.Errorf("vector adapter ou embedding service indisponivel")
 	}
 	if limit <= 0 {
 		limit = 5
@@ -419,28 +418,38 @@ func (s *SelfAwarenessService) SearchCode(ctx context.Context, query string, lim
 		return nil, fmt.Errorf("embedding failed: %w", err)
 	}
 
-	points, err := s.qdrant.Search(ctx, codebaseCollection, embedding, uint64(limit), nil)
+	points, err := s.vectorAdapter.Search(ctx, codebaseCollection, embedding, limit, 0)
 	if err != nil {
 		return nil, fmt.Errorf("search failed: %w", err)
 	}
 
 	results := make([]CodeResult, 0, len(points))
 	for _, p := range points {
-		r := CodeResult{Score: p.Score}
+		r := CodeResult{Score: float32(p.Score)}
 		if v, ok := p.Payload["file_path"]; ok {
-			r.FilePath = v.GetStringValue()
+			if s, ok := v.(string); ok {
+				r.FilePath = s
+			}
 		}
 		if v, ok := p.Payload["package_name"]; ok {
-			r.Package = v.GetStringValue()
+			if s, ok := v.(string); ok {
+				r.Package = s
+			}
 		}
 		if v, ok := p.Payload["summary"]; ok {
-			r.Summary = v.GetStringValue()
+			if s, ok := v.(string); ok {
+				r.Summary = s
+			}
 		}
 		if v, ok := p.Payload["functions"]; ok {
-			r.Functions = v.GetStringValue()
+			if s, ok := v.(string); ok {
+				r.Functions = s
+			}
 		}
 		if v, ok := p.Payload["structs"]; ok {
-			r.Structs = v.GetStringValue()
+			if s, ok := v.(string); ok {
+				r.Structs = s
+			}
 		}
 		results = append(results, r)
 	}
@@ -459,8 +468,8 @@ type DocResult struct {
 
 // SearchDocs performs semantic search on the indexed documentation.
 func (s *SelfAwarenessService) SearchDocs(ctx context.Context, query string, limit int) ([]DocResult, error) {
-	if s.qdrant == nil || s.embedSvc == nil {
-		return nil, fmt.Errorf("qdrant ou embedding service indisponivel")
+	if s.vectorAdapter == nil || s.embedSvc == nil {
+		return nil, fmt.Errorf("vector adapter ou embedding service indisponivel")
 	}
 	if limit <= 0 {
 		limit = 5
@@ -471,22 +480,28 @@ func (s *SelfAwarenessService) SearchDocs(ctx context.Context, query string, lim
 		return nil, fmt.Errorf("embedding failed: %w", err)
 	}
 
-	points, err := s.qdrant.Search(ctx, docsCollection, embedding, uint64(limit), nil)
+	points, err := s.vectorAdapter.Search(ctx, docsCollection, embedding, limit, 0)
 	if err != nil {
 		return nil, fmt.Errorf("search failed: %w", err)
 	}
 
 	results := make([]DocResult, 0, len(points))
 	for _, p := range points {
-		r := DocResult{Score: p.Score}
+		r := DocResult{Score: float32(p.Score)}
 		if v, ok := p.Payload["file_path"]; ok {
-			r.FilePath = v.GetStringValue()
+			if s, ok := v.(string); ok {
+				r.FilePath = s
+			}
 		}
 		if v, ok := p.Payload["title"]; ok {
-			r.Title = v.GetStringValue()
+			if s, ok := v.(string); ok {
+				r.Title = s
+			}
 		}
 		if v, ok := p.Payload["content"]; ok {
-			r.Content = v.GetStringValue()
+			if s, ok := v.(string); ok {
+				r.Content = s
+			}
 		}
 		results = append(results, r)
 	}
@@ -545,18 +560,18 @@ func (s *SelfAwarenessService) QueryPostgres(ctx context.Context, query string) 
 	return results, rows.Err()
 }
 
-// ======================== Qdrant Collections ========================
+// ======================== NietzscheDB Collections ========================
 
-// CollectionInfo represents info about a Qdrant collection.
+// CollectionInfo represents info about a NietzscheDB collection.
 type CollectionInfo struct {
 	Name       string `json:"name"`
 	PointCount int64  `json:"point_count"`
 }
 
-// ListCollections lists all Qdrant collections with point counts.
-func (s *SelfAwarenessService) ListCollections(ctx context.Context) ([]CollectionInfo, error) {
-	if s.qdrant == nil {
-		return nil, fmt.Errorf("qdrant indisponivel")
+// ListCollections lists all known NietzscheDB collections.
+func (s *SelfAwarenessService) ListCollections(_ context.Context) ([]CollectionInfo, error) {
+	if s.vectorAdapter == nil {
+		return nil, fmt.Errorf("vector adapter indisponivel")
 	}
 
 	knownCollections := []string{
@@ -569,17 +584,11 @@ func (s *SelfAwarenessService) ListCollections(ctx context.Context) ([]Collectio
 		"seneca_letters", "epictetus_discourses", "buddha_suttas",
 	}
 
-	var infos []CollectionInfo
+	// NietzscheDB does not expose per-collection point counts yet,
+	// so we return the known collection names with zero counts.
+	infos := make([]CollectionInfo, 0, len(knownCollections))
 	for _, name := range knownCollections {
-		info, err := s.qdrant.GetCollectionInfo(ctx, name)
-		if err != nil {
-			continue
-		}
-		count := int64(0)
-		if info != nil && info.PointsCount != nil {
-			count = int64(*info.PointsCount)
-		}
-		infos = append(infos, CollectionInfo{Name: name, PointCount: count})
+		infos = append(infos, CollectionInfo{Name: name, PointCount: 0})
 	}
 	return infos, nil
 }
@@ -588,15 +597,15 @@ func (s *SelfAwarenessService) ListCollections(ctx context.Context) ([]Collectio
 
 // SystemStats represents EVA's overall system statistics.
 type SystemStats struct {
-	PostgresTables    int    `json:"postgres_tables"`
-	QdrantCollections int    `json:"qdrant_collections"`
-	QdrantTotalPoints int64  `json:"qdrant_total_points"`
-	CurriculumPending int    `json:"curriculum_pending"`
-	CurriculumDone    int    `json:"curriculum_done"`
-	TotalMemories     int    `json:"total_memories"`
-	GoRoutines        int    `json:"go_routines"`
-	MemAllocMB        uint64 `json:"mem_alloc_mb"`
-	Uptime            string `json:"uptime"`
+	PostgresTables       int    `json:"postgres_tables"`
+	NietzscheCollections int    `json:"nietzsche_collections"`
+	NietzscheTotalNodes  int64  `json:"nietzsche_total_nodes"`
+	CurriculumPending    int    `json:"curriculum_pending"`
+	CurriculumDone       int    `json:"curriculum_done"`
+	TotalMemories        int    `json:"total_memories"`
+	GoRoutines           int    `json:"go_routines"`
+	MemAllocMB           uint64 `json:"mem_alloc_mb"`
+	Uptime               string `json:"uptime"`
 }
 
 var startTime = time.Now()
@@ -628,9 +637,9 @@ func (s *SelfAwarenessService) GetSystemStats(ctx context.Context) (*SystemStats
 
 	collections, err := s.ListCollections(ctx)
 	if err == nil {
-		stats.QdrantCollections = len(collections)
+		stats.NietzscheCollections = len(collections)
 		for _, c := range collections {
-			stats.QdrantTotalPoints += c.PointCount
+			stats.NietzscheTotalNodes += c.PointCount
 		}
 	}
 
@@ -658,35 +667,54 @@ func (s *SelfAwarenessService) SearchSelfKnowledge(ctx context.Context, query st
 		limit = 5
 	}
 
-	// Try semantic search first (Qdrant eva_self_knowledge collection)
-	if s.qdrant != nil && s.embedSvc != nil {
+	// Try semantic search first (NietzscheDB eva_self_knowledge collection)
+	if s.vectorAdapter != nil && s.embedSvc != nil {
 		embedding, err := s.embedSvc.GenerateEmbedding(ctx, query)
 		if err == nil {
-			points, err := s.qdrant.Search(ctx, "eva_self_knowledge", embedding, uint64(limit), nil)
+			points, err := s.vectorAdapter.Search(ctx, "eva_self_knowledge", embedding, limit, 0)
 			if err == nil && len(points) > 0 {
 				var items []SelfKnowledgeItem
 				for _, p := range points {
 					item := SelfKnowledgeItem{}
 					if v, ok := p.Payload["key"]; ok {
-						item.Key = v.GetStringValue()
+						if s, ok := v.(string); ok {
+							item.Key = s
+						}
 					}
 					if v, ok := p.Payload["type"]; ok {
-						item.Type = v.GetStringValue()
+						if s, ok := v.(string); ok {
+							item.Type = s
+						}
 					}
 					if v, ok := p.Payload["title"]; ok {
-						item.Title = v.GetStringValue()
+						if s, ok := v.(string); ok {
+							item.Title = s
+						}
 					}
 					if v, ok := p.Payload["summary"]; ok {
-						item.Summary = v.GetStringValue()
+						if s, ok := v.(string); ok {
+							item.Summary = s
+						}
 					}
 					if v, ok := p.Payload["content"]; ok {
-						item.Content = v.GetStringValue()
+						if s, ok := v.(string); ok {
+							item.Content = s
+						}
 					}
 					if v, ok := p.Payload["location"]; ok {
-						item.CodeLocation = v.GetStringValue()
+						if s, ok := v.(string); ok {
+							item.CodeLocation = s
+						}
 					}
 					if v, ok := p.Payload["importance"]; ok {
-						item.Importance = int(v.GetIntegerValue())
+						switch imp := v.(type) {
+						case int64:
+							item.Importance = int(imp)
+						case float64:
+							item.Importance = int(imp)
+						case int:
+							item.Importance = imp
+						}
 					}
 					items = append(items, item)
 				}
@@ -788,11 +816,11 @@ func (s *SelfAwarenessService) Introspect(ctx context.Context) (*IntrospectionRe
 // IndexCodebase indexes all .go files in the given base path into Qdrant
 // using full Go AST parsing (structs with fields, method signatures, interfaces, constants).
 func (s *SelfAwarenessService) IndexCodebase(ctx context.Context, basePath string) (int, error) {
-	if s.qdrant == nil || s.embedSvc == nil {
-		return 0, fmt.Errorf("qdrant ou embedding service indisponivel")
+	if s.vectorAdapter == nil || s.embedSvc == nil {
+		return 0, fmt.Errorf("vectorAdapter ou embedding service indisponivel")
 	}
 
-	s.qdrant.CreateCollection(ctx, codebaseCollection, uint64(vectorDimension))
+	// NietzscheDB handles collection management automatically.
 
 	var files []string
 	err := filepath.Walk(basePath, func(path string, fi os.FileInfo, err error) error {
@@ -817,7 +845,7 @@ func (s *SelfAwarenessService) IndexCodebase(ctx context.Context, basePath strin
 
 	indexed := 0
 	batchSize := 5
-	var batch []*qdrant.PointStruct
+	var batch []nietzscheInfra.BatchVectorItem
 
 	for i, fpath := range files {
 		info, err := ParseGoFile(fpath)
@@ -856,25 +884,27 @@ func (s *SelfAwarenessService) IndexCodebase(ctx context.Context, basePath strin
 			}
 			funcNames = append(funcNames, sig)
 		}
-		for _, s := range info.Structs {
-			structNames = append(structNames, s.Name)
+		for _, st := range info.Structs {
+			structNames = append(structNames, st.Name)
 		}
 
-		pointID := uint64(time.Now().UnixNano()/1000000 + int64(i))
-		point := vector.CreatePoint(pointID, embedding, map[string]interface{}{
-			"file_path":    relPath,
-			"package_name": info.Package,
-			"summary":      summary,
-			"functions":    strings.Join(funcNames, ", "),
-			"structs":      strings.Join(structNames, ", "),
-			"line_count":   int64(info.LineCount),
-			"indexed_at":   time.Now().Format(time.RFC3339),
+		pointID := fmt.Sprintf("%d", time.Now().UnixNano()/1000000+int64(i))
+		batch = append(batch, nietzscheInfra.BatchVectorItem{
+			ID:     pointID,
+			Vector: embedding,
+			Payload: map[string]interface{}{
+				"file_path":    relPath,
+				"package_name": info.Package,
+				"summary":      summary,
+				"functions":    strings.Join(funcNames, ", "),
+				"structs":      strings.Join(structNames, ", "),
+				"line_count":   int64(info.LineCount),
+				"indexed_at":   time.Now().Format(time.RFC3339),
+			},
 		})
 
-		batch = append(batch, point)
-
 		if len(batch) >= batchSize {
-			if err := s.qdrant.Upsert(ctx, codebaseCollection, batch); err != nil {
+			if err := s.vectorAdapter.BatchUpsert(ctx, codebaseCollection, batch); err != nil {
 				log.Error().Err(err).Msg("[INDEX] Upsert batch failed")
 			} else {
 				indexed += len(batch)
@@ -885,7 +915,7 @@ func (s *SelfAwarenessService) IndexCodebase(ctx context.Context, basePath strin
 	}
 
 	if len(batch) > 0 {
-		if err := s.qdrant.Upsert(ctx, codebaseCollection, batch); err != nil {
+		if err := s.vectorAdapter.BatchUpsert(ctx, codebaseCollection, batch); err != nil {
 			log.Error().Err(err).Msg("[INDEX] Upsert final batch failed")
 		} else {
 			indexed += len(batch)
@@ -901,11 +931,11 @@ func (s *SelfAwarenessService) IndexCodebase(ctx context.Context, basePath strin
 // IndexDocs indexes all .md files in the given base path into Qdrant.
 // Large files are split into chunks for better semantic search.
 func (s *SelfAwarenessService) IndexDocs(ctx context.Context, basePath string) (int, error) {
-	if s.qdrant == nil || s.embedSvc == nil {
-		return 0, fmt.Errorf("qdrant ou embedding service indisponivel")
+	if s.vectorAdapter == nil || s.embedSvc == nil {
+		return 0, fmt.Errorf("vectorAdapter ou embedding service indisponivel")
 	}
 
-	s.qdrant.CreateCollection(ctx, docsCollection, uint64(vectorDimension))
+	// NietzscheDB handles collection management automatically.
 
 	var files []string
 	err := filepath.Walk(basePath, func(path string, fi os.FileInfo, err error) error {
@@ -929,7 +959,7 @@ func (s *SelfAwarenessService) IndexDocs(ctx context.Context, basePath string) (
 	}
 
 	indexed := 0
-	var batch []*qdrant.PointStruct
+	var batch []nietzscheInfra.BatchVectorItem
 	batchSize := 3
 	chunkID := 0
 
@@ -970,28 +1000,30 @@ func (s *SelfAwarenessService) IndexDocs(ctx context.Context, basePath string) (
 				continue
 			}
 
-			pointID := uint64(time.Now().UnixNano()/1000000 + int64(chunkID))
+			pointID := fmt.Sprintf("%d", time.Now().UnixNano()/1000000+int64(chunkID))
 			chunkID++
 
-			// Truncate content for payload (Qdrant payload limit)
+			// Truncate content for payload
 			payloadContent := chunk
 			if len(payloadContent) > 4000 {
 				payloadContent = payloadContent[:4000]
 			}
 
-			point := vector.CreatePoint(pointID, embedding, map[string]interface{}{
-				"file_path":  relPath,
-				"title":      chunkTitle,
-				"content":    payloadContent,
-				"chunk":      int64(ci),
-				"total":      int64(len(chunks)),
-				"indexed_at": time.Now().Format(time.RFC3339),
+			batch = append(batch, nietzscheInfra.BatchVectorItem{
+				ID:     pointID,
+				Vector: embedding,
+				Payload: map[string]interface{}{
+					"file_path":  relPath,
+					"title":      chunkTitle,
+					"content":    payloadContent,
+					"chunk":      int64(ci),
+					"total":      int64(len(chunks)),
+					"indexed_at": time.Now().Format(time.RFC3339),
+				},
 			})
 
-			batch = append(batch, point)
-
 			if len(batch) >= batchSize {
-				if err := s.qdrant.Upsert(ctx, docsCollection, batch); err != nil {
+				if err := s.vectorAdapter.BatchUpsert(ctx, docsCollection, batch); err != nil {
 					log.Error().Err(err).Msg("[INDEX-DOCS] Upsert batch failed")
 				} else {
 					indexed += len(batch)
@@ -1003,7 +1035,7 @@ func (s *SelfAwarenessService) IndexDocs(ctx context.Context, basePath string) (
 	}
 
 	if len(batch) > 0 {
-		if err := s.qdrant.Upsert(ctx, docsCollection, batch); err != nil {
+		if err := s.vectorAdapter.BatchUpsert(ctx, docsCollection, batch); err != nil {
 			log.Error().Err(err).Msg("[INDEX-DOCS] Upsert final batch failed")
 		} else {
 			indexed += len(batch)

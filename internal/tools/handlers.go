@@ -7,12 +7,9 @@ import (
 	"context"
 	"eva/internal/brainstem/database"
 	"eva/internal/swarm"
-	"eva/internal/brainstem/infrastructure/graph"
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
-	"eva/internal/brainstem/infrastructure/vector"
 	"eva/internal/brainstem/oauth"
 	"eva/internal/brainstem/push"
-	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
 	"eva/internal/cortex/alert"
 	"eva/internal/hippocampus/habits"
 	"eva/internal/hippocampus/spaced"
@@ -73,9 +70,9 @@ type ToolsHandler struct {
 	smartHomeService  *smarthome.Service              // ✅ Smart Home (Home Assistant)
 	webhookService    *webhooks.Service               // ✅ Webhooks
 	skillsService     *skills.Service                 // ✅ Runtime Skills
-	neo4jClient       *graph.Neo4jClient               // ✅ Neo4j geral (porta 7687 — grafo de conhecimento)
-	neo4jCoreDriver   neo4j.DriverWithContext         // ✅ Neo4j Core (porta 7688 — memória pessoal EVA)
-	qdrantClient      *vector.QdrantClient            // ✅ Qdrant (busca vetorial)
+	graphAdapter      *nietzscheInfra.GraphAdapter     // ✅ NietzscheDB GraphAdapter (substitui Neo4j geral)
+	evaCoreAdapter    *nietzscheInfra.GraphAdapter     // ✅ NietzscheDB GraphAdapter (substitui Neo4j Core — memória pessoal EVA)
+	vectorAdapter     *nietzscheInfra.VectorAdapter   // ✅ NietzscheDB VectorAdapter (substitui Qdrant)
 	nietzscheClient   *nietzscheInfra.Client          // ✅ NietzscheDB gRPC (porta 50051 — grafo + vetores + cache)
 	embedFunc         EmbedFunc                       // ✅ Embedding func (text → vector para Qdrant)
 	debugMode         bool                            // ✅ Novas tools só habilitadas em debug
@@ -197,14 +194,14 @@ func (h *ToolsHandler) SetSkillsService(svc *skills.Service) {
 	h.skillsService = svc
 }
 
-// SetNeo4jClient configura o client Neo4j geral (porta 7687 — grafo de conhecimento)
-func (h *ToolsHandler) SetNeo4jClient(client *graph.Neo4jClient) {
-	h.neo4jClient = client
+// SetGraphAdapter configura o GraphAdapter NietzscheDB (substitui Neo4j geral)
+func (h *ToolsHandler) SetGraphAdapter(adapter *nietzscheInfra.GraphAdapter) {
+	h.graphAdapter = adapter
 }
 
-// SetQdrantClient configura o client Qdrant para busca vetorial
-func (h *ToolsHandler) SetQdrantClient(client *vector.QdrantClient) {
-	h.qdrantClient = client
+// SetVectorAdapter configura o VectorAdapter NietzscheDB (substitui Qdrant)
+func (h *ToolsHandler) SetVectorAdapter(adapter *nietzscheInfra.VectorAdapter) {
+	h.vectorAdapter = adapter
 }
 
 // SetNietzscheClient configura o client NietzscheDB gRPC (porta 50051)
@@ -212,14 +209,14 @@ func (h *ToolsHandler) SetNietzscheClient(client *nietzscheInfra.Client) {
 	h.nietzscheClient = client
 }
 
+// SetEvaCoreAdapter configura o GraphAdapter para eva_core collection (substitui Neo4j Core)
+func (h *ToolsHandler) SetEvaCoreAdapter(adapter *nietzscheInfra.GraphAdapter) {
+	h.evaCoreAdapter = adapter
+}
+
 // SetEmbedFunc configura a funcao de embeddings (text → vector)
 func (h *ToolsHandler) SetEmbedFunc(fn EmbedFunc) {
 	h.embedFunc = fn
-}
-
-// SetNeo4jCoreDriver configura o driver Neo4j Core (porta 7688 — memória pessoal da EVA)
-func (h *ToolsHandler) SetNeo4jCoreDriver(driver neo4j.DriverWithContext) {
-	h.neo4jCoreDriver = driver
 }
 
 // SetDebugMode habilita/desabilita novas ferramentas (debug only)

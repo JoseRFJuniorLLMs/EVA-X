@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"eva/internal/brainstem/infrastructure/cache"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 )
 
 // Situation representa o contexto situacional atual do usuário
@@ -36,8 +36,8 @@ type Event struct {
 
 // SituationalModulator detecta e modula contexto situacional
 type SituationalModulator struct {
-	cache          *cache.RedisClient
-	cacheTTL       time.Duration
+	cache            *nietzscheInfra.CacheStore
+	cacheTTL         time.Duration
 	stressorKeywords map[string][]string
 }
 
@@ -48,7 +48,7 @@ type Config struct {
 }
 
 // NewModulator cria um novo Situational Modulator
-func NewModulator(cache *cache.RedisClient, config *Config) *SituationalModulator {
+func NewModulator(cache *nietzscheInfra.CacheStore, config *Config) *SituationalModulator {
 	if config == nil {
 		config = &Config{
 			CacheTTL: 5 * time.Minute,

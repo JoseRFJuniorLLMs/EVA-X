@@ -9,19 +9,19 @@ import (
 	"strings"
 	"time"
 
-	"eva/internal/brainstem/infrastructure/graph"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 
 	"github.com/rs/zerolog/log"
 )
 
 // PersonGraph manages the knowledge graph of people in a child's life
 type PersonGraph struct {
-	neo4j *graph.Neo4jClient
+	graphAdapter *nietzscheInfra.GraphAdapter
 }
 
 // NewPersonGraph creates a new person graph manager
-func NewPersonGraph(neo4j *graph.Neo4jClient) *PersonGraph {
-	return &PersonGraph{neo4j: neo4j}
+func NewPersonGraph(graphAdapter *nietzscheInfra.GraphAdapter) *PersonGraph {
+	return &PersonGraph{graphAdapter: graphAdapter}
 }
 
 // Person represents a person in the child's life
@@ -46,7 +46,7 @@ type SentimentPoint struct {
 	Context   string    `json:"context"`
 }
 
-// CreateOrUpdatePerson creates or updates a person node in Neo4j
+// CreateOrUpdatePerson creates or updates a person node in the graph
 func (pg *PersonGraph) CreateOrUpdatePerson(ctx context.Context, patientID int64, name, relationship string, sentiment float64, sessionID int64) (*Person, error) {
 	// Normalize name
 	normalizedName := strings.ToLower(strings.TrimSpace(name))
@@ -58,34 +58,38 @@ func (pg *PersonGraph) CreateOrUpdatePerson(ctx context.Context, patientID int64
 		return pg.updatePerson(ctx, existingPerson, normalizedName, sentiment, sessionID)
 	}
 
-	// Create new person
+	// Create new person via MergeNode
 	personID := fmt.Sprintf("person_%d_%d", patientID, time.Now().Unix())
 
-	query := `
-		MATCH (patient:Person {id: $patientId})
-		CREATE (p:PersonInLife {
-			id: $personId,
-			names: [$name],
-			relationship: $relationship,
-			first_mention: datetime(),
-			last_mention: datetime(),
-			mention_count: 1,
-			avg_sentiment: $sentiment
-		})
-		CREATE (patient)-[:KNOWS]->(p)
-		RETURN p.id AS id
-	`
-
-	_, err = pg.neo4j.ExecuteWrite(ctx, query, map[string]interface{}{
-		"patientId":    patientID,
-		"personId":     personID,
-		"name":         normalizedName,
-		"relationship": relationship,
-		"sentiment":    sentiment,
+	now := nietzscheInfra.NowUnix()
+	result, err := pg.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+		NodeType: "PersonInLife",
+		MatchKeys: map[string]interface{}{
+			"id": personID,
+		},
+		OnCreateSet: map[string]interface{}{
+			"id":            personID,
+			"names":         normalizedName,
+			"relationship":  relationship,
+			"first_mention": now,
+			"last_mention":  now,
+			"mention_count": 1,
+			"avg_sentiment": sentiment,
+			"patient_id":    patientID,
+		},
 	})
-
 	if err != nil {
 		return nil, err
+	}
+
+	// Create KNOWS edge from patient to person
+	_, err = pg.graphAdapter.MergeEdge(ctx, nietzscheInfra.MergeEdgeOpts{
+		FromNodeID: fmt.Sprintf("patient_%d", patientID),
+		ToNodeID:   result.NodeID,
+		EdgeType:   "KNOWS",
+	})
+	if err != nil {
+		log.Warn().Err(err).Msg("Failed to create KNOWS edge")
 	}
 
 	log.Info().
@@ -118,45 +122,43 @@ func (pg *PersonGraph) ResolvePerson(ctx context.Context, patientID int64, name 
 		return pg.resolvePronouns(ctx, patientID, normalizedName)
 	}
 
-	// Search by name
-	query := `
-		MATCH (patient:Person {id: $patientId})-[:KNOWS]->(p:PersonInLife)
-		WHERE $name IN p.names
-		RETURN p.id AS id, p.names AS names, p.relationship AS relationship,
-		       p.mention_count AS mention_count, p.avg_sentiment AS avg_sentiment
-		LIMIT 1
-	`
+	// Search by name using NQL
+	nql := `MATCH (p:PersonInLife) WHERE p.patient_id = $patientId AND p.names CONTAINS $name RETURN p LIMIT 1`
 
-	records, err := pg.neo4j.ExecuteRead(ctx, query, map[string]interface{}{
+	result, err := pg.graphAdapter.ExecuteNQL(ctx, nql, map[string]interface{}{
 		"patientId": patientID,
 		"name":      normalizedName,
-	})
+	}, "")
 
-	if err != nil || len(records) == 0 {
+	if err != nil || result == nil || len(result.Nodes) == 0 {
 		return nil, fmt.Errorf("person not found")
 	}
 
-	rec := records[0]
+	node := result.Nodes[0]
 	person := &Person{}
+	person.ID = node.ID
 
-	if id, ok := rec.Get("id"); ok {
-		person.ID = id.(string)
-	}
-	if names, ok := rec.Get("names"); ok {
-		if nameList, ok := names.([]interface{}); ok {
+	if names, ok := node.Content["names"]; ok {
+		if nameStr, ok := names.(string); ok {
+			person.Names = append(person.Names, nameStr)
+		} else if nameList, ok := names.([]interface{}); ok {
 			for _, n := range nameList {
-				person.Names = append(person.Names, n.(string))
+				person.Names = append(person.Names, fmt.Sprintf("%v", n))
 			}
 		}
 	}
-	if rel, ok := rec.Get("relationship"); ok {
-		person.Relationship = rel.(string)
+	if rel, ok := node.Content["relationship"]; ok {
+		person.Relationship = fmt.Sprintf("%v", rel)
 	}
-	if count, ok := rec.Get("mention_count"); ok {
-		person.MentionCount = int(count.(int64))
+	if count, ok := node.Content["mention_count"]; ok {
+		if c, ok := count.(float64); ok {
+			person.MentionCount = int(c)
+		}
 	}
-	if sentiment, ok := rec.Get("avg_sentiment"); ok {
-		person.AvgSentiment = sentiment.(float64)
+	if sentiment, ok := node.Content["avg_sentiment"]; ok {
+		if s, ok := sentiment.(float64); ok {
+			person.AvgSentiment = s
+		}
 	}
 
 	return person, nil
@@ -172,39 +174,35 @@ func (pg *PersonGraph) resolvePronouns(ctx context.Context, patientID int64, pro
 		gender = "female"
 	}
 
-	query := `
-		MATCH (patient:Person {id: $patientId})-[:KNOWS]->(p:PersonInLife)
-		WHERE $gender = 'any' OR p.gender = $gender
-		RETURN p.id AS id, p.names AS names, p.relationship AS relationship,
-		       p.last_mention AS last_mention
-		ORDER BY p.last_mention DESC
-		LIMIT 1
-	`
+	nql := `MATCH (p:PersonInLife) WHERE p.patient_id = $patientId RETURN p`
+	if gender != "any" {
+		nql = `MATCH (p:PersonInLife) WHERE p.patient_id = $patientId AND p.gender = $gender RETURN p`
+	}
 
-	records, err := pg.neo4j.ExecuteRead(ctx, query, map[string]interface{}{
+	result, err := pg.graphAdapter.ExecuteNQL(ctx, nql, map[string]interface{}{
 		"patientId": patientID,
 		"gender":    gender,
-	})
+	}, "")
 
-	if err != nil || len(records) == 0 {
+	if err != nil || result == nil || len(result.Nodes) == 0 {
 		return nil, fmt.Errorf("cannot resolve pronoun")
 	}
 
-	rec := records[0]
+	node := result.Nodes[0]
 	person := &Person{}
+	person.ID = node.ID
 
-	if id, ok := rec.Get("id"); ok {
-		person.ID = id.(string)
-	}
-	if names, ok := rec.Get("names"); ok {
-		if nameList, ok := names.([]interface{}); ok {
+	if names, ok := node.Content["names"]; ok {
+		if nameStr, ok := names.(string); ok {
+			person.Names = append(person.Names, nameStr)
+		} else if nameList, ok := names.([]interface{}); ok {
 			for _, n := range nameList {
-				person.Names = append(person.Names, n.(string))
+				person.Names = append(person.Names, fmt.Sprintf("%v", n))
 			}
 		}
 	}
-	if rel, ok := rec.Get("relationship"); ok {
-		person.Relationship = rel.(string)
+	if rel, ok := node.Content["relationship"]; ok {
+		person.Relationship = fmt.Sprintf("%v", rel)
 	}
 
 	log.Info().
@@ -227,42 +225,35 @@ func (pg *PersonGraph) updatePerson(ctx context.Context, person *Person, newName
 		}
 	}
 
-	query := `
-		MATCH (p:PersonInLife {id: $personId})
-		SET p.last_mention = datetime(),
-		    p.mention_count = p.mention_count + 1,
-		    p.avg_sentiment = (p.avg_sentiment * p.mention_count + $sentiment) / (p.mention_count + 1)
-	`
+	// Calculate new averages
+	newMentionCount := person.MentionCount + 1
+	newAvgSentiment := (person.AvgSentiment*float64(person.MentionCount) + sentiment) / float64(newMentionCount)
 
+	now := nietzscheInfra.NowUnix()
+	onMatchSet := map[string]interface{}{
+		"last_mention":  now,
+		"mention_count": newMentionCount,
+		"avg_sentiment": newAvgSentiment,
+	}
 	if !hasName {
-		query += `, p.names = p.names + [$newName]`
+		// Add the new name to the names field
+		allNames := strings.Join(append(person.Names, newName), ",")
+		onMatchSet["names"] = allNames
 	}
 
-	query += ` RETURN p.mention_count AS mention_count, p.avg_sentiment AS avg_sentiment`
-
-	params := map[string]interface{}{
-		"personId":  person.ID,
-		"sentiment": sentiment,
-	}
-
-	if !hasName {
-		params["newName"] = newName
-	}
-
-	records, err := pg.neo4j.ExecuteWriteAndReturn(ctx, query, params)
+	_, err := pg.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+		NodeType: "PersonInLife",
+		MatchKeys: map[string]interface{}{
+			"id": person.ID,
+		},
+		OnMatchSet: onMatchSet,
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	if len(records) > 0 {
-		rec := records[0]
-		if count, ok := rec.Get("mention_count"); ok {
-			person.MentionCount = int(count.(int64))
-		}
-		if sentiment, ok := rec.Get("avg_sentiment"); ok {
-			person.AvgSentiment = sentiment.(float64)
-		}
-	}
+	person.MentionCount = newMentionCount
+	person.AvgSentiment = newAvgSentiment
 
 	if !hasName {
 		person.Names = append(person.Names, newName)
@@ -280,47 +271,47 @@ func (pg *PersonGraph) updatePerson(ctx context.Context, person *Person, newName
 
 // GetAllPeople retrieves all people in a patient's life
 func (pg *PersonGraph) GetAllPeople(ctx context.Context, patientID int64) ([]*Person, error) {
-	query := `
-		MATCH (patient:Person {id: $patientId})-[:KNOWS]->(p:PersonInLife)
-		RETURN p.id AS id, p.names AS names, p.relationship AS relationship,
-		       p.mention_count AS mention_count, p.avg_sentiment AS avg_sentiment,
-		       p.first_mention AS first_mention, p.last_mention AS last_mention
-		ORDER BY p.mention_count DESC
-	`
+	nql := `MATCH (p:PersonInLife) WHERE p.patient_id = $patientId RETURN p`
 
-	records, err := pg.neo4j.ExecuteRead(ctx, query, map[string]interface{}{
+	result, err := pg.graphAdapter.ExecuteNQL(ctx, nql, map[string]interface{}{
 		"patientId": patientID,
-	})
+	}, "")
 
 	if err != nil {
 		return nil, err
 	}
 
 	var people []*Person
-	for _, rec := range records {
-		person := &Person{}
+	if result != nil {
+		for _, node := range result.Nodes {
+			person := &Person{}
+			person.ID = node.ID
 
-		if id, ok := rec.Get("id"); ok {
-			person.ID = id.(string)
-		}
-		if names, ok := rec.Get("names"); ok {
-			if nameList, ok := names.([]interface{}); ok {
-				for _, n := range nameList {
-					person.Names = append(person.Names, n.(string))
+			if names, ok := node.Content["names"]; ok {
+				if nameStr, ok := names.(string); ok {
+					person.Names = append(person.Names, nameStr)
+				} else if nameList, ok := names.([]interface{}); ok {
+					for _, n := range nameList {
+						person.Names = append(person.Names, fmt.Sprintf("%v", n))
+					}
 				}
 			}
-		}
-		if rel, ok := rec.Get("relationship"); ok {
-			person.Relationship = rel.(string)
-		}
-		if count, ok := rec.Get("mention_count"); ok {
-			person.MentionCount = int(count.(int64))
-		}
-		if sentiment, ok := rec.Get("avg_sentiment"); ok {
-			person.AvgSentiment = sentiment.(float64)
-		}
+			if rel, ok := node.Content["relationship"]; ok {
+				person.Relationship = fmt.Sprintf("%v", rel)
+			}
+			if count, ok := node.Content["mention_count"]; ok {
+				if c, ok := count.(float64); ok {
+					person.MentionCount = int(c)
+				}
+			}
+			if sentiment, ok := node.Content["avg_sentiment"]; ok {
+				if s, ok := sentiment.(float64); ok {
+					person.AvgSentiment = s
+				}
+			}
 
-		people = append(people, person)
+			people = append(people, person)
+		}
 	}
 
 	return people, nil

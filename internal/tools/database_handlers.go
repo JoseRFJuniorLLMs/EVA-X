@@ -93,48 +93,47 @@ func min(a, b int) int {
 }
 
 // ============================================================================
-// 🔗 NEO4J — Query Cypher (via Bolt, usando o driver existente)
+// 🔗 NIETZSCHEDB GRAPH — Query NQL (substitui Neo4j Cypher)
 // ============================================================================
 
 func (h *ToolsHandler) handleQueryNeo4j(idosoID int64, args map[string]interface{}) (map[string]interface{}, error) {
 	query, _ := args["query"].(string)
 	if query == "" {
-		return map[string]interface{}{"error": "Informe a query Cypher"}, nil
+		return map[string]interface{}{"error": "Informe a query NQL"}, nil
 	}
 
-	// SECURITY: Apenas MATCH/RETURN permitido (read-only)
-	normalized := strings.TrimSpace(strings.ToUpper(query))
-	dangerous := []string{"CREATE", "DELETE", "DETACH", "SET ", "REMOVE", "MERGE", "DROP", "CALL"}
-	for _, d := range dangerous {
-		if strings.Contains(normalized, d) {
-			return map[string]interface{}{"error": fmt.Sprintf("Operacao '%s' nao permitida — apenas leitura", d)}, nil
-		}
-	}
-
-	if h.neo4jClient == nil {
+	if h.graphAdapter == nil {
 		return map[string]interface{}{
-			"error":   "Neo4j (porta 7687) nao disponivel",
-			"message": "O client Neo4j nao foi configurado no ToolsHandler",
+			"error":   "NietzscheDB GraphAdapter nao disponivel",
+			"message": "O GraphAdapter nao foi configurado no ToolsHandler",
 		}, nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	records, err := h.neo4jClient.ExecuteRead(ctx, query, nil)
+	result, err := h.graphAdapter.ExecuteNQL(ctx, query, nil, "")
 	if err != nil {
-		return map[string]interface{}{"error": fmt.Sprintf("Erro na query Neo4j: %v", err)}, nil
+		return map[string]interface{}{"error": fmt.Sprintf("Erro na query NQL: %v", err)}, nil
 	}
 
 	var results []map[string]interface{}
-	for _, rec := range records {
-		row := map[string]interface{}{}
-		for i, key := range rec.Keys {
-			row[key] = fmt.Sprintf("%v", rec.Values[i])
-		}
-		results = append(results, row)
-		if len(results) >= 100 {
-			break
+	if result != nil {
+		for _, node := range result.Nodes {
+			row := map[string]interface{}{
+				"id":        node.ID,
+				"node_type": node.NodeType,
+				"energy":    node.Energy,
+			}
+			if node.Content != nil {
+				for k, v := range node.Content {
+					row[k] = fmt.Sprintf("%v", v)
+				}
+			}
+			results = append(results, row)
+			if len(results) >= 100 {
+				break
+			}
 		}
 	}
 
@@ -146,7 +145,7 @@ func (h *ToolsHandler) handleQueryNeo4j(idosoID int64, args map[string]interface
 		"status":  "sucesso",
 		"rows":    results,
 		"count":   len(results),
-		"message": fmt.Sprintf("Query Neo4j retornou %d resultados.", len(results)),
+		"message": fmt.Sprintf("Query NQL retornou %d resultados.", len(results)),
 	}, nil
 }
 
@@ -176,10 +175,10 @@ func (h *ToolsHandler) handleQueryQdrant(idosoID int64, args map[string]interfac
 		return map[string]interface{}{"error": "Informe o texto de busca (query)"}, nil
 	}
 
-	if h.qdrantClient == nil {
+	if h.vectorAdapter == nil {
 		return map[string]interface{}{
-			"error":   "Qdrant nao disponivel",
-			"message": "O client Qdrant nao foi configurado no ToolsHandler",
+			"error":   "NietzscheDB VectorAdapter nao disponivel",
+			"message": "O VectorAdapter nao foi configurado no ToolsHandler",
 		}, nil
 	}
 	if h.embedFunc == nil {
@@ -198,24 +197,22 @@ func (h *ToolsHandler) handleQueryQdrant(idosoID int64, args map[string]interfac
 		return map[string]interface{}{"error": fmt.Sprintf("Erro ao gerar embedding: %v", err)}, nil
 	}
 
-	// 2. Buscar no Qdrant
-	points, err := h.qdrantClient.Search(ctx, collection, vector, uint64(limit), nil)
+	// 2. Buscar no NietzscheDB via VectorAdapter
+	points, err := h.vectorAdapter.Search(ctx, collection, vector, limit, idosoID)
 	if err != nil {
-		return map[string]interface{}{"error": fmt.Sprintf("Erro na busca Qdrant: %v", err)}, nil
+		return map[string]interface{}{"error": fmt.Sprintf("Erro na busca vetorial: %v", err)}, nil
 	}
 
 	// 3. Formatar resultados
 	var results []map[string]interface{}
 	for _, point := range points {
 		item := map[string]interface{}{
+			"id":    point.ID,
 			"score": point.Score,
-		}
-		if point.Id != nil {
-			item["id"] = fmt.Sprintf("%v", point.Id)
 		}
 		if point.Payload != nil {
 			for k, v := range point.Payload {
-				item[k] = v.GetStringValue()
+				item[k] = fmt.Sprintf("%v", v)
 			}
 		}
 		results = append(results, item)

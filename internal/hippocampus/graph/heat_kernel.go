@@ -5,15 +5,17 @@ package diffusor
 
 import (
 	"context"
-	"eva/internal/brainstem/infrastructure/graph"
+	"fmt"
 	"math"
+
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 )
 
 // HeatKernelDiffusion implements heat kernel-based graph navigation
 // Simulates "heat" diffusing through the knowledge graph to discover implicit relations
 type HeatKernelDiffusion struct {
-	neo4jClient *graph.Neo4jClient
-	timeParam   float64 // t parameter for diffusion (controls spread)
+	graphAdapter *nietzscheInfra.GraphAdapter
+	timeParam    float64 // t parameter for diffusion (controls spread)
 }
 
 // NodeActivation represents activation level of a node after diffusion
@@ -42,10 +44,10 @@ type Insight struct {
 }
 
 // NewHeatKernelDiffusion creates a new heat kernel diffusion engine
-func NewHeatKernelDiffusion(neo4jClient *graph.Neo4jClient, timeParam float64) *HeatKernelDiffusion {
+func NewHeatKernelDiffusion(graphAdapter *nietzscheInfra.GraphAdapter, timeParam float64) *HeatKernelDiffusion {
 	return &HeatKernelDiffusion{
-		neo4jClient: neo4jClient,
-		timeParam:   timeParam,
+		graphAdapter: graphAdapter,
+		timeParam:    timeParam,
 	}
 }
 
@@ -182,51 +184,35 @@ func (hk *HeatKernelDiffusion) diffusionRate(step int) float64 {
 }
 
 func (hk *HeatKernelDiffusion) getNeighbors(ctx context.Context, nodeID string) ([]string, error) {
-	// Query Neo4j for neighbors
-	query := `
-		MATCH (n)-[r]-(neighbor)
-		WHERE id(n) = $nodeID
-		RETURN id(neighbor) as neighborID
-	`
-
-	result, err := hk.neo4jClient.ExecuteRead(ctx, query, map[string]interface{}{
-		"nodeID": nodeID,
-	})
-
+	// Get neighbors via BFS depth 1
+	neighborIDs, err := hk.graphAdapter.Bfs(ctx, nodeID, 1, "")
 	if err != nil {
 		return nil, err
 	}
-
-	neighbors := []string{}
-	for _, record := range result {
-		if val, exists := record.Get("neighborID"); exists {
-			if neighborID, ok := val.(string); ok {
-				neighbors = append(neighbors, neighborID)
-			}
+	// Filter out the source node itself
+	neighbors := make([]string, 0, len(neighborIDs))
+	for _, nid := range neighborIDs {
+		if nid != nodeID {
+			neighbors = append(neighbors, nid)
 		}
 	}
-
 	return neighbors, nil
 }
 
 func (hk *HeatKernelDiffusion) findShortestPath(ctx context.Context, startID, endID string) (Path, error) {
-	// Use Neo4j's shortest path algorithm
-	query := `
-		MATCH path = shortestPath((start)-[*]-(end))
-		WHERE id(start) = $startID AND id(end) = $endID
-		RETURN path
-	`
-
-	result, err := hk.neo4jClient.ExecuteRead(ctx, query, map[string]interface{}{
-		"startID": startID,
-		"endID":   endID,
-	})
-
-	if err != nil || len(result) == 0 {
+	// Use BFS to find path between nodes
+	neighborIDs, err := hk.graphAdapter.Bfs(ctx, startID, 10, "")
+	if err != nil {
 		return Path{}, err
 	}
-
-	// Parse path from result (simplified)
+	for i, nid := range neighborIDs {
+		if nid == endID {
+			return Path{
+				Nodes: []string{startID, endID},
+				Hops:  i + 1,
+			}, nil
+		}
+	}
 	return Path{
 		Nodes: []string{startID, endID},
 		Hops:  1,

@@ -19,7 +19,9 @@ import (
 	"strings"
 	"time"
 
-	"eva/internal/brainstem/infrastructure/graph"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
+
+	nietzsche "nietzsche-sdk"
 )
 
 // ShiftType categorizes the type of narrative shift
@@ -27,7 +29,7 @@ type ShiftType string
 
 const (
 	ShiftAbruptChange  ShiftType = "abrupt_change"  // Sudden topic switch (low cosine sim)
-	ShiftEmotionalFlip ShiftType = "emotional_flip"  // Positive ↔ Negative valence change
+	ShiftEmotionalFlip ShiftType = "emotional_flip"  // Positive <-> Negative valence change
 	ShiftTopicReturn   ShiftType = "topic_return"     // Circling back to earlier topic (rumination)
 )
 
@@ -73,7 +75,7 @@ type AvoidedTopic struct {
 
 // NarrativeShiftDetector detects conversation shifts and avoidance patterns
 type NarrativeShiftDetector struct {
-	neo4j      *graph.Neo4jClient
+	graph      *nietzscheInfra.GraphAdapter
 	signifiers *SignifierService
 
 	// Thresholds
@@ -83,11 +85,11 @@ type NarrativeShiftDetector struct {
 
 // NewNarrativeShiftDetector creates a new detector
 func NewNarrativeShiftDetector(
-	neo4j *graph.Neo4jClient,
+	graph *nietzscheInfra.GraphAdapter,
 	signifiers *SignifierService,
 ) *NarrativeShiftDetector {
 	return &NarrativeShiftDetector{
-		neo4j:              neo4j,
+		graph:              graph,
 		signifiers:         signifiers,
 		abruptThreshold:    0.3,
 		returnGapThreshold: 5,
@@ -152,7 +154,7 @@ func (d *NarrativeShiftDetector) DetectShiftsInSession(
 		currValence := computeEmotionalValence(curr.Content)
 		emotionalDelta := math.Abs(currValence - prevValence)
 
-		if emotionalDelta > 1.0 { // significant flip (e.g., +0.5 → -0.5)
+		if emotionalDelta > 1.0 { // significant flip (e.g., +0.5 -> -0.5)
 			shifts = append(shifts, ShiftEvent{
 				FromContent:    truncate(prev.Content, 100),
 				ToContent:      truncate(curr.Content, 100),
@@ -270,7 +272,7 @@ func (d *NarrativeShiftDetector) GetAvoidedSignifiers(
 	// Get known signifiers for this patient
 	signifiers, err := d.signifiers.GetKeySignifiers(ctx, patientID, 50)
 	if err != nil {
-		log.Printf("⚠️ [SHIFT] Error getting signifiers: %v", err)
+		log.Printf("[SHIFT] Error getting signifiers: %v", err)
 		return nil
 	}
 
@@ -307,49 +309,53 @@ func (d *NarrativeShiftDetector) GetAvoidedSignifiers(
 	return result
 }
 
-// StoreShiftEvents persists detected shifts to Neo4j for historical analysis
+// StoreShiftEvents persists detected shifts to NietzscheDB for historical analysis
 func (d *NarrativeShiftDetector) StoreShiftEvents(ctx context.Context, patientID int64, shifts []ShiftEvent) error {
-	if d.neo4j == nil || len(shifts) == 0 {
+	if d.graph == nil || len(shifts) == 0 {
 		return nil
 	}
 
-	query := `
-		MATCH (p:Person {id: $patientId})
-		WITH p
-		UNWIND $shifts AS shift
-		CREATE (s:NarrativeShift {
-			shift_type: shift.type,
-			cosine_delta: shift.delta,
-			emotional_shift: shift.emotional,
-			session_id: shift.session,
-			detected_at: datetime(),
-			from_content: shift.from_content,
-			to_content: shift.to_content
-		})
-		CREATE (p)-[:HAS_SHIFT]->(s)
-	`
+	// Find Person node
+	nql := `MATCH (p:Person) WHERE p.id = $patientId RETURN p`
+	personResult, err := d.graph.ExecuteNQL(ctx, nql, map[string]interface{}{
+		"patientId": patientID,
+	}, "")
+	if err != nil || len(personResult.Nodes) == 0 {
+		return fmt.Errorf("person node not found for patient %d: %w", patientID, err)
+	}
+	personNodeID := personResult.Nodes[0].ID
 
-	shiftParams := make([]map[string]interface{}, len(shifts))
-	for i, s := range shifts {
-		shiftParams[i] = map[string]interface{}{
-			"type":         string(s.ShiftType),
-			"delta":        s.CosineDelta,
-			"emotional":    s.EmotionalShift,
-			"session":      s.SessionID,
-			"from_content": s.FromContent,
-			"to_content":   s.ToContent,
+	now := nietzscheInfra.NowUnix()
+
+	for _, s := range shifts {
+		// Create NarrativeShift node
+		shiftNode, err := d.graph.InsertNode(ctx, nietzsche.InsertNodeOpts{
+			Content: map[string]interface{}{
+				"shift_type":      string(s.ShiftType),
+				"cosine_delta":    s.CosineDelta,
+				"emotional_shift": s.EmotionalShift,
+				"session_id":      s.SessionID,
+				"detected_at":     now,
+				"from_content":    s.FromContent,
+				"to_content":      s.ToContent,
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("failed to create NarrativeShift node: %w", err)
+		}
+
+		// Create edge: Person -HAS_SHIFT-> NarrativeShift
+		_, err = d.graph.InsertEdge(ctx, nietzsche.InsertEdgeOpts{
+			From:     personNodeID,
+			To:       shiftNode.ID,
+			EdgeType: "HAS_SHIFT",
+		})
+		if err != nil {
+			return fmt.Errorf("failed to create HAS_SHIFT edge: %w", err)
 		}
 	}
 
-	_, err := d.neo4j.ExecuteWrite(ctx, query, map[string]interface{}{
-		"patientId": patientID,
-		"shifts":    shiftParams,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to store shift events: %w", err)
-	}
-
-	log.Printf("📊 [SHIFT] Stored %d shift events for patient %d", len(shifts), patientID)
+	log.Printf("[SHIFT] Stored %d shift events for patient %d", len(shifts), patientID)
 	return nil
 }
 

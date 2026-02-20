@@ -11,18 +11,18 @@ import (
 	"log"
 	"time"
 
-	"eva/internal/brainstem/infrastructure/graph"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 )
 
 // LegacyService gerencia modo pos-morte, herdeiros e personality snapshots
 type LegacyService struct {
 	db          *sql.DB
-	neo4jClient *graph.Neo4jClient
+	graphClient *nietzscheInfra.GraphAdapter
 }
 
 // NewLegacyService cria novo servico de legacy
-func NewLegacyService(db *sql.DB, neo4j *graph.Neo4jClient) *LegacyService {
-	return &LegacyService{db: db, neo4jClient: neo4j}
+func NewLegacyService(db *sql.DB, graphAdapter *nietzscheInfra.GraphAdapter) *LegacyService {
+	return &LegacyService{db: db, graphClient: graphAdapter}
 }
 
 // Heir representa um herdeiro com consent granular
@@ -205,8 +205,8 @@ func (ls *LegacyService) CreatePersonalitySnapshot(ctx context.Context, idosoID 
 		 WHERE idoso_id = $1 ORDER BY created_at DESC LIMIT 1`,
 		idosoID).Scan(&snapshot.EnneagramType, &snapshot.EnneagramWing)
 
-	// 2. Buscar top significantes do Neo4j
-	if ls.neo4jClient != nil {
+	// 2. Buscar top significantes do grafo
+	if ls.graphClient != nil {
 		signifiers, err := ls.getTopSignifiers(ctx, idosoID, 20)
 		if err == nil {
 			snapshot.TopSignifiers, _ = json.Marshal(signifiers)
@@ -226,7 +226,7 @@ func (ls *LegacyService) CreatePersonalitySnapshot(ctx context.Context, idosoID 
 	}
 
 	// 5. Buscar relacoes significativas do grafo
-	if ls.neo4jClient != nil {
+	if ls.graphClient != nil {
 		relations, err := ls.getSignificantRelations(ctx, idosoID)
 		if err == nil {
 			snapshot.SignificantRelations, _ = json.Marshal(relations)
@@ -425,28 +425,20 @@ func (ls *LegacyService) IsPosMorte(ctx context.Context, idosoID int64) bool {
 // --- Helpers internos ---
 
 func (ls *LegacyService) getTopSignifiers(ctx context.Context, idosoID int64, topN int) ([]map[string]interface{}, error) {
-	query := `
-		MATCH (s:Significante {idoso_id: $idosoId})
-		WHERE s.frequency >= 3
-		RETURN s.word AS word, s.frequency AS frequency
-		ORDER BY s.frequency DESC
-		LIMIT $limit`
-
-	records, err := ls.neo4jClient.ExecuteRead(ctx, query, map[string]interface{}{
-		"idosoId": idosoID,
+	nql := `MATCH (s:Significante {idoso_id: $idosoId}) WHERE s.frequency >= 3 RETURN s LIMIT $limit`
+	queryResult, err := ls.graphClient.ExecuteNQL(ctx, nql, map[string]interface{}{
+		"idosoId": fmt.Sprintf("%d", idosoID),
 		"limit":   topN,
-	})
+	}, "")
 	if err != nil {
 		return nil, err
 	}
 
 	var result []map[string]interface{}
-	for _, record := range records {
-		word, _ := record.Get("word")
-		freq, _ := record.Get("frequency")
+	for _, node := range queryResult.Nodes {
 		result = append(result, map[string]interface{}{
-			"word":      word,
-			"frequency": freq,
+			"word":      fmt.Sprintf("%v", node.Content["word"]),
+			"frequency": node.Content["frequency"],
 		})
 	}
 	return result, nil
@@ -520,28 +512,20 @@ func (ls *LegacyService) calculateEmotionalProfile(ctx context.Context, idosoID 
 }
 
 func (ls *LegacyService) getSignificantRelations(ctx context.Context, idosoID int64) ([]map[string]interface{}, error) {
-	query := `
-		MATCH (p:Person {id: $idosoId})-[:MENTIONED]->(person:Person)
-		RETURN person.name AS name, person.relation AS relation, COUNT(*) AS mentions
-		ORDER BY mentions DESC
-		LIMIT 20`
-
-	records, err := ls.neo4jClient.ExecuteRead(ctx, query, map[string]interface{}{
-		"idosoId": idosoID,
-	})
+	nql := `MATCH (p:Person {id: $idosoId})-[:MENTIONED]->(person:Person) RETURN person LIMIT 20`
+	queryResult, err := ls.graphClient.ExecuteNQL(ctx, nql, map[string]interface{}{
+		"idosoId": fmt.Sprintf("%d", idosoID),
+	}, "")
 	if err != nil {
 		return nil, err
 	}
 
 	var result []map[string]interface{}
-	for _, record := range records {
-		name, _ := record.Get("name")
-		relation, _ := record.Get("relation")
-		mentions, _ := record.Get("mentions")
+	for _, node := range queryResult.Nodes {
 		result = append(result, map[string]interface{}{
-			"name":     name,
-			"relation": relation,
-			"mentions": mentions,
+			"name":     fmt.Sprintf("%v", node.Content["name"]),
+			"relation": fmt.Sprintf("%v", node.Content["relation"]),
+			"mentions": node.Content["mentions"],
 		})
 	}
 	return result, nil

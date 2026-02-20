@@ -6,7 +6,6 @@ package memory
 import (
 	"context"
 	"database/sql"
-	"eva/internal/brainstem/infrastructure/vector"
 	"fmt"
 	"log"
 	"math"
@@ -14,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/qdrant/go-client/qdrant"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 )
 
 // RetrievalService busca memórias por similaridade semântica
@@ -25,21 +24,21 @@ type FDPNActivator interface {
 }
 
 type RetrievalService struct {
-	db         *sql.DB
-	embedder   *EmbeddingService
-	qdrant     *vector.QdrantClient
-	graphStore *GraphStore // Para busca recursiva via Neo4j
-	fdpn       FDPNActivator
-	hebbianRT  *HebbianRealTime
+	db            *sql.DB
+	embedder      *EmbeddingService
+	vectorAdapter *nietzscheInfra.VectorAdapter
+	graphStore    *GraphStore // Para busca recursiva via Neo4j
+	fdpn          FDPNActivator
+	hebbianRT     *HebbianRealTime
 }
 
 // NewRetrievalService cria um novo serviço de busca
-func NewRetrievalService(db *sql.DB, embedder *EmbeddingService, qdrant *vector.QdrantClient, graphStore *GraphStore) *RetrievalService {
+func NewRetrievalService(db *sql.DB, embedder *EmbeddingService, vectorAdapter *nietzscheInfra.VectorAdapter, graphStore *GraphStore) *RetrievalService {
 	return &RetrievalService{
-		db:         db,
-		embedder:   embedder,
-		qdrant:     qdrant,
-		graphStore: graphStore, // ✅ Injetando GraphStore para busca recursiva
+		db:            db,
+		embedder:      embedder,
+		vectorAdapter: vectorAdapter,
+		graphStore:    graphStore, // Injetando GraphStore para busca recursiva
 	}
 }
 
@@ -58,16 +57,16 @@ func (r *RetrievalService) Retrieve(ctx context.Context, idosoID int64, query st
 		return nil, fmt.Errorf("erro ao gerar embedding: %w", err)
 	}
 
-	if r.qdrant == nil {
-		return nil, fmt.Errorf("qdrant client not initialized")
+	if r.vectorAdapter == nil {
+		return nil, fmt.Errorf("vector adapter not initialized")
 	}
 
-	log.Printf("🔍 [MEMORY] Qdrant Search: Query=\"%s\"", query)
+	log.Printf("🔍 [MEMORY] Vector Search: Query=\"%s\"", query)
 
-	// 2. BUSCA NO QDRANT
-	qResults, err := r.qdrant.Search(ctx, "memories", queryEmbedding, uint64(k), nil)
+	// 2. BUSCA NO NIETZSCHEDB
+	qResults, err := r.vectorAdapter.Search(ctx, "memories", queryEmbedding, k, idosoID)
 	if err != nil {
-		return nil, fmt.Errorf("erro busca Qdrant: %w", err)
+		return nil, fmt.Errorf("erro busca vetorial: %w", err)
 	}
 
 	var allResults []*SearchResult
@@ -75,23 +74,29 @@ func (r *RetrievalService) Retrieve(ctx context.Context, idosoID int64, query st
 	resultsMap := make(map[int64]float64)
 	var topSemanticIDs []int64
 
-	// 3. Coletar IDs do Qdrant
+	// 3. Coletar IDs dos resultados
 	for i, qr := range qResults {
 		// Extrair ID do payload
 		p := qr.Payload
 		var memID int64
 
-		if idVal, ok := p["id"].GetKind().(*qdrant.Value_IntegerValue); ok {
-			memID = idVal.IntegerValue
-		} else if idVal, ok := p["id"].GetKind().(*qdrant.Value_DoubleValue); ok {
-			memID = int64(idVal.DoubleValue)
+		if idVal, ok := p["id"]; ok {
+			switch v := idVal.(type) {
+			case int64:
+				memID = v
+			case float64:
+				memID = int64(v)
+			case int:
+				memID = int64(v)
+			default:
+				continue
+			}
 		} else {
-			// Fallback: tentar converter ID do ponto (se for uint64)
 			continue
 		}
 
 		memoryIDs = append(memoryIDs, memID)
-		resultsMap[memID] = float64(qr.Score)
+		resultsMap[memID] = qr.Score
 
 		// Guardar os top 3 para expansão recursiva
 		if i < 3 {

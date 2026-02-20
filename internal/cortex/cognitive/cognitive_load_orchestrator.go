@@ -11,14 +11,14 @@ import (
 	"log"
 	"time"
 
-	"github.com/redis/go-redis/v9"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	"github.com/lib/pq"
 )
 
 // CognitiveLoadOrchestrator gerencia carga cognitiva do paciente
 type CognitiveLoadOrchestrator struct {
 	db    *sql.DB
-	redis *redis.Client
+	cache *nietzscheInfra.CacheStore
 	ctx   context.Context
 }
 
@@ -75,10 +75,10 @@ type LoadDecision struct {
 }
 
 // NewCognitiveLoadOrchestrator cria novo orquestrador
-func NewCognitiveLoadOrchestrator(db *sql.DB, redisClient *redis.Client) *CognitiveLoadOrchestrator {
+func NewCognitiveLoadOrchestrator(db *sql.DB, cacheStore *nietzscheInfra.CacheStore) *CognitiveLoadOrchestrator {
 	return &CognitiveLoadOrchestrator{
 		db:    db,
-		redis: redisClient,
+		cache: cacheStore,
 		ctx:   context.Background(),
 	}
 }
@@ -152,9 +152,9 @@ func (clo *CognitiveLoadOrchestrator) RecordInteraction(load InteractionLoad) er
 
 // GetCurrentState busca estado atual de carga
 func (clo *CognitiveLoadOrchestrator) GetCurrentState(patientID int64) (*CognitiveLoadState, error) {
-	// Tentar buscar do Redis primeiro (cache)
+	// Tentar buscar do cache primeiro
 	cacheKey := fmt.Sprintf("cognitive_load:%d:state", patientID)
-	cached, err := clo.redis.Get(clo.ctx, cacheKey).Result()
+	cached, err := clo.cache.Get(clo.ctx, cacheKey)
 	if err == nil {
 		var state CognitiveLoadState
 		if json.Unmarshal([]byte(cached), &state) == nil {
@@ -532,7 +532,7 @@ func (clo *CognitiveLoadOrchestrator) applyDecision(decision *LoadDecision) erro
 	return nil
 }
 
-// Helper: Atualizar cache Redis
+// Helper: Atualizar cache
 func (clo *CognitiveLoadOrchestrator) updateRedisCache(patientID int64) error {
 	state, err := clo.GetCurrentState(patientID)
 	if err != nil {
@@ -545,5 +545,5 @@ func (clo *CognitiveLoadOrchestrator) updateRedisCache(patientID int64) error {
 	}
 
 	cacheKey := fmt.Sprintf("cognitive_load:%d:state", patientID)
-	return clo.redis.Set(clo.ctx, cacheKey, stateJSON, 5*time.Minute).Err()
+	return clo.cache.Set(clo.ctx, cacheKey, string(stateJSON), 5*time.Minute)
 }

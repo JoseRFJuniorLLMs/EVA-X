@@ -6,18 +6,22 @@ package lacan
 import (
 	"context"
 	"database/sql"
-	"eva/internal/brainstem/infrastructure/graph"
+	"fmt"
 	"strings"
 	"time"
+
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
+
+	nietzsche "nietzsche-sdk"
 )
 
 // SignifierService rastreia significantes recorrentes (palavras-chave que se repetem) no Grafo
 type SignifierService struct {
-	client *graph.Neo4jClient
+	client *nietzscheInfra.GraphAdapter
 }
 
-// NewSignifierService cria novo serviço com Neo4j
-func NewSignifierService(client *graph.Neo4jClient) *SignifierService {
+// NewSignifierService cria novo servico com NietzscheDB
+func NewSignifierService(client *nietzscheInfra.GraphAdapter) *SignifierService {
 	return &SignifierService{client: client}
 }
 
@@ -45,84 +49,112 @@ func (s *SignifierService) TrackSignifiers(ctx context.Context, idosoID int64, t
 	return nil
 }
 
-// incrementSignifier incrementa frequência de um significante no Grafo
+// incrementSignifier incrementa frequencia de um significante no Grafo
 func (s *SignifierService) incrementSignifier(ctx context.Context, idosoID int64, word, contextStr string) error {
-	// ✅ Proteção: Se Neo4j off, ignora
 	if s.client == nil {
 		return nil
 	}
 
-	query := `
-		// Criar Person se não existir
-		MERGE (p:Person {id: $idosoId})
-		
-		// Criar ou atualizar Significante
-		MERGE (s:Significante {word: $word, idoso_id: $idosoId})
-		ON CREATE SET 
-			s.frequency = 1, 
-			s.first_occurrence = datetime(), 
-			s.last_occurrence = datetime(),
-			s.contexts = [$context]
-		ON MATCH SET 
-			s.frequency = s.frequency + 1,
-			s.last_occurrence = datetime(),
-			s.contexts = s.contexts + $context
-		
-		// Criar evento de fala
-		CREATE (e:Event {type: 'utterance', content: $context, timestamp: datetime()})
-		MERGE (e)-[:EVOCA]->(s)
-		MERGE (p)-[:EXPERIENCED]->(e)
-	`
+	now := nietzscheInfra.NowUnix()
 
-	params := map[string]interface{}{
-		"idosoId": idosoID,
-		"word":    word,
-		"context": contextStr,
+	// 1. MERGE Person node
+	personResult, err := s.client.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+		NodeType:  "Person",
+		MatchKeys: map[string]interface{}{"id": idosoID},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to merge Person: %w", err)
 	}
 
-	_, err := s.client.ExecuteWrite(ctx, query, params)
-	return err
+	// 2. MERGE Significante node
+	sigResult, err := s.client.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+		NodeType: "Significante",
+		MatchKeys: map[string]interface{}{
+			"word":     word,
+			"idoso_id": idosoID,
+		},
+		OnCreateSet: map[string]interface{}{
+			"frequency":        1,
+			"first_occurrence":  now,
+			"last_occurrence":   now,
+			"contexts":         contextStr,
+		},
+		OnMatchSet: map[string]interface{}{
+			"frequency":       "INCREMENT",
+			"last_occurrence": now,
+			"contexts":        contextStr,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to merge Significante: %w", err)
+	}
+
+	// 3. CREATE Event node
+	eventResult, err := s.client.InsertNode(ctx, nietzsche.InsertNodeOpts{
+		Content: map[string]interface{}{
+			"type":      "utterance",
+			"content":   contextStr,
+			"timestamp": now,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create Event: %w", err)
+	}
+
+	// 4. Create edges: Event -EVOCA-> Significante, Person -EXPERIENCED-> Event
+	_, err = s.client.MergeEdge(ctx, nietzscheInfra.MergeEdgeOpts{
+		FromNodeID: eventResult.ID,
+		ToNodeID:   sigResult.NodeID,
+		EdgeType:   "EVOCA",
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create EVOCA edge: %w", err)
+	}
+
+	_, err = s.client.MergeEdge(ctx, nietzscheInfra.MergeEdgeOpts{
+		FromNodeID: personResult.NodeID,
+		ToNodeID:   eventResult.ID,
+		EdgeType:   "EXPERIENCED",
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create EXPERIENCED edge: %w", err)
+	}
+
+	return nil
 }
 
 // GetKeySignifiers retorna os N significantes mais frequentes
 func (s *SignifierService) GetKeySignifiers(ctx context.Context, idosoID int64, topN int) ([]Signifier, error) {
-	// ✅ Proteção contra Panic: Se Neo4j estiver offline
 	if s.client == nil {
 		return []Signifier{}, nil
 	}
 
-	query := `
-		MATCH (s:Significante {idoso_id: $idosoId})
-		WHERE s.frequency >= 3
-		RETURN s.word, s.frequency, s.contexts, s.first_occurrence, s.last_occurrence
-		ORDER BY s.frequency DESC
-		LIMIT $limit
-	`
+	nql := `MATCH (s:Significante) WHERE s.idoso_id = $idosoId AND s.frequency >= 3 RETURN s ORDER BY s.frequency DESC LIMIT $limit`
 
-	records, err := s.client.ExecuteRead(ctx, query, map[string]interface{}{
+	result, err := s.client.ExecuteNQL(ctx, nql, map[string]interface{}{
 		"idosoId": idosoID,
 		"limit":   topN,
-	})
+	}, "")
 	if err != nil {
 		return nil, err
 	}
 
 	var signifiers []Signifier
-	for _, record := range records {
+	for _, node := range result.Nodes {
 		var sig Signifier
 
-		word, _ := record.Get("s.word")
-		freq, _ := record.Get("s.frequency")
-		contexts, _ := record.Get("s.contexts")
-		// first, _ := record.Get("s.first_occurrence")
-		// last, _ := record.Get("s.last_occurrence")
-
-		sig.Word = word.(string)
-		sig.Frequency = int(freq.(int64))
-
-		if ctxs, ok := contexts.([]interface{}); ok {
+		if w, ok := node.Content["word"].(string); ok {
+			sig.Word = w
+		}
+		if f, ok := node.Content["frequency"].(float64); ok {
+			sig.Frequency = int(f)
+		}
+		if ctxs, ok := node.Content["contexts"].(string); ok {
+			sig.Contexts = append(sig.Contexts, ctxs)
+		}
+		if ctxs, ok := node.Content["contexts"].([]interface{}); ok {
 			for _, c := range ctxs {
-				sig.Contexts = append(sig.Contexts, c.(string))
+				sig.Contexts = append(sig.Contexts, fmt.Sprintf("%v", c))
 			}
 		}
 
@@ -133,28 +165,32 @@ func (s *SignifierService) GetKeySignifiers(ctx context.Context, idosoID int64, 
 	return signifiers, nil
 }
 
-// ShouldInterpelSignifier decide se é momento de interpelar o significante
+// ShouldInterpelSignifier decide se e momento de interpelar o significante
 func (s *SignifierService) ShouldInterpelSignifier(ctx context.Context, idosoID int64, word string) (bool, error) {
-	// Lógica similar, mas consultando grafo
-	query := `
-		MATCH (s:Significante {idoso_id: $idosoId, word: $word})
-		RETURN s.frequency, s.last_interpellation
-	`
-	records, err := s.client.ExecuteRead(ctx, query, map[string]interface{}{"idosoId": idosoID, "word": word})
-	if err != nil || len(records) == 0 {
+	if s.client == nil {
+		return false, nil
+	}
+
+	nql := `MATCH (s:Significante) WHERE s.idoso_id = $idosoId AND s.word = $word RETURN s`
+	result, err := s.client.ExecuteNQL(ctx, nql, map[string]interface{}{
+		"idosoId": idosoID,
+		"word":    word,
+	}, "")
+	if err != nil || len(result.Nodes) == 0 {
 		return false, err
 	}
 
-	freq, _ := records[0].Get("s.frequency")
-	lastInterp, _ := records[0].Get("s.last_interpellation")
-
-	frequency := int(freq.(int64))
+	node := result.Nodes[0]
+	frequency := 0
+	if f, ok := node.Content["frequency"].(float64); ok {
+		frequency = int(f)
+	}
 
 	if frequency >= 5 {
-		if lastInterp == nil {
+		_, hasInterp := node.Content["last_interpellation"]
+		if !hasInterp {
 			return true, nil
 		}
-		// Verificar data (simplificado por agora, neo4j date handling em Go pode ser chato)
 		return true, nil
 	}
 
@@ -163,25 +199,34 @@ func (s *SignifierService) ShouldInterpelSignifier(ctx context.Context, idosoID 
 
 // MarkAsInterpelled marca que o significante foi interpelado
 func (s *SignifierService) MarkAsInterpelled(ctx context.Context, idosoID int64, word string) error {
-	query := `
-		MATCH (s:Significante {idoso_id: $idosoId, word: $word})
-		SET s.last_interpellation = datetime()
-	`
-	_, err := s.client.ExecuteWrite(ctx, query, map[string]interface{}{"idosoId": idosoID, "word": word})
+	if s.client == nil {
+		return nil
+	}
+
+	_, err := s.client.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+		NodeType: "Significante",
+		MatchKeys: map[string]interface{}{
+			"idoso_id": idosoID,
+			"word":     word,
+		},
+		OnMatchSet: map[string]interface{}{
+			"last_interpellation": nietzscheInfra.NowUnix(),
+		},
+	})
 	return err
 }
 
 // GenerateInterpellation gera frase para interpelar o significante
 func GenerateInterpellation(word string, frequency int) string {
-	return "Percebi que você frequentemente menciona a palavra '" + word + "'. " +
+	return "Percebi que voce frequentemente menciona a palavra '" + word + "'. " +
 		"Ela apareceu " + string(rune(frequency)) + " vezes em nossas conversas. " +
-		"O que essa palavra representa para você?"
+		"O que essa palavra representa para voce?"
 }
 
 // Helper functions (Mantidas)
 
 func extractEmotionalKeywords(text string) []string {
-	// Palavras com carga emocional (extração simples)
+	// Palavras com carga emocional (extracao simples)
 	emotionalWords := map[string]bool{
 		"solidão":    true,
 		"tristeza":   true,
@@ -218,7 +263,7 @@ func extractEmotionalKeywords(text string) []string {
 	var keywords []string
 
 	for _, word := range words {
-		// Remove pontuação
+		// Remove pontuacao
 		cleaned := strings.Trim(word, ".,!?;:")
 		if emotionalWords[cleaned] {
 			keywords = append(keywords, cleaned)
@@ -240,7 +285,7 @@ func calculateEmotionalCharge(word string) float64 {
 		return 1.0
 	}
 
-	return 0.5 // Carga média por padrão
+	return 0.5 // Carga media por padrao
 }
 
 // Keeping sql import just to mock the signature if needed but we removed it from struct

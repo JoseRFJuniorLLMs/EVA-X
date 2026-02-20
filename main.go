@@ -14,8 +14,7 @@ import (
 	"eva/internal/brainstem/auth"
 	"eva/internal/brainstem/config"
 	"eva/internal/brainstem/database"
-	"eva/internal/brainstem/infrastructure/graph"
-	"eva/internal/brainstem/infrastructure/vector"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	"eva/internal/brainstem/push"
 	"eva/internal/cortex/alert"
 	"eva/internal/cortex/eva_memory"
@@ -75,7 +74,6 @@ import (
 	"eva/internal/voice"
 
 	"github.com/gorilla/mux"
-	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
 	"github.com/rs/zerolog/log"
 )
 
@@ -176,15 +174,23 @@ func main() {
 	}
 	defer db.Close()
 
-	neo4jClient, err := graph.NewNeo4jClient(cfg)
+	// NietzscheDB — single database replacing Neo4j + Qdrant + Redis
+	nzClient, err := nietzscheInfra.NewClient(cfg.NietzscheGRPCAddr)
 	if err != nil {
-		log.Warn().Err(err).Msg("Neo4j indisponível - Funcionalidades FZPN limitadas")
+		log.Fatal().Err(err).Msg("NietzscheDB indisponivel — banco unico obrigatorio")
+	}
+	defer nzClient.Close()
+
+	// Ensure all EVA collections exist (idempotent)
+	if err := nzClient.EnsureCollections(context.Background()); err != nil {
+		log.Fatal().Err(err).Msg("Falha ao criar collections no NietzscheDB")
 	}
 
-	qdrantClient, err := vector.NewQdrantClient(cfg.QdrantHost, cfg.QdrantPort)
-	if err != nil {
-		log.Warn().Err(err).Msg("Qdrant indisponível - Memória semântica limitada")
-	}
+	// Create adapters
+	graphAdapter := nietzscheInfra.NewGraphAdapter(nzClient, "patient_graph")
+	vectorAdapter := nietzscheInfra.NewVectorAdapter(nzClient)
+	audioBuffer := nietzscheInfra.NewAudioBuffer()
+	evaGraphAdapter := nietzscheInfra.NewGraphAdapter(nzClient, "eva_core")
 
 	// 3. Serviços Base
 	pushService, err := push.NewFirebaseService(cfg.FirebaseCredentialsPath)
@@ -193,49 +199,34 @@ func main() {
 	}
 	alertService := voice.NewAlertService(db, cfg, logger)
 
-	// 4. Cortex (Lógica de Negócio e IA)
-	geminiHandler := gemini.NewHandler(cfg, db, neo4jClient, qdrantClient)
+	// 4. Cortex (Logica de Negocio e IA)
+	geminiHandler := gemini.NewHandler(cfg, db, nzClient, vectorAdapter)
 
 	// 5. Voice Handler (WebSocket & DSP)
 	voiceHandler := voice.NewHandler(db, cfg, logger, alertService, geminiHandler)
 	voice.InitSessionManager(logger)
 
 	// 6. Memory & Personality Stores
-	var graphStore *memory.GraphStore
-	if neo4jClient != nil {
-		graphStore = memory.NewGraphStore(neo4jClient, cfg)
-		log.Info().Msg("🧠 GraphStore conectado ao Neo4j")
-	}
-	memoryStore := memory.NewMemoryStore(db.Conn, graphStore, qdrantClient)
+	graphStore := memory.NewGraphStore(graphAdapter, cfg)
+	log.Info().Msg("GraphStore conectado ao NietzscheDB (patient_graph)")
+	memoryStore := memory.NewMemoryStore(db.Conn, graphStore, vectorAdapter)
 	personalitySvc := personality.NewPersonalityService(db.Conn)
 
 	// 6.2 Wisdom Service (busca semantica em colecoes de sabedoria)
 	var wisdomSvc *knowledge.WisdomService
-	var embedSvc *knowledge.EmbeddingService
-	if qdrantClient != nil {
-		var embedErr error
-		embedSvc, embedErr = knowledge.NewEmbeddingService(cfg, qdrantClient)
-		if embedErr != nil {
-			log.Warn().Err(embedErr).Msg("EmbeddingService indisponivel - Wisdom desabilitada")
-		} else {
-			wisdomSvc = knowledge.NewWisdomService(qdrantClient, embedSvc)
-			log.Info().Msg("📖 Wisdom Service inicializado")
-		}
-	}
-
-	// 6.1 EVA Meta-Cognitive Memory (Neo4j)
-	var evaMemSvc *eva_memory.EvaMemory
-	if neo4jClient != nil {
-		evaMemSvc = eva_memory.New(neo4jClient)
-		if err := evaMemSvc.InitSchema(context.Background()); err != nil {
-			log.Warn().Err(err).Msg("EVA Memory schema init warning")
-		}
-		log.Info().Msg("🧠 EVA Meta-Cognitive Memory inicializada")
+	embedSvc, embedErr := knowledge.NewEmbeddingService(cfg, vectorAdapter)
+	if embedErr != nil {
+		log.Warn().Err(embedErr).Msg("EmbeddingService indisponivel - Wisdom desabilitada")
 	} else {
-		log.Warn().Msg("⚠️ EVA Memory desabilitada (Neo4j indisponivel)")
+		wisdomSvc = knowledge.NewWisdomService(vectorAdapter, embedSvc)
+		log.Info().Msg("Wisdom Service inicializado")
 	}
 
-	// 6.3 Core Memory Engine — memória pessoal da EVA (Neo4j :7688)
+	// 6.1 EVA Meta-Cognitive Memory (NietzscheDB patient_graph)
+	evaMemSvc := eva_memory.New(graphAdapter)
+	log.Info().Msg("EVA Meta-Cognitive Memory inicializada (NietzscheDB)")
+
+	// 6.3 Core Memory Engine — memoria pessoal da EVA (NietzscheDB eva_core)
 	var coreMemoryEngine *evaSelf.CoreMemoryEngine
 	reflectionSvc, reflectErr := evaSelf.NewReflectionService(cfg.GoogleAPIKey, cfg.GeminiAnalysisModel)
 	if reflectErr != nil {
@@ -251,34 +242,29 @@ func main() {
 			log.Warn().Err(anonErr).Msg("AnonymizationService indisponivel - CoreMemory desabilitado")
 		} else {
 			coreMemoryEngine, err = evaSelf.NewCoreMemoryEngine(evaSelf.CoreMemoryConfig{
-				Neo4jURI:            cfg.Neo4jCoreURI,
-				Neo4jUser:           cfg.Neo4jCoreUsername,
-				Neo4jPassword:       cfg.Neo4jCorePassword,
-				Database:            cfg.Neo4jCoreDB,
+				NietzscheClient:     nzClient,
+				Collection:          "eva_core",
 				SimilarityThreshold: 0.88,
 				MinOccurrences:      3,
 			}, reflectionSvc, anonSvc, nil)
 			if err != nil {
-				log.Warn().Err(err).Msg("CoreMemoryEngine indisponivel - identidade EVA sem persistência")
+				log.Warn().Err(err).Msg("CoreMemoryEngine indisponivel - identidade EVA sem persistencia")
 				coreMemoryEngine = nil
 			} else {
 				defer coreMemoryEngine.Shutdown(context.Background())
-				log.Info().Msg("🧠 CoreMemoryEngine inicializado — EVA tem memória própria (Neo4j :7688)")
+				log.Info().Msg("CoreMemoryEngine inicializado — EVA tem memoria propria (NietzscheDB eva_core)")
 			}
 		}
 	}
 
 	// 7. Cognitive Services
-	signifierService := lacan.NewSignifierService(neo4jClient)
-	narrativeShiftDetector := lacan.NewNarrativeShiftDetector(neo4jClient, signifierService)
-	log.Info().Msg("📊 Narrative Shift Detector initialized")
+	signifierService := lacan.NewSignifierService(graphAdapter)
+	narrativeShiftDetector := lacan.NewNarrativeShiftDetector(graphAdapter, signifierService)
+	log.Info().Msg("Narrative Shift Detector initialized")
 
 	// 7.1 FDPN Engine (Lacan demand address mapping)
-	var fdpnEng *lacan.FDPNEngine
-	if neo4jClient != nil {
-		fdpnEng = lacan.NewFDPNEngine(neo4jClient)
-		log.Info().Msg("🧩 FDPN Engine inicializado")
-	}
+	fdpnEng := lacan.NewFDPNEngine(graphAdapter)
+	log.Info().Msg("FDPN Engine inicializado")
 
 	// 7.2 Habit Tracker + Spaced Repetition
 	habitTracker := habits.NewHabitTracker(db.Conn)
@@ -299,12 +285,7 @@ func main() {
 
 	// 7.5 Tools Handler (120+ tools — medicamentos, alarmes, jogos, GTD, etc)
 	toolsHandler := tools.NewToolsHandler(db, pushService, emailSvc)
-	if neo4jClient != nil {
-		toolsHandler.SetNeo4jClient(neo4jClient)
-	}
-	if qdrantClient != nil {
-		toolsHandler.SetQdrantClient(qdrantClient)
-	}
+	toolsHandler.SetNietzscheClient(nzClient)
 	if embedSvc != nil {
 		toolsHandler.SetEmbedFunc(embedSvc.GenerateEmbedding)
 	}
@@ -437,43 +418,26 @@ func main() {
 	toolsHandler.SetSkillsService(skillsSvc)
 	log.Info().Msgf("🧩 Skills Service: %s (%d skills carregadas)", cfg.SkillsDir, len(skillsSvc.List()))
 
-	// ✅ Neo4j Core Driver (porta 7688 — memória pessoal da EVA, para MCP bridge)
-	if cfg.Neo4jCoreURI != "" {
-		neo4jCoreDriver, neo4jCoreErr := neo4j.NewDriverWithContext(
-			cfg.Neo4jCoreURI,
-			neo4j.BasicAuth(cfg.Neo4jCoreUsername, cfg.Neo4jCorePassword, ""),
-		)
-		if neo4jCoreErr != nil {
-			log.Warn().Err(neo4jCoreErr).Msg("⚠️ Neo4j Core driver indisponivel — MCP tools de identidade/teaching limitadas")
-		} else {
-			if verifyErr := neo4jCoreDriver.VerifyConnectivity(context.Background()); verifyErr != nil {
-				log.Warn().Err(verifyErr).Msg("⚠️ Neo4j Core conectividade falhou — MCP tools de identidade/teaching limitadas")
-			} else {
-				toolsHandler.SetNeo4jCoreDriver(neo4jCoreDriver)
-				defer neo4jCoreDriver.Close(context.Background())
-				log.Info().Str("uri", cfg.Neo4jCoreURI).Msg("🧠 Neo4j Core driver configurado para MCP tools")
-			}
-		}
-	}
-
-	log.Info().Msg("🛠️ Tools Handler inicializado (150+ tools)")
+	// NietzscheDB eva_core collection replaces Neo4j Core Driver (:7688)
+	toolsHandler.SetEvaCoreAdapter(evaGraphAdapter)
+	log.Info().Msg("Tools Handler inicializado (150+ tools, NietzscheDB)")
 
 	// 7.6 Tools Client (Gemini 2.5 Flash REST — deteccao de intencao de tool)
 	toolsClient := gemini.NewToolsClient(cfg)
 	log.Info().Msg("🔍 Tools Client inicializado (Gemini Flash)")
 
 	// 7.7 Autonomous Learner (aprendizagem autonoma — pesquisa, estuda e memoriza)
-	autonomousLearner := learning.NewAutonomousLearner(db.Conn, cfg, qdrantClient, embedSvc)
+	autonomousLearner := learning.NewAutonomousLearner(db.Conn, cfg, vectorAdapter, embedSvc)
 	toolsHandler.SetAutonomousLearner(func(ctx context.Context, topic string) (interface{}, error) {
 		return autonomousLearner.StudyTopic(ctx, topic)
 	})
-	log.Info().Msg("📚 Autonomous Learner inicializado")
+	log.Info().Msg("Autonomous Learner inicializado")
 
 	// 7.8 Self-Awareness Service (introspecao — codigo, bancos, memorias)
-	selfAwareSvc := selfawareness.NewSelfAwarenessService(db.Conn, qdrantClient, embedSvc, cfg)
+	selfAwareSvc := selfawareness.NewSelfAwarenessService(db.Conn, vectorAdapter, embedSvc, cfg)
 	selfAwareAgent := swarmself.New()
 	selfAwareAgent.SetService(selfAwareSvc)
-	log.Info().Msg("🪞 Self-Awareness Service inicializado")
+	log.Info().Msg("Self-Awareness Service inicializado")
 
 	// 7.8.1 Krylov Subspace Memory (1536D → 64D compression via modified Gram-Schmidt)
 	krylovMgr := krylov.NewKrylovMemoryManager(1536, 64, 1000)
@@ -485,8 +449,9 @@ func main() {
 
 	swarmDeps := &swarm.Dependencies{
 		DB:           db,
-		Neo4j:        neo4jClient,
-		Qdrant:       qdrantClient,
+		Nietzsche:    nzClient,
+		Graph:        graphAdapter,
+		Vector:       vectorAdapter,
 		Push:         pushService,
 		Config:       cfg,
 		GoogleAPIKey: cfg.GoogleAPIKey,
@@ -518,7 +483,7 @@ func main() {
 	log.Info().Msg("🐝 Swarm bridge configurado no ToolsHandler")
 
 	// 7.10 Speaker Recognition Service (Voice Fingerprinting + Timbre Analysis)
-	speakerSvc, err := speaker.NewSpeakerService(db, qdrantClient, cfg.SpeakerModelPath)
+	speakerSvc, err := speaker.NewSpeakerService(db, vectorAdapter, cfg.SpeakerModelPath)
 	if err != nil {
 		log.Warn().Err(err).Msg("Speaker service unavailable - voice fingerprinting disabled")
 	} else {
@@ -555,15 +520,10 @@ func main() {
 		log.Warn().Msg("⚠️ RAM Engine desabilitado (LLM ou EmbeddingService indisponivel)")
 	}
 
-	// 7.14 Memory Orchestrator (Voice → FDPN → Krylov → Spectral → REM consolidation)
-	var memOrchestrator *internalmemory.MemoryOrchestrator
-	if neo4jClient != nil {
-		hippoFDPN := memory.NewFDPNEngine(neo4jClient, nil, qdrantClient)
-		memOrchestrator = internalmemory.NewMemoryOrchestrator(db.Conn, neo4jClient, qdrantClient, hippoFDPN, krylovMgr)
-		log.Info().Msg("🧠 Memory Orchestrator inicializado (FDPN → Krylov → REM)")
-	} else {
-		log.Warn().Msg("⚠️ Memory Orchestrator desabilitado (Neo4j indisponivel)")
-	}
+	// 7.14 Memory Orchestrator (Voice -> FDPN -> Krylov -> Spectral -> REM consolidation)
+	hippoFDPN := memory.NewFDPNEngine(graphAdapter, nil, vectorAdapter)
+	memOrchestrator := internalmemory.NewMemoryOrchestrator(db.Conn, graphAdapter, vectorAdapter, hippoFDPN, krylovMgr)
+	log.Info().Msg("Memory Orchestrator inicializado (FDPN -> Krylov -> REM)")
 
 	// 7.15 Krylov HTTP Bridge (porta 50052 — bridge HTTP/JSON para compressao vetorial)
 	krylovBridge := internalmemory.NewKrylovHTTPBridge(krylovMgr, 50052)
@@ -649,32 +609,32 @@ func main() {
 
 	// MCP Server — Model Context Protocol
 	mcpServer := mcp.NewServer(db.Conn)
-	if embedSvc != nil && qdrantClient != nil {
+	if embedSvc != nil {
 		mcpServer.SetEmbeddingFunc(func(ctx context.Context, text string) ([]float32, error) {
 			return embedSvc.GenerateEmbedding(ctx, text)
 		})
 		mcpServer.SetVectorSearchFunc(func(ctx context.Context, collection string, vec []float32, limit int) ([]mcp.VectorResult, error) {
-			points, err := qdrantClient.Search(ctx, collection, vec, uint64(limit), nil)
+			searchResults, err := vectorAdapter.Search(ctx, collection, vec, limit, 0)
 			if err != nil {
 				return nil, err
 			}
-			results := make([]mcp.VectorResult, 0, len(points))
-			for _, p := range points {
+			results := make([]mcp.VectorResult, 0, len(searchResults))
+			for _, r := range searchResults {
 				content := ""
-				if p.Payload != nil {
-					if v, ok := p.Payload["content"]; ok {
-						content = v.GetStringValue()
+				if c, ok := r.Payload["content"]; ok {
+					if s, ok := c.(string); ok {
+						content = s
 					}
 				}
 				results = append(results, mcp.VectorResult{
-					ID:      int64(p.Id.GetNum()),
-					Score:   p.Score,
+					ID:      0,
+					Score:   float32(r.Score),
 					Content: content,
 				})
 			}
 			return results, nil
 		})
-		log.Info().Msg("🔍 MCP Server com busca vetorial ativada")
+		log.Info().Msg("MCP Server com busca vetorial ativada (NietzscheDB)")
 	}
 	router.PathPrefix("/mcp").Handler(mcpServer)
 	log.Info().Msg("🔌 MCP Server montado em /mcp")
@@ -728,18 +688,16 @@ func main() {
 	}()
 
 	// Memory Scheduler (nightly REM consolidation 3AM + Krylov maintenance 6h)
-	if memOrchestrator != nil {
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					log.Error().Interface("panic", r).Msg("CRITICO: Memory Scheduler panic")
-				}
-			}()
-			memSched := memscheduler.NewMemoryScheduler(memOrchestrator)
-			memSched.Start(ctx)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().Interface("panic", r).Msg("CRITICO: Memory Scheduler panic")
+			}
 		}()
-		log.Info().Msg("📅 Memory Scheduler iniciado (REM 3AM + Krylov 6h)")
-	}
+		memSched := memscheduler.NewMemoryScheduler(memOrchestrator)
+		memSched.Start(ctx)
+	}()
+	log.Info().Msg("Memory Scheduler iniciado (REM 3AM + Krylov 6h)")
 
 	// 8. Start Server
 	srv := &http.Server{
@@ -747,8 +705,10 @@ func main() {
 		Handler: router,
 	}
 
+	_ = audioBuffer // TODO: wire to voice handler when Redis audio path is replaced
+
 	go func() {
-		log.Info().Msgf("🚀 EVA-Mind V3 rodando na porta %s", cfg.Port)
+		log.Info().Msgf("EVA rodando na porta %s (NietzscheDB)", cfg.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal().Err(err).Msg("Erro no servidor HTTP")
 		}

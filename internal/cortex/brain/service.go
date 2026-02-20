@@ -6,8 +6,7 @@ package brain
 import (
 	"context"
 	"database/sql"
-	"eva/internal/brainstem/infrastructure/graph"
-	"eva/internal/brainstem/infrastructure/vector"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	"eva/internal/brainstem/push"
 	"eva/internal/cortex/lacan"
 	ps "eva/internal/cortex/personality"
@@ -18,13 +17,13 @@ import (
 )
 
 // Service encapsulates the cognitive functions of EVA
-// AUDIT FIX 2026-01-27: Adicionado neo4jClient e graphStore para salvar no Neo4j
+// AUDIT FIX 2026-01-27: Adicionado graphAdapter e graphStore para salvar no Neo4j
 type Service struct {
 	db                 *sql.DB
-	qdrantClient       *vector.QdrantClient
-	neo4jClient        *graph.Neo4jClient // AUDIT FIX: Adicionado para salvar no Neo4j
-	graphStore         *memory.GraphStore // AUDIT FIX: Store para Neo4j
-	memoryStore        *memory.MemoryStore // AUDIT FIX 2026-02-17: Store para salvar com importância/emoção reais
+	vectorAdapter      *nietzscheInfra.VectorAdapter
+	graphAdapter       *nietzscheInfra.GraphAdapter // AUDIT FIX: Adicionado para salvar no Neo4j
+	graphStore         *memory.GraphStore           // AUDIT FIX: Store para Neo4j
+	memoryStore        *memory.MemoryStore          // AUDIT FIX 2026-02-17: Store para salvar com importância/emoção reais
 	fdpnEngine         *lacan.FDPNEngine
 	personalityService *ps.PersonalityService
 	zetaRouter         *ps.ZetaRouter
@@ -37,11 +36,11 @@ type Service struct {
 }
 
 // NewService creates a new Brain service
-// AUDIT FIX 2026-01-27: Adicionado neo4jClient para salvar no grafo
+// AUDIT FIX 2026-01-27: Adicionado graphAdapter para salvar no grafo
 func NewService(
 	db *sql.DB,
-	qdrant *vector.QdrantClient,
-	neo4j *graph.Neo4jClient, // AUDIT FIX: Adicionado
+	vectorAdapter *nietzscheInfra.VectorAdapter,
+	graphAdapter *nietzscheInfra.GraphAdapter, // AUDIT FIX: Adicionado
 	unified *lacan.UnifiedRetrieval,
 	personalitySvc *ps.PersonalityService,
 	zeta *ps.ZetaRouter,
@@ -50,21 +49,21 @@ func NewService(
 	ingestionPipeline *ingestion.IngestionPipeline,
 ) *Service {
 	var graphStore *memory.GraphStore
-	if neo4j != nil {
-		graphStore = memory.NewGraphStore(neo4j, nil)
+	if graphAdapter != nil {
+		graphStore = memory.NewGraphStore(graphAdapter, nil)
 	}
 
 	var memoryStore *memory.MemoryStore
 	if db != nil {
-		memoryStore = memory.NewMemoryStore(db, graphStore, qdrant)
+		memoryStore = memory.NewMemoryStore(db, graphStore, vectorAdapter)
 	}
 
 	return &Service{
 		db:                 db,
-		qdrantClient:       qdrant,
-		neo4jClient:        neo4j,      // AUDIT FIX
-		graphStore:         graphStore, // AUDIT FIX
-		memoryStore:        memoryStore, // AUDIT FIX 2026-02-17
+		vectorAdapter:      vectorAdapter,
+		graphAdapter:       graphAdapter,   // AUDIT FIX
+		graphStore:         graphStore,     // AUDIT FIX
+		memoryStore:        memoryStore,    // AUDIT FIX 2026-02-17
 		personalityService: personalitySvc,
 		zetaRouter:         zeta,
 		pushService:        push,

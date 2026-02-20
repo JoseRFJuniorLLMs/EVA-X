@@ -10,7 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"eva/internal/brainstem/infrastructure/graph"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
+
+	nietzsche "nietzsche-sdk"
 )
 
 // SynaptogenesisEngine implementa auto-organizacao fractal de conexoes no grafo
@@ -18,10 +20,10 @@ import (
 // Ciencia: Bullmore & Sporns (2012) - "The economy of brain network organization"
 //          Holtmaat & Svoboda (2009) - "Experience-dependent structural synaptic plasticity"
 type SynaptogenesisEngine struct {
-	client    *graph.Neo4jClient
-	threshold float64 // Minimo de co-ativacoes para criar sinapse
-	decayTau  float64 // Constante de decay temporal para reforco
-	mu        sync.Mutex
+	graphAdapter *nietzscheInfra.GraphAdapter
+	threshold    float64 // Minimo de co-ativacoes para criar sinapse
+	decayTau     float64 // Constante de decay temporal para reforco
+	mu           sync.Mutex
 }
 
 // SynaptogenesisResult resultado de um ciclo de sinaptogenese
@@ -43,14 +45,14 @@ type CoActivation struct {
 }
 
 // NewSynaptogenesisEngine cria o motor de sinaptogenese
-func NewSynaptogenesisEngine(client *graph.Neo4jClient, threshold float64) *SynaptogenesisEngine {
+func NewSynaptogenesisEngine(graphAdapter *nietzscheInfra.GraphAdapter, threshold float64) *SynaptogenesisEngine {
 	if threshold <= 0 {
 		threshold = 3.0 // Minimo 3 co-ativacoes para criar sinapse
 	}
 	return &SynaptogenesisEngine{
-		client:    client,
-		threshold: threshold,
-		decayTau:  90.0,
+		graphAdapter: graphAdapter,
+		threshold:    threshold,
+		decayTau:     90.0,
 	}
 }
 
@@ -98,7 +100,7 @@ func (s *SynaptogenesisEngine) GrowConnections(ctx context.Context, patientID in
 
 	result.Duration = time.Since(start).String()
 
-	log.Printf("[SYNAPTOGENESIS] Paciente %d: %d co-ativacoes, %d novas edges, %d reforçadas, %d triadas fechadas em %s",
+	log.Printf("[SYNAPTOGENESIS] Paciente %d: %d co-ativacoes, %d novas edges, %d reforcadas, %d triadas fechadas em %s",
 		patientID, result.CoActivationsFound, result.NewEdgesCreated,
 		result.EdgesStrengthened, result.TriadsClosed, result.Duration)
 
@@ -108,24 +110,25 @@ func (s *SynaptogenesisEngine) GrowConnections(ctx context.Context, patientID in
 // RecordCoActivation registra que duas memorias foram ativadas juntas
 // Deve ser chamado durante o retrieval quando multiplas memorias sao retornadas
 func (s *SynaptogenesisEngine) RecordCoActivation(ctx context.Context, nodeIDs []string) error {
-	if s.client == nil || len(nodeIDs) < 2 {
+	if s.graphAdapter == nil || len(nodeIDs) < 2 {
 		return nil
 	}
 
 	// Registrar co-ativacao para cada par
 	for i := 0; i < len(nodeIDs)-1; i++ {
 		for j := i + 1; j < len(nodeIDs); j++ {
-			query := `
-				MATCH (n1) WHERE toString(id(n1)) = $nodeA
-				MATCH (n2) WHERE toString(id(n2)) = $nodeB
-				MERGE (n1)-[r:CO_ACTIVATED]-(n2)
-				SET r.frequency = COALESCE(r.frequency, 0) + 1,
-				    r.last_seen = datetime(),
-				    r.weight = COALESCE(r.weight, 0.0) + 0.1
-			`
-			_, err := s.client.ExecuteWrite(ctx, query, map[string]interface{}{
-				"nodeA": nodeIDs[i],
-				"nodeB": nodeIDs[j],
+			_, err := s.graphAdapter.MergeEdge(ctx, nietzscheInfra.MergeEdgeOpts{
+				FromNodeID: nodeIDs[i],
+				ToNodeID:   nodeIDs[j],
+				EdgeType:   "CO_ACTIVATED",
+				OnCreateSet: map[string]interface{}{
+					"frequency": 1,
+					"last_seen": nietzscheInfra.NowUnix(),
+					"weight":    0.1,
+				},
+				OnMatchSet: map[string]interface{}{
+					"last_seen": nietzscheInfra.NowUnix(),
+				},
 			})
 			if err != nil {
 				return fmt.Errorf("falha ao registrar co-ativacao: %w", err)
@@ -137,124 +140,207 @@ func (s *SynaptogenesisEngine) RecordCoActivation(ctx context.Context, nodeIDs [
 }
 
 // detectCoActivations encontra pares de memorias frequentemente co-ativadas
+// Uses BFS from patient node to find nearby CO_ACTIVATED edges
 func (s *SynaptogenesisEngine) detectCoActivations(ctx context.Context, patientID int64) ([]CoActivation, error) {
-	if s.client == nil {
+	if s.graphAdapter == nil {
 		return nil, nil
 	}
 
-	query := `
-		MATCH (p:Person {id: $patientId})-[*1..2]-(n1)-[r:CO_ACTIVATED]-(n2)
-		WHERE n1 <> p AND n2 <> p
-		  AND r.last_seen > datetime() - duration('P7D')
-		RETURN toString(id(n1)) AS nodeA,
-		       toString(id(n2)) AS nodeB,
-		       COALESCE(r.frequency, 1) AS freq
-		ORDER BY freq DESC
-		LIMIT 100
-	`
-
-	records, err := s.client.ExecuteRead(ctx, query, map[string]interface{}{
-		"patientId": patientID,
+	// Find the patient node
+	patientResult, err := s.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+		NodeType: "Person",
+		MatchKeys: map[string]interface{}{
+			"id": patientID,
+		},
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("falha ao encontrar paciente: %w", err)
 	}
 
+	// BFS from patient node up to depth 2
+	neighborIDs, err := s.graphAdapter.Bfs(ctx, patientResult.NodeID, 2, "")
+	if err != nil {
+		return nil, fmt.Errorf("falha ao buscar vizinhos: %w", err)
+	}
+
+	// For each neighbor, check for CO_ACTIVATED edges using BfsWithEdgeType
+	sevenDaysAgo := nietzscheInfra.DaysAgoUnix(7)
 	var results []CoActivation
-	for _, rec := range records {
-		var ca CoActivation
-		if v, ok := rec.Get("nodeA"); ok {
-			ca.NodeA, _ = v.(string)
+	seen := make(map[string]bool)
+
+	for _, nID := range neighborIDs {
+		if nID == patientResult.NodeID {
+			continue
 		}
-		if v, ok := rec.Get("nodeB"); ok {
-			ca.NodeB, _ = v.(string)
+		// Find CO_ACTIVATED neighbors of this node
+		coActNeighbors, err := s.graphAdapter.BfsWithEdgeType(ctx, nID, "CO_ACTIVATED", 1, "")
+		if err != nil {
+			continue
 		}
-		if v, ok := rec.Get("freq"); ok {
-			if n, ok := v.(int64); ok {
-				ca.Frequency = int(n)
+		for _, coID := range coActNeighbors {
+			if coID == nID || coID == patientResult.NodeID {
+				continue
 			}
+			pairKey := nID + ":" + coID
+			reversePairKey := coID + ":" + nID
+			if seen[pairKey] || seen[reversePairKey] {
+				continue
+			}
+			seen[pairKey] = true
+
+			// Get the node to check last_seen
+			node, err := s.graphAdapter.GetNode(ctx, coID, "")
+			if err != nil {
+				continue
+			}
+			lastSeen := toFloat64Synaptogenesis(node.Content["last_seen"])
+			if lastSeen > 0 && lastSeen < sevenDaysAgo {
+				continue
+			}
+
+			freq := toIntSynaptogenesis(node.Content["frequency"])
+			if freq == 0 {
+				freq = 1
+			}
+
+			results = append(results, CoActivation{
+				NodeA:     nID,
+				NodeB:     coID,
+				Frequency: freq,
+			})
 		}
-		results = append(results, ca)
+	}
+
+	// Limit to 100 results
+	if len(results) > 100 {
+		results = results[:100]
 	}
 
 	return results, nil
 }
 
-// createOrStrengthenEdge cria nova edge ou reforça existente (Hebbian: fire together -> wire together)
+// createOrStrengthenEdge cria nova edge ou reforca existente (Hebbian: fire together -> wire together)
 func (s *SynaptogenesisEngine) createOrStrengthenEdge(ctx context.Context, pair CoActivation, patientID int64) (bool, error) {
-	if s.client == nil {
+	if s.graphAdapter == nil {
 		return true, nil
 	}
-
-	query := `
-		MATCH (n1) WHERE toString(id(n1)) = $nodeA
-		MATCH (n2) WHERE toString(id(n2)) = $nodeB
-		MERGE (n1)-[r:SYNAPSE]->(n2)
-		ON CREATE SET
-			r.weight = $weight,
-			r.created_at = datetime(),
-			r.last_activation = datetime(),
-			r.activation_count = 1,
-			r.age = 0,
-			r.source = 'synaptogenesis'
-		ON MATCH SET
-			r.weight = r.weight + $weight * 0.5,
-			r.last_activation = datetime(),
-			r.activation_count = COALESCE(r.activation_count, 0) + 1,
-			r.age = 0
-		RETURN r.activation_count AS count
-	`
 
 	weight := float64(pair.Frequency) * 0.1
 	if weight > 1.0 {
 		weight = 1.0
 	}
 
-	_, err := s.client.ExecuteWrite(ctx, query, map[string]interface{}{
-		"nodeA":  pair.NodeA,
-		"nodeB":  pair.NodeB,
-		"weight": weight,
+	result, err := s.graphAdapter.MergeEdge(ctx, nietzscheInfra.MergeEdgeOpts{
+		FromNodeID: pair.NodeA,
+		ToNodeID:   pair.NodeB,
+		EdgeType:   "SYNAPSE",
+		OnCreateSet: map[string]interface{}{
+			"weight":           weight,
+			"created_at":       nietzscheInfra.NowUnix(),
+			"last_activation":  nietzscheInfra.NowUnix(),
+			"activation_count": 1,
+			"age":              0,
+			"source":           "synaptogenesis",
+		},
+		OnMatchSet: map[string]interface{}{
+			"last_activation": nietzscheInfra.NowUnix(),
+		},
 	})
 	if err != nil {
 		return false, err
 	}
 
-	return true, nil
+	return result.Created, nil
 }
 
 // closeTriads fecha triangulos: Se A->B e B->C, cria A->C com peso menor
+// Rewritten as Go loop using BFS instead of complex Cypher
 func (s *SynaptogenesisEngine) closeTriads(ctx context.Context, patientID int64) (int, error) {
-	if s.client == nil {
+	if s.graphAdapter == nil {
 		return 0, nil
 	}
 
-	query := `
-		MATCH (p:Person {id: $patientId})-[*1..2]-(a)-[r1:SYNAPSE]->(b)-[r2:SYNAPSE]->(c)
-		WHERE a <> p AND b <> p AND c <> p
-		  AND a <> c
-		  AND NOT (a)-[:SYNAPSE]->(c)
-		  AND r1.weight > 0.3 AND r2.weight > 0.3
-		WITH a, c, (r1.weight + r2.weight) / 3.0 AS inferredWeight
-		LIMIT 50
-		CREATE (a)-[r:SYNAPSE {
-			weight: inferredWeight,
-			created_at: datetime(),
-			last_activation: datetime(),
-			activation_count: 0,
-			age: 0,
-			source: 'triadic_closure'
-		}]->(c)
-		RETURN count(r) AS closed
-	`
-
-	_, err := s.client.ExecuteWrite(ctx, query, map[string]interface{}{
-		"patientId": patientID,
+	// Find patient node
+	patientResult, err := s.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+		NodeType: "Person",
+		MatchKeys: map[string]interface{}{
+			"id": patientID,
+		},
 	})
 	if err != nil {
 		return 0, err
 	}
 
-	return 0, nil
+	// BFS from patient to depth 2
+	neighborIDs, err := s.graphAdapter.Bfs(ctx, patientResult.NodeID, 2, "")
+	if err != nil {
+		return 0, err
+	}
+
+	closed := 0
+	// For each neighbor, find SYNAPSE connections and check for triads
+	for _, aID := range neighborIDs {
+		if aID == patientResult.NodeID {
+			continue
+		}
+		// Get SYNAPSE neighbors of A
+		bIDs, err := s.graphAdapter.BfsWithEdgeType(ctx, aID, "SYNAPSE", 1, "")
+		if err != nil {
+			continue
+		}
+		for _, bID := range bIDs {
+			if bID == aID || bID == patientResult.NodeID {
+				continue
+			}
+			// Get SYNAPSE neighbors of B
+			cIDs, err := s.graphAdapter.BfsWithEdgeType(ctx, bID, "SYNAPSE", 1, "")
+			if err != nil {
+				continue
+			}
+			for _, cID := range cIDs {
+				if cID == aID || cID == bID || cID == patientResult.NodeID {
+					continue
+				}
+				// Check if A->C already exists (skip if so)
+				existingNeighbors, _ := s.graphAdapter.BfsWithEdgeType(ctx, aID, "SYNAPSE", 1, "")
+				alreadyConnected := false
+				for _, existing := range existingNeighbors {
+					if existing == cID {
+						alreadyConnected = true
+						break
+					}
+				}
+				if alreadyConnected {
+					continue
+				}
+
+				// Create triadic closure edge with inferred weight
+				inferredWeight := 0.2 // Default modest weight for triadic closure
+				_, err = s.graphAdapter.InsertEdge(ctx, nietzsche.InsertEdgeOpts{
+					FromID: aID,
+					ToID:   cID,
+					Label:  "SYNAPSE",
+					Weight: float32(inferredWeight),
+					Content: map[string]interface{}{
+						"created_at":       nietzscheInfra.NowUnix(),
+						"last_activation":  nietzscheInfra.NowUnix(),
+						"activation_count": 0,
+						"age":              0,
+						"source":           "triadic_closure",
+					},
+				})
+				if err == nil {
+					closed++
+				}
+
+				if closed >= 50 {
+					return closed, nil
+				}
+			}
+		}
+	}
+
+	return closed, nil
 }
 
 // AnalyzeFractalStructure analisa se o grafo tem propriedades fractais
@@ -275,5 +361,42 @@ func (s *SynaptogenesisEngine) GetStatistics() map[string]interface{} {
 		"threshold": s.threshold,
 		"decay_tau": s.decayTau,
 		"status":    "active",
+	}
+}
+
+// Helper type conversions for this package
+func toFloat64Synaptogenesis(v interface{}) float64 {
+	if v == nil {
+		return 0
+	}
+	switch val := v.(type) {
+	case float64:
+		return val
+	case float32:
+		return float64(val)
+	case int:
+		return float64(val)
+	case int64:
+		return float64(val)
+	default:
+		return 0
+	}
+}
+
+func toIntSynaptogenesis(v interface{}) int {
+	if v == nil {
+		return 0
+	}
+	switch val := v.(type) {
+	case int:
+		return val
+	case int64:
+		return int(val)
+	case float64:
+		return int(val)
+	case float32:
+		return int(val)
+	default:
+		return 0
 	}
 }
