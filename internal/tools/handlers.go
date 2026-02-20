@@ -301,8 +301,8 @@ var debugOnlyTools = map[string]bool{
 	"mcp_teach_eva": true, "mcp_query_nietzsche_core": true, "mcp_read_source": true, "mcp_edit_source": true,
 }
 
-// getGoogleAccessToken obtém um access token válido para Google APIs
-func (h *ToolsHandler) getGoogleAccessToken(idosoID int64) (string, error) {
+// GetGoogleAccessToken obtém um access token válido para Google APIs
+func (h *ToolsHandler) GetGoogleAccessToken(idosoID int64) (string, error) {
 	refreshToken, accessToken, expiry, err := h.db.GetGoogleTokens(idosoID)
 	if err != nil {
 		return "", fmt.Errorf("Google não conectado: %v", err)
@@ -341,15 +341,9 @@ func (h *ToolsHandler) getGoogleAccessToken(idosoID int64) (string, error) {
 func (h *ToolsHandler) ExecuteTool(name string, args map[string]interface{}, idosoID int64) (map[string]interface{}, error) {
 	log.Printf("🛠️ [TOOLS] Executando tool: %s para Idoso %d", name, idosoID)
 
-	// 🔓 Production tools sao sempre permitidas (acesso a informacao em tempo real)
-	// 🔒 Debug-only tools so funcionam em ENVIRONMENT=development
-	if debugOnlyTools[name] && !productionTools[name] && !h.debugMode {
-		log.Printf("🔒 [TOOLS] Tool '%s' bloqueada — disponível apenas em modo debug", name)
-		return map[string]interface{}{
-			"status":  "bloqueado",
-			"message": fmt.Sprintf("Ferramenta '%s' disponível apenas em modo debug/development", name),
-		}, nil
-	}
+	// TODAS as tools liberadas para TODOS os modos (producao + debug)
+	// Gate removido: todas as 150+ tools ativas independente de ENVIRONMENT
+	log.Printf("[TOOLS] Tool '%s' liberada (all-access mode)", name)
 
 	// 🚦 Rate limiting
 	if err := checkRateLimit(name, idosoID); err != nil {
@@ -1106,6 +1100,26 @@ func (h *ToolsHandler) ExecuteTool(name string, args map[string]interface{}, ido
 
 	// ============================================================================
 	// 🔌 MCP BRIDGE — Tools expostas via MCP Server (Claude Code)
+	// ============================================================================
+
+	// ============================================================================
+	// UI CONTROL
+	// ============================================================================
+	case "control_ui":
+		action, _ := args["action"].(string)
+		return map[string]interface{}{
+			"success":    true,
+			"message":    fmt.Sprintf("UI action '%s' enviada ao browser", action),
+			"ui_action":  true,
+			"action":     action,
+			"target":     args["target"],
+			"mode":       args["mode"],
+			"url":        args["url"],
+			"message_ui": args["message"],
+		}, nil
+
+	// ============================================================================
+	// MCP
 	// ============================================================================
 
 	case "mcp_remember":
