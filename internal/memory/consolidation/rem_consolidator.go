@@ -382,9 +382,9 @@ func (r *REMConsolidator) createSemanticNode(ctx context.Context, patientID int6
 
 	// Create HAS_SEMANTIC edge from patient to semantic node
 	_, err = r.graphAdapter.InsertEdge(ctx, nietzsche.InsertEdgeOpts{
-		FromID: patientResult.NodeID,
-		ToID:   semanticNode.ID,
-		Label:  "HAS_SEMANTIC",
+		From: patientResult.NodeID,
+		To:   semanticNode.ID,
+		EdgeType:  "HAS_SEMANTIC",
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create HAS_SEMANTIC edge: %w", err)
@@ -393,9 +393,9 @@ func (r *REMConsolidator) createSemanticNode(ctx context.Context, patientID int6
 	// Create ABSTRACTED_FROM edges to each exemplar
 	for _, exemplarID := range concept.ExemplarIDs {
 		_, err = r.graphAdapter.InsertEdge(ctx, nietzsche.InsertEdgeOpts{
-			FromID: semanticNode.ID,
-			ToID:   exemplarID,
-			Label:  "ABSTRACTED_FROM",
+			From: semanticNode.ID,
+			To:   exemplarID,
+			EdgeType:  "ABSTRACTED_FROM",
 		})
 		if err != nil {
 			log.Printf("[REM] Aviso: falha ao criar edge ABSTRACTED_FROM para %s: %v", exemplarID, err)

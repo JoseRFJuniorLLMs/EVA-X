@@ -255,7 +255,7 @@ var debugOnlyTools = map[string]bool{
 	"edit_my_code": true, "create_branch": true, "commit_code": true,
 	"run_tests": true, "get_code_diff": true,
 	// Database queries diretas (risco de dados sensiveis)
-	"query_postgresql": true, "query_neo4j": true, "query_qdrant": true, "query_nietzsche": true,
+	"query_postgresql": true, "query_nietzsche_graph": true, "query_nietzsche_vector": true, "query_nietzsche": true,
 	// Code Execution Sandbox
 	"execute_code": true,
 	// Browser Automation (form filling, extraction — risco de abuso)
@@ -269,7 +269,7 @@ var debugOnlyTools = map[string]bool{
 	// Skills dinamicas (execucao arbitraria)
 	"create_skill": true, "list_skills": true, "execute_skill": true, "delete_skill": true,
 	// MCP Bridge — escrita/edicao de codigo (perigoso)
-	"mcp_teach_eva": true, "mcp_query_neo4j_core": true, "mcp_read_source": true, "mcp_edit_source": true,
+	"mcp_teach_eva": true, "mcp_query_nietzsche_core": true, "mcp_read_source": true, "mcp_edit_source": true,
 }
 
 // getGoogleAccessToken obtém um access token válido para Google APIs
@@ -971,10 +971,10 @@ func (h *ToolsHandler) ExecuteTool(name string, args map[string]interface{}, ido
 	case "query_postgresql":
 		return h.handleQueryPostgreSQL(idosoID, args)
 
-	case "query_neo4j":
+	case "query_nietzsche_graph":
 		return h.handleQueryNeo4j(idosoID, args)
 
-	case "query_qdrant":
+	case "query_nietzsche_vector":
 		return h.handleQueryQdrant(idosoID, args)
 
 	case "query_nietzsche":
@@ -1094,7 +1094,7 @@ func (h *ToolsHandler) ExecuteTool(name string, args map[string]interface{}, ido
 	case "mcp_learn_topic":
 		return h.handleMCPLearnTopic(idosoID, args)
 
-	case "mcp_query_neo4j_core":
+	case "mcp_query_nietzsche_core":
 		return h.handleMCPQueryNeo4jCore(idosoID, args)
 
 	case "mcp_read_source":

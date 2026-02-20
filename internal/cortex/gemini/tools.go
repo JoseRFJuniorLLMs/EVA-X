@@ -736,19 +736,19 @@ func GetDefaultTools() []interface{} {
 					},
 				},
 				map[string]interface{}{
-					"name":        "query_neo4j",
-					"description": "Executar query Cypher no Neo4j (apenas leitura)",
+					"name":        "query_nietzsche_graph",
+					"description": "Executar query NQL no NietzscheDB (grafo, apenas leitura)",
 					"parameters": map[string]interface{}{
 						"type": "object",
 						"properties": map[string]interface{}{
-							"query": map[string]interface{}{"type": "string", "description": "Query Cypher MATCH/RETURN"},
+							"query": map[string]interface{}{"type": "string", "description": "Query NQL MATCH/RETURN"},
 						},
 						"required": []string{"query"},
 					},
 				},
 				map[string]interface{}{
-					"name":        "query_qdrant",
-					"description": "Buscar vetores no Qdrant",
+					"name":        "query_nietzsche_vector",
+					"description": "Busca vetorial no NietzscheDB (KNN)",
 					"parameters": map[string]interface{}{
 						"type": "object",
 						"properties": map[string]interface{}{

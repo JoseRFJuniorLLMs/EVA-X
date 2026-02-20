@@ -151,26 +151,26 @@ func (c *EdgeClassifier) getPatientEdges(ctx context.Context, patientID int64) (
 			}
 
 			// Edge weights
-			if v, ok := pair.Edge.Content["weight"]; ok {
+			if v, ok := pair.To.Content["weight"]; ok {
 				if f, ok := v.(float64); ok {
 					edge.Weight = f
 				}
 			}
-			if v, ok := pair.Edge.Content["slow_weight"]; ok {
+			if v, ok := pair.To.Content["slow_weight"]; ok {
 				if f, ok := v.(float64); ok {
 					edge.SlowWeight = f
 				}
 			} else {
 				edge.SlowWeight = edge.Weight
 			}
-			if v, ok := pair.Edge.Content["fast_weight"]; ok {
+			if v, ok := pair.To.Content["fast_weight"]; ok {
 				if f, ok := v.(float64); ok {
 					edge.FastWeight = f
 				}
 			} else {
 				edge.FastWeight = edge.Weight
 			}
-			if v, ok := pair.Edge.Content["co_activation_count"]; ok {
+			if v, ok := pair.To.Content["co_activation_count"]; ok {
 				switch cv := v.(type) {
 				case float64:
 					edge.CoActivations = int(cv)
@@ -183,7 +183,7 @@ func (c *EdgeClassifier) getPatientEdges(ctx context.Context, patientID int64) (
 
 			// Last activated
 			edge.LastActivated = time.Now()
-			if v, ok := pair.Edge.Content["last_activated"]; ok {
+			if v, ok := pair.To.Content["last_activated"]; ok {
 				if f, ok := v.(float64); ok {
 					edge.LastActivated = time.Unix(int64(f), 0)
 				}
@@ -317,7 +317,7 @@ func (c *EdgeClassifier) PruneWeakEdges(ctx context.Context, patientID int64) (*
 			continue
 		}
 
-		edgeID := qr.NodePairs[0].Edge.ID
+		edgeID := qr.NodePairs[0].From.ID
 		if err := c.graphAdapter.DeleteEdge(ctx, edgeID, ""); err == nil {
 			pruned++
 		}

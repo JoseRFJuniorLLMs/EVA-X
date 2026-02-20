@@ -27,7 +27,7 @@ type MetaLearner struct {
 type RetrievalStrategy struct {
 	Name          string    `json:"name"`
 	QueryType     string    `json:"query_type"`     // "emotional", "causal", "factual", "temporal"
-	PreferredDB   string    `json:"preferred_db"`   // "krylov", "neo4j", "qdrant", "combined"
+	PreferredDB   string    `json:"preferred_db"`   // "krylov", "nietzsche_graph", "nietzsche_vector", "combined"
 	Effectiveness float64   `json:"effectiveness"`  // 0-1 (atualizado continuamente)
 	UsageCount    int64     `json:"usage_count"`
 	SuccessCount  int64     `json:"success_count"`
@@ -63,7 +63,7 @@ func NewMetaLearner() *MetaLearner {
 		parameterTuning: map[string]float64{
 			"krylov_k":              64.0,   // Dimensao Krylov
 			"similarity_threshold":  0.7,    // Threshold de similaridade
-			"neo4j_depth":           2.0,    // Profundidade de busca no grafo
+			"nietzsche_depth":           2.0,    // Profundidade de busca no grafo
 			"decay_tau":             90.0,   // Constante de decay temporal
 			"pruning_max_age":       30.0,   // Idade maxima para poda
 			"consolidation_min_hot": 5.0,    // Minimo de memorias quentes
@@ -77,9 +77,9 @@ func NewMetaLearner() *MetaLearner {
 				CreatedAt:     time.Now(),
 			},
 			{
-				Name:          "neo4j_causal",
+				Name:          "nietzsche_causal",
 				QueryType:     "causal",
-				PreferredDB:   "neo4j",
+				PreferredDB:   "nietzsche_graph",
 				Effectiveness: 0.75,
 				CreatedAt:     time.Now(),
 			},
@@ -91,9 +91,9 @@ func NewMetaLearner() *MetaLearner {
 				CreatedAt:     time.Now(),
 			},
 			{
-				Name:          "qdrant_temporal",
+				Name:          "nietzsche_temporal",
 				QueryType:     "temporal",
-				PreferredDB:   "qdrant",
+				PreferredDB:   "nietzsche_vector",
 				Effectiveness: 0.70,
 				CreatedAt:     time.Now(),
 			},
@@ -274,11 +274,11 @@ func (ml *MetaLearner) adjustParameters(pattern string, failCount int) {
 		ml.parameterTuning["similarity_threshold"] = math.Max(current*(1-adjustRate), 0.3)
 		log.Printf("[META-LEARNER] Threshold ajustado: %.2f -> %.2f", current, ml.parameterTuning["similarity_threshold"])
 
-	case pattern == "causal_neo4j_causal":
+	case pattern == "causal_nietzsche_causal":
 		// Se queries causais falham no Neo4j, aumentar profundidade
-		current := ml.parameterTuning["neo4j_depth"]
-		ml.parameterTuning["neo4j_depth"] = math.Min(current+1, 4)
-		log.Printf("[META-LEARNER] Neo4j depth ajustado: %.0f -> %.0f", current, ml.parameterTuning["neo4j_depth"])
+		current := ml.parameterTuning["nietzsche_depth"]
+		ml.parameterTuning["nietzsche_depth"] = math.Min(current+1, 4)
+		log.Printf("[META-LEARNER] Neo4j depth ajustado: %.0f -> %.0f", current, ml.parameterTuning["nietzsche_depth"])
 	}
 }
 

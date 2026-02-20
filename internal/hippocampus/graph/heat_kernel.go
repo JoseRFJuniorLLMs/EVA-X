@@ -5,7 +5,6 @@ package diffusor
 
 import (
 	"context"
-	"fmt"
 	"math"
 
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
