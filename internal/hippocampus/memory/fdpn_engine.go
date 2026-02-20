@@ -6,9 +6,9 @@ package memory
 import (
 	"context"
 	"encoding/json"
-	"eva-mind/internal/brainstem/infrastructure/cache"
-	"eva-mind/internal/brainstem/infrastructure/graph"
-	"eva-mind/internal/brainstem/infrastructure/vector"
+	"eva/internal/brainstem/infrastructure/cache"
+	"eva/internal/brainstem/infrastructure/graph"
+	"eva/internal/brainstem/infrastructure/vector"
 	"fmt"
 	"log"
 	"strings"

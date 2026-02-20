@@ -6,14 +6,14 @@ package brain
 import (
 	"context"
 	"database/sql"
-	"eva-mind/internal/brainstem/infrastructure/graph"
-	"eva-mind/internal/brainstem/infrastructure/vector"
-	"eva-mind/internal/brainstem/push"
-	"eva-mind/internal/cortex/lacan"
-	ps "eva-mind/internal/cortex/personality"
-	"eva-mind/internal/hippocampus/knowledge"
-	"eva-mind/internal/hippocampus/memory"
-	"eva-mind/internal/memory/ingestion"
+	"eva/internal/brainstem/infrastructure/graph"
+	"eva/internal/brainstem/infrastructure/vector"
+	"eva/internal/brainstem/push"
+	"eva/internal/cortex/lacan"
+	ps "eva/internal/cortex/personality"
+	"eva/internal/hippocampus/knowledge"
+	"eva/internal/hippocampus/memory"
+	"eva/internal/memory/ingestion"
 	"fmt"
 )
 

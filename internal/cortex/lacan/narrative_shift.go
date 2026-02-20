@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"eva-mind/internal/brainstem/infrastructure/graph"
+	"eva/internal/brainstem/infrastructure/graph"
 )
 
 // ShiftType categorizes the type of narrative shift

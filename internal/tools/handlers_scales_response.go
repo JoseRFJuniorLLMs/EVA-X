@@ -4,8 +4,8 @@
 package tools
 
 import (
-	"eva-mind/internal/cortex/scales"
-	"eva-mind/internal/motor/actions"
+	"eva/internal/cortex/scales"
+	"eva/internal/motor/actions"
 	"fmt"
 	"log"
 )

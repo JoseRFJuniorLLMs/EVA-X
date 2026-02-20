@@ -5,7 +5,7 @@ package diffusor
 
 import (
 	"context"
-	"eva-mind/internal/brainstem/infrastructure/graph"
+	"eva/internal/brainstem/infrastructure/graph"
 	"math"
 )
 

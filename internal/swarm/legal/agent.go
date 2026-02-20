@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"log"
 
-	"eva-mind/internal/swarm"
+	"eva/internal/swarm"
 )
 
 // Agent implementa o LegalSwarm - auxílio jurídico, direitos e burocracia

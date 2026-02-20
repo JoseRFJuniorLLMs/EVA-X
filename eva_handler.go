@@ -6,8 +6,8 @@ package main
 import (
 	"context"
 	"encoding/json"
-	gemini "eva-mind/internal/cortex/gemini"
-	evaSelf "eva-mind/internal/cortex/self"
+	gemini "eva/internal/cortex/gemini"
+	evaSelf "eva/internal/cortex/self"
 	"net/http"
 	"strings"
 	"sync"

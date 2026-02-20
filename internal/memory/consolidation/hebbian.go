@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"log"
 
-	"eva-mind/internal/brainstem/infrastructure/graph"
+	"eva/internal/brainstem/infrastructure/graph"
 )
 
 // HebbianStrengthener boosts graph edges between co-activated memories

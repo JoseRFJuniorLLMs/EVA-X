@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"eva-mind/internal/brainstem/infrastructure/vector"
+	"eva/internal/brainstem/infrastructure/vector"
 	"fmt"
 	"log"
 	"strings"

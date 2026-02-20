@@ -4,7 +4,7 @@
 package veracity
 
 import (
-	"eva-mind/internal/cortex/transnar"
+	"eva/internal/cortex/transnar"
 	"fmt"
 	"strings"
 )

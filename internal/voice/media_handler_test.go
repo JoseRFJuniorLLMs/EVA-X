@@ -5,10 +5,10 @@ package voice_test
 
 import (
 	"bytes"
-	"eva-mind/internal/brainstem/config"
-	"eva-mind/internal/gemini"
-	"eva-mind/internal/multimodal"
-	"eva-mind/internal/voice"
+	"eva/internal/brainstem/config"
+	"eva/internal/gemini"
+	"eva/internal/multimodal"
+	"eva/internal/voice"
 	"image"
 	"image/color"
 	"image/jpeg"

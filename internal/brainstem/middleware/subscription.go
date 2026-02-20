@@ -5,7 +5,7 @@ package middleware
 
 import (
 	"encoding/json"
-	"eva-mind/internal/subscription"
+	"eva/internal/subscription"
 	"log"
 	"net/http"
 )

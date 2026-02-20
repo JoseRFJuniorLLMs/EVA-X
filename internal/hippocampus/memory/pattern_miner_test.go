@@ -4,7 +4,7 @@
 package memory
 
 import (
-	"eva-mind/pkg/types"
+	"eva/pkg/types"
 	"testing"
 	"time"
 

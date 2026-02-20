@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"log"
 
-	"eva-mind/internal/swarm"
+	"eva/internal/swarm"
 )
 
 // Agent implementa o ClinicalSwarm - avaliações PHQ-9, GAD-7, C-SSRS, medicamentos

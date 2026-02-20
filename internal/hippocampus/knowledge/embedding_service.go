@@ -6,8 +6,8 @@ package knowledge
 import (
 	"context"
 	"encoding/json"
-	"eva-mind/internal/brainstem/config"
-	"eva-mind/internal/brainstem/infrastructure/vector" // Import wrapper
+	"eva/internal/brainstem/config"
+	"eva/internal/brainstem/infrastructure/vector" // Import wrapper
 	"fmt"
 	"io"
 	"log"

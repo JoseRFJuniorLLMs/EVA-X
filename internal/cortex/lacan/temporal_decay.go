@@ -10,7 +10,7 @@ import (
 	"math"
 	"time"
 
-	"eva-mind/internal/brainstem/infrastructure/graph"
+	"eva/internal/brainstem/infrastructure/graph"
 )
 
 // TemporalDecayService adiciona envelhecimento as conexoes do grafo de conhecimento

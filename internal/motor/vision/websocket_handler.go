@@ -5,7 +5,7 @@ package vision
 
 import (
 	"encoding/json"
-	"eva-mind/internal/brainstem/database"
+	"eva/internal/brainstem/database"
 	"fmt"
 	"log"
 	"time"

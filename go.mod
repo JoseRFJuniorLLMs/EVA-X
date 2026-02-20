@@ -1,6 +1,10 @@
-module eva-mind
+module eva
 
 go 1.24.0
+
+require nietzsche-sdk v0.0.0
+
+replace nietzsche-sdk => ../Nietzsche-Database/sdks/go
 
 require (
 	firebase.google.com/go/v4 v4.15.2

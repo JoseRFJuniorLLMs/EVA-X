@@ -81,7 +81,7 @@ func Nietzsche() zerolog.Logger {
 
 // Exemplo de uso:
 //
-// import "eva-mind/internal/brainstem/logger"
+// import "eva/internal/brainstem/logger"
 //
 // log := logger.WebSocket()
 // log.Info().Str("cpf", client.CPF).Msg("Cliente registrado")

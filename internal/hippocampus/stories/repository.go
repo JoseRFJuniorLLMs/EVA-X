@@ -5,9 +5,9 @@ package stories
 
 import (
 	"context"
-	"eva-mind/internal/brainstem/infrastructure/vector" // Correct package for EmbeddingService
-	"eva-mind/internal/hippocampus/memory"
-	"eva-mind/pkg/types"
+	"eva/internal/brainstem/infrastructure/vector" // Correct package for EmbeddingService
+	"eva/internal/hippocampus/memory"
+	"eva/pkg/types"
 	"fmt"
 )
 

@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"log"
 
-	"eva-mind/internal/cortex/cognitive"
-	"eva-mind/internal/cortex/ethics"
+	"eva/internal/cortex/cognitive"
+	"eva/internal/cortex/ethics"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j"

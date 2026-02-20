@@ -5,9 +5,9 @@ package veracity
 
 import (
 	"context"
-	"eva-mind/internal/brainstem/infrastructure/graph"
-	"eva-mind/internal/cortex/lacan"
-	"eva-mind/internal/cortex/transnar"
+	"eva/internal/brainstem/infrastructure/graph"
+	"eva/internal/cortex/lacan"
+	"eva/internal/cortex/transnar"
 	"fmt"
 	"log"
 	"strings"

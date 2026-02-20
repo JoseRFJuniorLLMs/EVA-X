@@ -13,10 +13,10 @@ import (
 	"os"
 	"time"
 
-	"eva-mind/internal/brainstem/config"
-	"eva-mind/internal/brainstem/infrastructure/vector"
-	"eva-mind/internal/cortex/selfawareness"
-	"eva-mind/internal/hippocampus/knowledge"
+	"eva/internal/brainstem/config"
+	"eva/internal/brainstem/infrastructure/vector"
+	"eva/internal/cortex/selfawareness"
+	"eva/internal/hippocampus/knowledge"
 
 	"github.com/joho/godotenv"
 )

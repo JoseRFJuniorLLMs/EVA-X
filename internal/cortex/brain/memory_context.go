@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	hippocampusMemory "eva-mind/internal/hippocampus/memory"
-	retryPkg "eva-mind/internal/brainstem/infrastructure/retry"
+	hippocampusMemory "eva/internal/hippocampus/memory"
+	retryPkg "eva/internal/brainstem/infrastructure/retry"
 )
 
 // MemoryContext contains metadata for memory storage

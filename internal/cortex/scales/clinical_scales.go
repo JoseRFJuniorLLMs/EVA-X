@@ -4,7 +4,7 @@
 package scales
 
 import (
-	"eva-mind/internal/brainstem/database"
+	"eva/internal/brainstem/database"
 	"fmt"
 	"log"
 	"time"

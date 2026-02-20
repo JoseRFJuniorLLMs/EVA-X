@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"log"
 
-	"eva-mind/internal/swarm"
+	"eva/internal/swarm"
 )
 
 // Agent implementa o GoogleSwarm - Calendar, Gmail, Drive, Sheets, Docs, Maps, YouTube, Fit

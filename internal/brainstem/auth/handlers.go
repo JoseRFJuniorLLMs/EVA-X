@@ -5,8 +5,8 @@ package auth
 
 import (
 	"encoding/json"
-	"eva-mind/internal/brainstem/config"
-	"eva-mind/internal/brainstem/database"
+	"eva/internal/brainstem/config"
+	"eva/internal/brainstem/database"
 	"net/http"
 )
 

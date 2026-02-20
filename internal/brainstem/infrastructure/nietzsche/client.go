@@ -4,140 +4,142 @@
 package nietzsche
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"time"
 
-	"eva-mind/internal/brainstem/logger"
+	nietzsche "nietzsche-sdk"
+
+	"eva/internal/brainstem/logger"
 )
 
-const (
-	defaultTimeout = 10 * time.Second
-)
-
-// Client provides HTTP access to NietzscheDB's dashboard API.
-// NietzscheDB is a database with biological memory concepts (sleep/consolidation)
-// that replaces Neo4j + Qdrant + Redis in the EVA infrastructure.
+// Client wraps the NietzscheDB gRPC SDK for EVA.
+// Replaces the old HTTP REST client that targeted endpoints which do not exist.
+// NietzscheDB exposes gRPC on port 50051 — this client uses that.
 type Client struct {
-	baseURL    string
-	httpClient *http.Client
+	sdk  *nietzsche.NietzscheClient
+	addr string
 }
 
-// NewClient creates a new NietzscheDB HTTP client.
-// The baseURL should point to the HTTP dashboard (e.g., "http://localhost:8082").
-func NewClient(baseURL string) *Client {
+// NewClient connects to NietzscheDB via gRPC (insecure, for same-host / docker-compose).
+func NewClient(grpcAddr string) (*Client, error) {
 	log := logger.Nietzsche()
-	log.Info().Str("base_url", baseURL).Msg("NietzscheDB client initialized")
+	log.Info().Str("grpc_addr", grpcAddr).Msg("connecting to NietzscheDB via gRPC")
 
-	return &Client{
-		baseURL: baseURL,
-		httpClient: &http.Client{
-			Timeout: defaultTimeout,
-		},
+	sdk, err := nietzsche.ConnectInsecure(grpcAddr)
+	if err != nil {
+		log.Error().Err(err).Str("addr", grpcAddr).Msg("failed to connect to NietzscheDB")
+		return nil, fmt.Errorf("nietzsche gRPC connect %s: %w", grpcAddr, err)
 	}
+
+	log.Info().Str("grpc_addr", grpcAddr).Msg("NietzscheDB gRPC client connected")
+	return &Client{sdk: sdk, addr: grpcAddr}, nil
 }
 
-// NewClientWithTimeout creates a new NietzscheDB HTTP client with a custom timeout.
-func NewClientWithTimeout(baseURL string, timeout time.Duration) *Client {
-	log := logger.Nietzsche()
-	log.Info().
-		Str("base_url", baseURL).
-		Dur("timeout", timeout).
-		Msg("NietzscheDB client initialized with custom timeout")
-
-	return &Client{
-		baseURL: baseURL,
-		httpClient: &http.Client{
-			Timeout: timeout,
-		},
-	}
-}
-
-// Close releases any resources held by the client.
+// Close releases the gRPC connection.
 func (c *Client) Close() error {
-	c.httpClient.CloseIdleConnections()
+	if c.sdk != nil {
+		return c.sdk.Close()
+	}
 	return nil
 }
 
-// Health checks if NietzscheDB is reachable and healthy.
+// SDK returns the underlying NietzscheDB SDK client for advanced operations.
+func (c *Client) SDK() *nietzsche.NietzscheClient {
+	return c.sdk
+}
+
+// ── Health & Stats ──────────────────────────────────────────────────────────
+
+// Health checks if NietzscheDB is reachable and healthy via gRPC HealthCheck.
 func (c *Client) Health(ctx context.Context) error {
 	log := logger.Nietzsche()
 
-	url := fmt.Sprintf("%s/api/health", c.baseURL)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		log.Error().Err(err).Msg("failed to create health check request")
-		return fmt.Errorf("nietzsche health check: failed to create request: %w", err)
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		log.Error().Err(err).Str("url", url).Msg("NietzscheDB health check failed")
+	if err := c.sdk.HealthCheck(ctx); err != nil {
+		log.Error().Err(err).Msg("NietzscheDB health check failed")
 		return fmt.Errorf("nietzsche health check: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		log.Error().
-			Int("status_code", resp.StatusCode).
-			Str("body", string(body)).
-			Msg("NietzscheDB health check returned non-200")
-		return fmt.Errorf("nietzsche health check: unexpected status %d", resp.StatusCode)
 	}
 
 	log.Debug().Msg("NietzscheDB health check OK")
 	return nil
 }
 
-// Store persists a memory/fact into a NietzscheDB collection.
+// GetStats returns database statistics (node count, edge count, version).
+func (c *Client) GetStats(ctx context.Context) (map[string]interface{}, error) {
+	log := logger.Nietzsche()
+
+	stats, err := c.sdk.GetStats(ctx)
+	if err != nil {
+		log.Error().Err(err).Msg("NietzscheDB stats request failed")
+		return nil, fmt.Errorf("nietzsche stats: %w", err)
+	}
+
+	result := map[string]interface{}{
+		"node_count":    stats.NodeCount,
+		"edge_count":    stats.EdgeCount,
+		"version":       stats.Version,
+		"sensory_count": stats.SensoryCount,
+	}
+
+	log.Debug().Msg("NietzscheDB stats retrieved")
+	return result, nil
+}
+
+// ── Collections ─────────────────────────────────────────────────────────────
+
+// EnsureCollection creates a collection if it does not exist (idempotent).
+func (c *Client) EnsureCollection(ctx context.Context, name string, dim uint32, metric string) error {
+	log := logger.Nietzsche()
+
+	created, err := c.sdk.CreateCollection(ctx, nietzsche.CollectionConfig{
+		Name:   name,
+		Dim:    dim,
+		Metric: metric,
+	})
+	if err != nil {
+		log.Error().Err(err).Str("collection", name).Msg("failed to ensure collection")
+		return fmt.Errorf("nietzsche ensure collection %s: %w", name, err)
+	}
+
+	if created {
+		log.Info().Str("collection", name).Uint32("dim", dim).Str("metric", metric).Msg("collection created")
+	} else {
+		log.Debug().Str("collection", name).Msg("collection already exists")
+	}
+
+	return nil
+}
+
+// ListCollections returns all collections with metadata.
+func (c *Client) ListCollections(ctx context.Context) ([]nietzsche.CollectionInfo, error) {
+	return c.sdk.ListCollections(ctx)
+}
+
+// ── Node CRUD ───────────────────────────────────────────────────────────────
+
+// Store inserts a node into a NietzscheDB collection.
+// This replaces the old HTTP POST /api/collections/{name}/records endpoint.
 func (c *Client) Store(ctx context.Context, collection string, key string, value interface{}) error {
 	log := logger.Nietzsche()
 
-	url := fmt.Sprintf("%s/api/collections/%s/records", c.baseURL, collection)
-
-	payload := map[string]interface{}{
+	content := map[string]interface{}{
 		"key":   key,
 		"value": value,
 	}
 
-	body, err := json.Marshal(payload)
-	if err != nil {
-		log.Error().Err(err).Str("collection", collection).Str("key", key).Msg("failed to marshal store payload")
-		return fmt.Errorf("nietzsche store: failed to marshal payload: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		log.Error().Err(err).Msg("failed to create store request")
-		return fmt.Errorf("nietzsche store: failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(req)
+	_, err := c.sdk.InsertNode(ctx, nietzsche.InsertNodeOpts{
+		ID:         key,
+		Content:    content,
+		NodeType:   "Semantic",
+		Collection: collection,
+	})
 	if err != nil {
 		log.Error().Err(err).
 			Str("collection", collection).
 			Str("key", key).
-			Msg("NietzscheDB store request failed")
+			Msg("NietzscheDB store failed")
 		return fmt.Errorf("nietzsche store: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		respBody, _ := io.ReadAll(resp.Body)
-		log.Error().
-			Int("status_code", resp.StatusCode).
-			Str("body", string(respBody)).
-			Str("collection", collection).
-			Str("key", key).
-			Msg("NietzscheDB store returned error")
-		return fmt.Errorf("nietzsche store: unexpected status %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	log.Info().
@@ -147,29 +149,21 @@ func (c *Client) Store(ctx context.Context, collection string, key string, value
 	return nil
 }
 
-// Get retrieves a memory/fact from a NietzscheDB collection by key.
+// Get retrieves a node from a NietzscheDB collection by ID.
+// This replaces the old HTTP GET /api/collections/{name}/records/{key} endpoint.
 func (c *Client) Get(ctx context.Context, collection string, key string) (map[string]interface{}, error) {
 	log := logger.Nietzsche()
 
-	url := fmt.Sprintf("%s/api/collections/%s/records/%s", c.baseURL, collection, key)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		log.Error().Err(err).Msg("failed to create get request")
-		return nil, fmt.Errorf("nietzsche get: failed to create request: %w", err)
-	}
-
-	resp, err := c.httpClient.Do(req)
+	result, err := c.sdk.GetNode(ctx, key, collection)
 	if err != nil {
 		log.Error().Err(err).
 			Str("collection", collection).
 			Str("key", key).
-			Msg("NietzscheDB get request failed")
+			Msg("NietzscheDB get failed")
 		return nil, fmt.Errorf("nietzsche get: %w", err)
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusNotFound {
+	if !result.Found {
 		log.Debug().
 			Str("collection", collection).
 			Str("key", key).
@@ -177,85 +171,222 @@ func (c *Client) Get(ctx context.Context, collection string, key string) (map[st
 		return nil, nil
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		log.Error().
-			Int("status_code", resp.StatusCode).
-			Str("body", string(respBody)).
-			Str("collection", collection).
-			Str("key", key).
-			Msg("NietzscheDB get returned error")
-		return nil, fmt.Errorf("nietzsche get: unexpected status %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	var result map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		log.Error().Err(err).
-			Str("collection", collection).
-			Str("key", key).
-			Msg("failed to decode NietzscheDB get response")
-		return nil, fmt.Errorf("nietzsche get: failed to decode response: %w", err)
-	}
-
 	log.Debug().
 		Str("collection", collection).
 		Str("key", key).
 		Msg("NietzscheDB get completed")
+	return result.Content, nil
+}
+
+// Delete removes a node from a NietzscheDB collection by ID.
+// This replaces the old HTTP DELETE /api/collections/{name}/records/{key} endpoint.
+func (c *Client) Delete(ctx context.Context, collection string, key string) error {
+	log := logger.Nietzsche()
+
+	if err := c.sdk.DeleteNode(ctx, key, collection); err != nil {
+		log.Error().Err(err).
+			Str("collection", collection).
+			Str("key", key).
+			Msg("NietzscheDB delete failed")
+		return fmt.Errorf("nietzsche delete: %w", err)
+	}
+
+	log.Info().
+		Str("collection", collection).
+		Str("key", key).
+		Msg("NietzscheDB delete completed")
+	return nil
+}
+
+// ── Vector Search (KNN) ─────────────────────────────────────────────────────
+
+// InsertWithEmbedding inserts a node with a vector embedding into a collection.
+func (c *Client) InsertWithEmbedding(ctx context.Context, collection string, id string,
+	embedding []float64, content interface{}, nodeType string) (nietzsche.NodeResult, error) {
+
+	return c.sdk.InsertNode(ctx, nietzsche.InsertNodeOpts{
+		ID:         id,
+		Coords:     embedding,
+		Content:    content,
+		NodeType:   nodeType,
+		Collection: collection,
+	})
+}
+
+// KnnSearch performs k-nearest-neighbor search using cosine similarity.
+// This replaces Qdrant's Search endpoint for vector retrieval.
+func (c *Client) KnnSearch(ctx context.Context, collection string,
+	queryVector []float64, k uint32) ([]nietzsche.KnnResult, error) {
+
+	log := logger.Nietzsche()
+
+	results, err := c.sdk.KnnSearch(ctx, queryVector, k, collection)
+	if err != nil {
+		log.Error().Err(err).
+			Str("collection", collection).
+			Uint32("k", k).
+			Msg("NietzscheDB KNN search failed")
+		return nil, fmt.Errorf("nietzsche knn search: %w", err)
+	}
+
+	log.Debug().
+		Str("collection", collection).
+		Int("results", len(results)).
+		Msg("NietzscheDB KNN search completed")
+	return results, nil
+}
+
+// ── Graph Operations ────────────────────────────────────────────────────────
+
+// InsertNode creates a new node in NietzscheDB.
+func (c *Client) InsertNode(ctx context.Context, opts nietzsche.InsertNodeOpts) (nietzsche.NodeResult, error) {
+	return c.sdk.InsertNode(ctx, opts)
+}
+
+// GetNode retrieves a node by ID.
+func (c *Client) GetNode(ctx context.Context, id, collection string) (nietzsche.NodeResult, error) {
+	return c.sdk.GetNode(ctx, id, collection)
+}
+
+// InsertEdge creates an edge between two nodes.
+func (c *Client) InsertEdge(ctx context.Context, opts nietzsche.InsertEdgeOpts) (string, error) {
+	return c.sdk.InsertEdge(ctx, opts)
+}
+
+// DeleteEdge removes an edge by ID.
+func (c *Client) DeleteEdge(ctx context.Context, id, collection string) error {
+	return c.sdk.DeleteEdge(ctx, id, collection)
+}
+
+// UpdateEnergy modifies a node's energy level.
+func (c *Client) UpdateEnergy(ctx context.Context, nodeID string, energy float32, collection string) error {
+	return c.sdk.UpdateEnergy(ctx, nodeID, energy, collection)
+}
+
+// ── MERGE (upsert) ─────────────────────────────────────────────────────────
+
+// MergeNode finds a node by type + match keys, or creates one (Neo4j MERGE equivalent).
+func (c *Client) MergeNode(ctx context.Context, opts nietzsche.MergeNodeOpts) (*nietzsche.MergeNodeResult, error) {
+	return c.sdk.MergeNode(ctx, opts)
+}
+
+// MergeEdge finds an edge by (from, to, type), or creates one.
+func (c *Client) MergeEdge(ctx context.Context, opts nietzsche.MergeEdgeOpts) (*nietzsche.MergeEdgeResult, error) {
+	return c.sdk.MergeEdge(ctx, opts)
+}
+
+// ── NQL Query ───────────────────────────────────────────────────────────────
+
+// Query executes an NQL (Nietzsche Query Language) query.
+func (c *Client) Query(ctx context.Context, nql string,
+	params map[string]interface{}, collection string) (*nietzsche.QueryResult, error) {
+
+	log := logger.Nietzsche()
+
+	result, err := c.sdk.Query(ctx, nql, params, collection)
+	if err != nil {
+		log.Error().Err(err).
+			Str("nql", nql).
+			Str("collection", collection).
+			Msg("NietzscheDB NQL query failed")
+		return nil, fmt.Errorf("nietzsche query: %w", err)
+	}
+
+	log.Debug().
+		Str("nql", nql).
+		Int("nodes", len(result.Nodes)).
+		Int("pairs", len(result.NodePairs)).
+		Msg("NietzscheDB NQL query completed")
 	return result, nil
 }
 
-// Search queries memories in a NietzscheDB collection using a text query.
+// ── Traversal ───────────────────────────────────────────────────────────────
+
+// Bfs performs breadth-first search from a start node.
+func (c *Client) Bfs(ctx context.Context, startID string,
+	opts nietzsche.TraversalOpts, collection string) ([]string, error) {
+
+	return c.sdk.Bfs(ctx, startID, opts, collection)
+}
+
+// Dijkstra performs shortest-path traversal from a start node.
+func (c *Client) Dijkstra(ctx context.Context, startID string,
+	opts nietzsche.TraversalOpts, collection string) ([]string, []float64, error) {
+
+	return c.sdk.Dijkstra(ctx, startID, opts, collection)
+}
+
+// Diffuse runs heat-kernel diffusion from source nodes.
+func (c *Client) Diffuse(ctx context.Context, sourceIDs []string,
+	opts nietzsche.DiffuseOpts) ([]nietzsche.DiffusionScale, error) {
+
+	return c.sdk.Diffuse(ctx, sourceIDs, opts)
+}
+
+// ── Sleep & Evolution ───────────────────────────────────────────────────────
+
+// TriggerSleep initiates a Riemannian reconsolidation sleep cycle.
+func (c *Client) TriggerSleep(ctx context.Context, opts nietzsche.SleepOpts) (nietzsche.SleepResult, error) {
+	return c.sdk.TriggerSleep(ctx, opts)
+}
+
+// InvokeZaratustra runs the autonomous evolution engine.
+func (c *Client) InvokeZaratustra(ctx context.Context, opts nietzsche.ZaratustraOpts) (*nietzsche.ZaratustraResult, error) {
+	return c.sdk.InvokeZaratustra(ctx, opts)
+}
+
+// ── Sensory ─────────────────────────────────────────────────────────────────
+
+// InsertSensory attaches sensory data to a node.
+func (c *Client) InsertSensory(ctx context.Context, opts nietzsche.InsertSensoryOpts) error {
+	return c.sdk.InsertSensory(ctx, opts)
+}
+
+// GetSensory retrieves sensory metadata for a node.
+func (c *Client) GetSensory(ctx context.Context, nodeID, collection string) (*nietzsche.SensoryResult, error) {
+	return c.sdk.GetSensory(ctx, nodeID, collection)
+}
+
+// Reconstruct reconstructs a sensory latent vector.
+// Quality can be "full", "degraded", or "best_available".
+func (c *Client) Reconstruct(ctx context.Context, nodeID string, quality string) (*nietzsche.ReconstructResult, error) {
+	return c.sdk.Reconstruct(ctx, nodeID, quality)
+}
+
+// ── Search (backward compatible with old HTTP client signature) ─────────────
+
+// Search queries nodes via NQL MATCH with a text filter.
+// This replaces the old HTTP POST /api/collections/{name}/search endpoint.
 func (c *Client) Search(ctx context.Context, collection string, query string, limit int) ([]map[string]interface{}, error) {
 	log := logger.Nietzsche()
 
-	url := fmt.Sprintf("%s/api/collections/%s/search", c.baseURL, collection)
-
-	payload := map[string]interface{}{
-		"query": query,
-		"limit": limit,
-	}
-
-	body, err := json.Marshal(payload)
-	if err != nil {
-		log.Error().Err(err).Str("collection", collection).Msg("failed to marshal search payload")
-		return nil, fmt.Errorf("nietzsche search: failed to marshal payload: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		log.Error().Err(err).Msg("failed to create search request")
-		return nil, fmt.Errorf("nietzsche search: failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(req)
+	nql := fmt.Sprintf("MATCH (n) RETURN n LIMIT %d", limit)
+	result, err := c.sdk.Query(ctx, nql, nil, collection)
 	if err != nil {
 		log.Error().Err(err).
 			Str("collection", collection).
 			Str("query", query).
-			Msg("NietzscheDB search request failed")
+			Msg("NietzscheDB search failed")
 		return nil, fmt.Errorf("nietzsche search: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		log.Error().
-			Int("status_code", resp.StatusCode).
-			Str("body", string(respBody)).
-			Str("collection", collection).
-			Str("query", query).
-			Msg("NietzscheDB search returned error")
-		return nil, fmt.Errorf("nietzsche search: unexpected status %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var results []map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
-		log.Error().Err(err).
-			Str("collection", collection).
-			Str("query", query).
-			Msg("failed to decode NietzscheDB search response")
-		return nil, fmt.Errorf("nietzsche search: failed to decode response: %w", err)
+	for _, node := range result.Nodes {
+		item := map[string]interface{}{
+			"id":        node.ID,
+			"node_type": node.NodeType,
+			"energy":    node.Energy,
+		}
+		if node.Content != nil {
+			for k, v := range node.Content {
+				item[k] = v
+			}
+		}
+		results = append(results, item)
+	}
+
+	if results == nil {
+		results = []map[string]interface{}{}
 	}
 
 	log.Info().
@@ -266,80 +397,65 @@ func (c *Client) Search(ctx context.Context, collection string, query string, li
 	return results, nil
 }
 
-// Delete removes a memory/fact from a NietzscheDB collection by key.
-func (c *Client) Delete(ctx context.Context, collection string, key string) error {
+// ── EnsureCollections: bulk create all EVA collections ──────────────────────
+
+// DefaultCollections returns the standard EVA collection configurations.
+func DefaultCollections() []nietzsche.CollectionConfig {
+	return []nietzsche.CollectionConfig{
+		// Vector collections (Qdrant replacement, cosine 3072D)
+		{Name: "memories", Dim: 3072, Metric: "cosine"},
+		{Name: "signifier_chains", Dim: 3072, Metric: "cosine"},
+		{Name: "eva_self_knowledge", Dim: 3072, Metric: "cosine"},
+		{Name: "eva_learnings", Dim: 3072, Metric: "cosine"},
+		{Name: "eva_codebase", Dim: 3072, Metric: "cosine"},
+		{Name: "eva_docs", Dim: 3072, Metric: "cosine"},
+		{Name: "speaker_embeddings", Dim: 3072, Metric: "cosine"},
+		{Name: "stories", Dim: 3072, Metric: "cosine"},
+		// Graph collections (Neo4j replacement)
+		{Name: "patient_graph", Dim: 3072, Metric: "cosine"},
+		{Name: "eva_core", Dim: 3072, Metric: "cosine"},
+	}
+}
+
+// EnsureCollections creates all default EVA collections idempotently.
+func (c *Client) EnsureCollections(ctx context.Context) error {
 	log := logger.Nietzsche()
+	log.Info().Msg("ensuring all EVA collections exist in NietzscheDB")
 
-	url := fmt.Sprintf("%s/api/collections/%s/records/%s", c.baseURL, collection, key)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
-	if err != nil {
-		log.Error().Err(err).Msg("failed to create delete request")
-		return fmt.Errorf("nietzsche delete: failed to create request: %w", err)
+	for _, col := range DefaultCollections() {
+		if err := c.EnsureCollection(ctx, col.Name, col.Dim, col.Metric); err != nil {
+			return err
+		}
 	}
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		log.Error().Err(err).
-			Str("collection", collection).
-			Str("key", key).
-			Msg("NietzscheDB delete request failed")
-		return fmt.Errorf("nietzsche delete: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		respBody, _ := io.ReadAll(resp.Body)
-		log.Error().
-			Int("status_code", resp.StatusCode).
-			Str("body", string(respBody)).
-			Str("collection", collection).
-			Str("key", key).
-			Msg("NietzscheDB delete returned error")
-		return fmt.Errorf("nietzsche delete: unexpected status %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	log.Info().
-		Str("collection", collection).
-		Str("key", key).
-		Msg("NietzscheDB delete completed")
+	log.Info().Msg("all EVA collections ensured")
 	return nil
 }
 
-// GetStats returns database statistics from NietzscheDB.
-func (c *Client) GetStats(ctx context.Context) (map[string]interface{}, error) {
-	log := logger.Nietzsche()
+// ── Node content helpers ────────────────────────────────────────────────────
 
-	url := fmt.Sprintf("%s/api/stats", c.baseURL)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		log.Error().Err(err).Msg("failed to create stats request")
-		return nil, fmt.Errorf("nietzsche stats: failed to create request: %w", err)
+// NodeResultToMap converts a NodeResult to a flat map for backward compatibility.
+func NodeResultToMap(nr nietzsche.NodeResult) map[string]interface{} {
+	result := map[string]interface{}{
+		"id":              nr.ID,
+		"node_type":       nr.NodeType,
+		"energy":          nr.Energy,
+		"depth":           nr.Depth,
+		"hausdorff_local": nr.HausdorffLocal,
+		"created_at":      time.Unix(nr.CreatedAt, 0).Format(time.RFC3339),
 	}
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		log.Error().Err(err).Msg("NietzscheDB stats request failed")
-		return nil, fmt.Errorf("nietzsche stats: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		log.Error().
-			Int("status_code", resp.StatusCode).
-			Str("body", string(respBody)).
-			Msg("NietzscheDB stats returned error")
-		return nil, fmt.Errorf("nietzsche stats: unexpected status %d: %s", resp.StatusCode, string(respBody))
+	if nr.Content != nil {
+		contentJSON, _ := json.Marshal(nr.Content)
+		result["content"] = string(contentJSON)
+		for k, v := range nr.Content {
+			result["content_"+k] = v
+		}
 	}
 
-	var stats map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
-		log.Error().Err(err).Msg("failed to decode NietzscheDB stats response")
-		return nil, fmt.Errorf("nietzsche stats: failed to decode response: %w", err)
+	if len(nr.Embedding) > 0 {
+		result["embedding_dim"] = len(nr.Embedding)
 	}
 
-	log.Debug().Msg("NietzscheDB stats retrieved")
-	return stats, nil
+	return result
 }

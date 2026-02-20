@@ -4,8 +4,8 @@
 package voice
 
 import (
-	"eva-mind/internal/gemini"
-	"eva-mind/internal/multimodal"
+	"eva/internal/gemini"
+	"eva/internal/multimodal"
 	"fmt"
 	"sync"
 	"time"

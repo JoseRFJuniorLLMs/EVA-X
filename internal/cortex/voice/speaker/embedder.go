@@ -10,7 +10,7 @@ import (
 	"math"
 	"sync"
 
-	"eva-mind/internal/cortex/voice/dsp"
+	"eva/internal/cortex/voice/dsp"
 
 	ort "github.com/yalue/onnxruntime_go"
 )

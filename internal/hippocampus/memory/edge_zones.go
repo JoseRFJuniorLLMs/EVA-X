@@ -13,7 +13,7 @@ import (
 	"log"
 	"time"
 
-	"eva-mind/internal/brainstem/infrastructure/graph"
+	"eva/internal/brainstem/infrastructure/graph"
 )
 
 // EdgeZone representa a zona de uma aresta baseada em seu peso

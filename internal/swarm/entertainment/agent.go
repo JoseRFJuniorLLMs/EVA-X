@@ -7,7 +7,7 @@ import (
 	"context"
 	"log"
 
-	"eva-mind/internal/swarm"
+	"eva/internal/swarm"
 )
 
 // Agent implementa o EntertainmentSwarm - música, jogos, mídia, espiritual

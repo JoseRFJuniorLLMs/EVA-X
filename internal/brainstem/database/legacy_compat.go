@@ -7,7 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"eva-mind/pkg/models"
+	"eva/pkg/models"
 )
 
 // GetIdosoByID recupera os dados do idoso e do familiar principal

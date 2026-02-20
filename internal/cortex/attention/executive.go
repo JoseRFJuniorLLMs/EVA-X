@@ -5,7 +5,7 @@ package attention
 
 import (
 	"context"
-	"eva-mind/internal/cortex/attention/models"
+	"eva/internal/cortex/attention/models"
 	"time"
 )
 

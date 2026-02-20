@@ -5,8 +5,8 @@ package transnar
 
 import (
 	"context"
-	"eva-mind/internal/cortex/lacan"
-	"eva-mind/internal/cortex/personality"
+	"eva/internal/cortex/lacan"
+	"eva/internal/cortex/personality"
 	"strings"
 )
 

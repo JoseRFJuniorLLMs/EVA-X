@@ -4,7 +4,7 @@
 package email
 
 import (
-	"eva-mind/internal/brainstem/config"
+	"eva/internal/brainstem/config"
 	"fmt"
 
 	"gopkg.in/gomail.v2"

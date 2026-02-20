@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"eva-mind/internal/brainstem/infrastructure/cache"
+	"eva/internal/brainstem/infrastructure/cache"
 )
 
 // Situation representa o contexto situacional atual do usuário

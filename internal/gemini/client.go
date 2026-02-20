@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"net/url"
 
-	"eva-mind/internal/brainstem/config"
+	"eva/internal/brainstem/config"
 
 	"github.com/gorilla/websocket"
 )

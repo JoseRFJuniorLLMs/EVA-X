@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"eva-mind/internal/brainstem/infrastructure/graph"
-	krylovmem "eva-mind/internal/memory/krylov"
+	"eva/internal/brainstem/infrastructure/graph"
+	krylovmem "eva/internal/memory/krylov"
 
 	"gonum.org/v1/gonum/mat"
 )

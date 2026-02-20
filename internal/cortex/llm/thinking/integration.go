@@ -11,7 +11,7 @@ import (
 	"database/sql"
 	"log"
 
-	"eva-mind/internal/brainstem/push"
+	"eva/internal/brainstem/push"
 )
 
 // HealthTriageService orquestra análise de saúde com Thinking Mode

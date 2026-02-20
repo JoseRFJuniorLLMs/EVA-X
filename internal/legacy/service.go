@@ -11,7 +11,7 @@ import (
 	"log"
 	"time"
 
-	"eva-mind/internal/brainstem/infrastructure/graph"
+	"eva/internal/brainstem/infrastructure/graph"
 )
 
 // LegacyService gerencia modo pos-morte, herdeiros e personality snapshots

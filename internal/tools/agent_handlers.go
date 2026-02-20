@@ -9,13 +9,13 @@ import (
 	"log"
 	"time"
 
-	"eva-mind/internal/motor/calendar"
-	"eva-mind/internal/motor/drive"
-	"eva-mind/internal/motor/gmail"
-	"eva-mind/internal/motor/maps"
-	"eva-mind/internal/motor/spotify"
-	"eva-mind/internal/motor/whatsapp"
-	"eva-mind/internal/motor/youtube"
+	"eva/internal/motor/calendar"
+	"eva/internal/motor/drive"
+	"eva/internal/motor/gmail"
+	"eva/internal/motor/maps"
+	"eva/internal/motor/spotify"
+	"eva/internal/motor/whatsapp"
+	"eva/internal/motor/youtube"
 )
 
 // ============================================================================

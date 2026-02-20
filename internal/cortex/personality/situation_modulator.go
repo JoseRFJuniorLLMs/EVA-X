@@ -8,7 +8,7 @@ package personality
 import (
 	"time"
 
-	"eva-mind/internal/cortex/situation"
+	"eva/internal/cortex/situation"
 )
 
 // Situation wraps situation.Situation for backward compatibility

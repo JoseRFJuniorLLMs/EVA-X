@@ -12,7 +12,7 @@ import (
 	"log"
 	"math"
 
-	"eva-mind/internal/brainstem/infrastructure/graph"
+	"eva/internal/brainstem/infrastructure/graph"
 )
 
 // DualWeightSystem gerencia pesos lentos (embedding) + rápidos (Hebb)

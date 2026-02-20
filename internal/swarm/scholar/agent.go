@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"strings"
 
-	"eva-mind/internal/cortex/learning"
-	"eva-mind/internal/swarm"
+	"eva/internal/cortex/learning"
+	"eva/internal/swarm"
 
 	"github.com/rs/zerolog/log"
 )

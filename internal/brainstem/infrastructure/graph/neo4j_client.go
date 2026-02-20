@@ -5,7 +5,7 @@ package graph
 
 import (
 	"context"
-	"eva-mind/internal/brainstem/config"
+	"eva/internal/brainstem/config"
 	"fmt"
 	"log"
 	"strings"

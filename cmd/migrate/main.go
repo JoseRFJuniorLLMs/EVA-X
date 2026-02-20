@@ -5,8 +5,8 @@ package main
 
 import (
 	"context"
-	"eva-mind/internal/brainstem/config"
-	"eva-mind/internal/brainstem/database"
+	"eva/internal/brainstem/config"
+	"eva/internal/brainstem/database"
 	"os"
 	"path/filepath"
 	"time"

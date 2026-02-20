@@ -12,8 +12,8 @@ package gemini_test
 import (
 	"context"
 	"encoding/json"
-	"eva-mind/internal/gemini"
-	"eva-mind/internal/multimodal"
+	"eva/internal/gemini"
+	"eva/internal/multimodal"
 	"net/http"
 	"net/http/httptest"
 	"testing"
