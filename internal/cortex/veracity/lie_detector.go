@@ -8,6 +8,7 @@ import (
 	"eva-mind/internal/brainstem/infrastructure/graph"
 	"eva-mind/internal/cortex/lacan"
 	"eva-mind/internal/cortex/transnar"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -220,7 +221,7 @@ func (d *LieDetector) checkEmotionalInconsistency(
 						Statement:  statement,
 						GraphEvidence: []Evidence{
 							{
-								Fact:      sig.Word + " mencionado " + string(rune(sig.Frequency)) + "x",
+								Fact:      sig.Word + " mencionado " + fmt.Sprintf("%d", sig.Frequency) + "x",
 								Timestamp: sig.LastOccurrence,
 								Source:    "Lacan Signifier Tracking",
 							},
@@ -244,15 +245,70 @@ func (d *LieDetector) checkNarrativeGap(
 	statement string,
 ) *Inconsistency {
 
-	// Detectar perguntas sobre eventos específicos
-	if !strings.Contains(strings.ToLower(statement), "consulta") &&
-		!strings.Contains(strings.ToLower(statement), "médico") {
-		return nil // Não é sobre consulta médica
+	// Detectar menções a eventos médicos específicos
+	medicalKeywords := []string{"consulta", "médico", "exame", "hospital", "internação", "diagnóstico"}
+
+	hasMedicalReference := false
+	for _, keyword := range medicalKeywords {
+		if strings.Contains(strings.ToLower(statement), keyword) {
+			hasMedicalReference = true
+			break
+		}
 	}
 
-	// Buscar consultas recentes com diagnósticos graves
-	// TODO: Implementar query específica
-	// Por ora, retornar nil
+	if !hasMedicalReference {
+		return nil // Não é sobre evento médico
+	}
+
+	// Buscar eventos médicos recentes no grafo (últimos 30 dias)
+	evidence := d.queryRecentEvents(ctx, userID, 30)
+
+	if len(evidence) == 0 {
+		return nil // Sem eventos recentes para comparar
+	}
+
+	// Verificar se há eventos médicos no grafo que conflitam com a afirmação
+	// Padrões de negação ou omissão: paciente nega consulta mas há registro
+	negationPatterns := []string{
+		"não fui", "não tive", "não fiz", "nunca fui",
+		"não consultei", "não precisei", "sem consulta",
+	}
+
+	hasNegation := false
+	for _, pattern := range negationPatterns {
+		if strings.Contains(strings.ToLower(statement), pattern) {
+			hasNegation = true
+			break
+		}
+	}
+
+	if !hasNegation {
+		return nil // Sem negação, não há gap narrativo detectável
+	}
+
+	// Filtrar evidências que sejam de eventos médicos
+	medicalEvidence := []Evidence{}
+	for _, ev := range evidence {
+		factLower := strings.ToLower(ev.Fact)
+		for _, keyword := range medicalKeywords {
+			if strings.Contains(factLower, keyword) {
+				medicalEvidence = append(medicalEvidence, ev)
+				break
+			}
+		}
+	}
+
+	if len(medicalEvidence) > 0 {
+		return &Inconsistency{
+			Type:          NarrativeGap,
+			Confidence:    0.75,
+			Statement:     statement,
+			GraphEvidence: medicalEvidence,
+			Reasoning:     fmt.Sprintf("Paciente nega evento médico, mas há %d registro(s) nos últimos 30 dias", len(medicalEvidence)),
+			Severity:      SeverityMedium,
+			Timestamp:     time.Now(),
+		}
+	}
 
 	return nil
 }
@@ -264,14 +320,68 @@ func (d *LieDetector) checkBehavioralChange(
 	statement string,
 ) *Inconsistency {
 
-	// Detectar afirmações sobre comportamentos
-	if !strings.Contains(strings.ToLower(statement), "tomei") &&
-		!strings.Contains(strings.ToLower(statement), "fiz") {
+	// Detectar afirmações sobre comportamentos habituais
+	behaviorKeywords := []string{
+		"tomei", "fiz", "sempre", "todo dia", "toda semana",
+		"exercício", "caminhada", "medicamento", "remédio",
+	}
+
+	hasBehaviorClaim := false
+	for _, keyword := range behaviorKeywords {
+		if strings.Contains(strings.ToLower(statement), keyword) {
+			hasBehaviorClaim = true
+			break
+		}
+	}
+
+	if !hasBehaviorClaim {
 		return nil
 	}
 
-	// TODO: Implementar análise de padrões comportamentais
-	// Requer histórico de horários e frequências
+	// Buscar eventos recentes (últimos 7 dias) e histórico (últimos 30 dias)
+	recentEvents := d.queryRecentEvents(ctx, userID, 7)
+	historicalEvents := d.queryRecentEvents(ctx, userID, 30)
+
+	if len(historicalEvents) == 0 {
+		return nil // Sem histórico para comparar
+	}
+
+	// Calcular frequência: eventos nos últimos 7 dias vs média semanal dos últimos 30 dias
+	recentCount := float64(len(recentEvents))
+	// Normalizar histórico para frequência semanal (30 dias ~ 4.3 semanas)
+	historicalWeeklyAvg := float64(len(historicalEvents)) / 4.3
+
+	// Evitar divisão por zero
+	if historicalWeeklyAvg < 0.5 {
+		return nil // Histórico insuficiente
+	}
+
+	// Calcular diferença percentual
+	var diffPercent float64
+	if historicalWeeklyAvg > 0 {
+		diffPercent = ((recentCount - historicalWeeklyAvg) / historicalWeeklyAvg) * 100
+	}
+
+	// Se diferença > 50% (aumento ou diminuição), sinalizar mudança comportamental
+	if diffPercent > 50 || diffPercent < -50 {
+		direction := "aumento"
+		if diffPercent < 0 {
+			direction = "diminuição"
+		}
+
+		return &Inconsistency{
+			Type:          BehavioralChange,
+			Confidence:    0.70,
+			Statement:     statement,
+			GraphEvidence: recentEvents,
+			Reasoning: fmt.Sprintf(
+				"Mudança comportamental significativa detectada: %s de %.0f%% na frequência de eventos (%.1f/semana recente vs %.1f/semana histórico)",
+				direction, diffPercent, recentCount, historicalWeeklyAvg,
+			),
+			Severity:  SeverityMedium,
+			Timestamp: time.Now(),
+		}
+	}
 
 	return nil
 }

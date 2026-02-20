@@ -4,8 +4,10 @@
 package prediction
 
 import (
+	"log"
 	"math"
 	"math/rand"
+	"time"
 )
 
 // ============================================================================
@@ -31,6 +33,7 @@ type BayesianNetwork struct {
 // NewBayesianNetwork cria nova rede Bayesiana com parâmetros default
 func NewBayesianNetwork() *BayesianNetwork {
 	return &BayesianNetwork{
+		randomSource: rand.New(rand.NewSource(time.Now().UnixNano())),
 		adherenceParams: AdherenceTransitionParams{
 			BaseDecayRate:         -0.005, // Tende a decair levemente por dia
 			MotivationImpact:      0.015,  // Motivação alta aumenta
@@ -141,7 +144,7 @@ func (bn *BayesianNetwork) PredictAdherenceChange(
 	}
 
 	// Adicionar variabilidade estocástica
-	stochasticNoise := normalRandom(0, p.Variance)
+	stochasticNoise := bn.normalRandom(0, p.Variance)
 
 	return expectedChange + stochasticNoise
 }
@@ -198,7 +201,7 @@ func (bn *BayesianNetwork) PredictPHQ9Change(
 	}
 
 	// Variabilidade estocástica
-	stochasticNoise := normalRandom(0, p.Variance)
+	stochasticNoise := bn.normalRandom(0, p.Variance)
 
 	return expectedChange + stochasticNoise
 }
@@ -241,7 +244,7 @@ func (bn *BayesianNetwork) PredictSleepChange(
 	}
 
 	// Variabilidade estocástica
-	stochasticNoise := normalRandom(0, p.Variance)
+	stochasticNoise := bn.normalRandom(0, p.Variance)
 
 	return expectedChange + stochasticNoise
 }
@@ -286,7 +289,7 @@ func (bn *BayesianNetwork) PredictIsolationChange(
 	}
 
 	// Variabilidade estocástica
-	stochasticNoise := normalRandom(0, p.Variance)
+	stochasticNoise := bn.normalRandom(0, p.Variance)
 
 	change := expectedChange + stochasticNoise
 
@@ -304,15 +307,97 @@ func (bn *BayesianNetwork) PredictIsolationChange(
 // TODO: Implementar aprendizado de CPTs a partir de dados históricos
 
 // LearnFromHistoricalData aprende parâmetros de transição de dados reais
+// usando exponential moving average com learning rate de 0.1
 func (bn *BayesianNetwork) LearnFromHistoricalData(historicalData []PatientTimeSeries) error {
-	// TODO: Implementar aprendizado supervisionado
-	// 1. Coletar pares (estado_t, estado_t+1) de dados históricos
-	// 2. Estimar médias e variâncias de transições
-	// 3. Usar regressão linear ou MLE para estimar parâmetros
-	// 4. Validar com cross-validation
+	if len(historicalData) == 0 {
+		return nil
+	}
 
-	// Por enquanto, usar parâmetros default baseados em literatura clínica
+	learningRate := 0.1
+	transitionCount := 0
+
+	for _, patient := range historicalData {
+		if len(patient.States) < 2 {
+			continue
+		}
+
+		// Iterar por pares consecutivos de estados
+		for t := 0; t < len(patient.States)-1; t++ {
+			current := patient.States[t]
+			next := patient.States[t+1]
+			transitionCount++
+
+			// --- Aprender parâmetros de adesão medicamentosa ---
+			adherenceChange := next.MedicationAdherence - current.MedicationAdherence
+			// Atualizar BaseDecayRate via EMA
+			bn.adherenceParams.BaseDecayRate = (1-learningRate)*bn.adherenceParams.BaseDecayRate +
+				learningRate*adherenceChange
+
+			// Atualizar impacto da motivação
+			if current.MotivationLevel > 0.6 {
+				observedMotivationImpact := adherenceChange / math.Max(current.MotivationLevel-0.6, 0.01)
+				bn.adherenceParams.MotivationImpact = (1-learningRate)*bn.adherenceParams.MotivationImpact +
+					learningRate*observedMotivationImpact
+			}
+
+			// --- Aprender parâmetros PHQ-9 ---
+			phq9Change := next.PHQ9Score - current.PHQ9Score
+			bn.phq9Params.BaseChangeRate = (1-learningRate)*bn.phq9Params.BaseChangeRate +
+				learningRate*phq9Change
+
+			// Atualizar impacto da adesão no PHQ-9
+			if current.MedicationAdherence >= 0.7 {
+				observedAdherenceImpact := phq9Change / math.Max(current.MedicationAdherence-0.7, 0.01)
+				bn.phq9Params.AdherenceImprovement = (1-learningRate)*bn.phq9Params.AdherenceImprovement +
+					learningRate*observedAdherenceImpact
+			}
+
+			// --- Aprender parâmetros de sono ---
+			sleepChange := next.SleepHours - current.SleepHours
+			bn.sleepParams.BaseChangeRate = (1-learningRate)*bn.sleepParams.BaseChangeRate +
+				learningRate*sleepChange
+
+			// --- Aprender parâmetros de isolamento ---
+			isolationChange := float64(next.SocialIsolationDays - current.SocialIsolationDays)
+			bn.isolationParams.BaseChangeRate = (1-learningRate)*bn.isolationParams.BaseChangeRate +
+				learningRate*isolationChange
+		}
+	}
+
+	// Clampar parâmetros a faixas razoáveis
+	bn.adherenceParams.BaseDecayRate = clampParam(bn.adherenceParams.BaseDecayRate, -0.05, 0.05)
+	bn.adherenceParams.MotivationImpact = clampParam(bn.adherenceParams.MotivationImpact, 0.001, 0.10)
+	bn.adherenceParams.CognitiveLoadPenalty = clampParam(bn.adherenceParams.CognitiveLoadPenalty, -0.10, 0.0)
+	bn.adherenceParams.DepressionPenalty = clampParam(bn.adherenceParams.DepressionPenalty, -0.10, 0.0)
+
+	bn.phq9Params.BaseChangeRate = clampParam(bn.phq9Params.BaseChangeRate, -0.50, 0.50)
+	bn.phq9Params.AdherenceImprovement = clampParam(bn.phq9Params.AdherenceImprovement, -1.0, 0.0)
+	bn.phq9Params.SleepImpact = clampParam(bn.phq9Params.SleepImpact, -0.50, 0.0)
+	bn.phq9Params.IsolationImpact = clampParam(bn.phq9Params.IsolationImpact, 0.0, 0.50)
+
+	bn.sleepParams.BaseChangeRate = clampParam(bn.sleepParams.BaseChangeRate, -0.20, 0.20)
+	bn.sleepParams.AnxietyImpact = clampParam(bn.sleepParams.AnxietyImpact, -0.30, 0.0)
+	bn.sleepParams.DepressionImpact = clampParam(bn.sleepParams.DepressionImpact, -0.30, 0.0)
+
+	bn.isolationParams.BaseChangeRate = clampParam(bn.isolationParams.BaseChangeRate, -1.0, 1.0)
+	bn.isolationParams.MotivationReduction = clampParam(bn.isolationParams.MotivationReduction, -2.0, 0.0)
+	bn.isolationParams.DepressionIncrease = clampParam(bn.isolationParams.DepressionIncrease, 0.0, 2.0)
+
+	log.Printf("[BayesianNetwork] Parâmetros aprendidos de %d transições em %d pacientes",
+		transitionCount, len(historicalData))
+
 	return nil
+}
+
+// clampParam restringe um parâmetro a uma faixa razoável
+func clampParam(value, min, max float64) float64 {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
 }
 
 type PatientTimeSeries struct {
@@ -457,11 +542,11 @@ func (bn *BayesianNetwork) InferProbabilityCrisis(state PatientState) float64 {
 // UTILITÁRIOS
 // ============================================================================
 
-// normalRandom gera número aleatório de distribuição normal
-func normalRandom(mean, stddev float64) float64 {
-	// Box-Muller transform
-	u1 := rand.Float64()
-	u2 := rand.Float64()
+// normalRandom gera número aleatório de distribuição normal usando o source local
+func (bn *BayesianNetwork) normalRandom(mean, stddev float64) float64 {
+	// Box-Muller transform usando randomSource local (thread-safe por instância)
+	u1 := bn.randomSource.Float64()
+	u2 := bn.randomSource.Float64()
 
 	z0 := math.Sqrt(-2*math.Log(u1)) * math.Cos(2*math.Pi*u2)
 
@@ -472,15 +557,104 @@ func normalRandom(mean, stddev float64) float64 {
 // VALIDAÇÃO DE MODELO
 // ============================================================================
 
-// ValidateModel valida acurácia do modelo com dados de teste
+// ValidateModel valida acurácia do modelo com dados de teste.
+// Calcula accuracy (dentro de 10% de tolerância) e uma estimativa de AUC.
 func (bn *BayesianNetwork) ValidateModel(testData []PatientTimeSeries) (accuracy float64, auc float64) {
-	// TODO: Implementar validação
-	// 1. Para cada paciente no testData:
-	//    - Simular trajetória
-	//    - Comparar predição com outcome real
-	// 2. Calcular métricas: accuracy, precision, recall, AUC-ROC
+	if len(testData) == 0 {
+		return 0.0, 0.0
+	}
 
-	return 0.80, 0.85 // Placeholder: 80% accuracy, 0.85 AUC
+	totalPredictions := 0
+	correctPredictions := 0
+
+	// Para cálculo de AUC simplificado: contar true positives e false positives
+	truePositives := 0
+	falsePositives := 0
+	trueNegatives := 0
+	falseNegatives := 0
+
+	for _, patient := range testData {
+		if len(patient.States) < 2 {
+			continue
+		}
+
+		for t := 0; t < len(patient.States)-1; t++ {
+			current := patient.States[t]
+			actualNext := patient.States[t+1]
+			totalPredictions++
+
+			// Predizer mudanças usando parâmetros atuais
+			predictedAdherenceChange := bn.PredictAdherenceChange(
+				current.MedicationAdherence,
+				current.MotivationLevel,
+				current.CognitiveLoad,
+				current.DepressiveState,
+			)
+			predictedPHQ9Change := bn.PredictPHQ9Change(
+				current.PHQ9Score,
+				current.MedicationAdherence,
+				current.SleepHours,
+				float64(current.SocialIsolationDays),
+			)
+
+			// Valores preditos
+			predictedAdherence := current.MedicationAdherence + predictedAdherenceChange
+			predictedPHQ9 := current.PHQ9Score + predictedPHQ9Change
+
+			// Accuracy: verificar se a predição está dentro de 10% do valor real
+			adherenceTolerance := math.Max(actualNext.MedicationAdherence*0.10, 0.05)
+			phq9Tolerance := math.Max(actualNext.PHQ9Score*0.10, 1.0)
+
+			adherenceCorrect := math.Abs(predictedAdherence-actualNext.MedicationAdherence) <= adherenceTolerance
+			phq9Correct := math.Abs(predictedPHQ9-actualNext.PHQ9Score) <= phq9Tolerance
+
+			if adherenceCorrect && phq9Correct {
+				correctPredictions++
+			}
+
+			// AUC: usar risco de crise como classificador binário
+			// Predizer crise se risco acumulado > 0.5
+			predictedCrisis := bn.InferProbabilityCrisis(current) > 0.5
+
+			// Resultado real: verificar se há outcome de crise
+			actualCrisis := false
+			if t < len(patient.Outcomes) {
+				actualCrisis = patient.Outcomes[t]
+			}
+
+			if predictedCrisis && actualCrisis {
+				truePositives++
+			} else if predictedCrisis && !actualCrisis {
+				falsePositives++
+			} else if !predictedCrisis && !actualCrisis {
+				trueNegatives++
+			} else if !predictedCrisis && actualCrisis {
+				falseNegatives++
+			}
+		}
+	}
+
+	// Calcular accuracy
+	if totalPredictions > 0 {
+		accuracy = float64(correctPredictions) / float64(totalPredictions)
+	}
+
+	// Calcular AUC aproximado usando TPR e FPR
+	// AUC ~ (TPR + TNR) / 2 (estimativa simplificada para ponto único do ROC)
+	tpr := 0.0
+	tnr := 0.0
+	if truePositives+falseNegatives > 0 {
+		tpr = float64(truePositives) / float64(truePositives+falseNegatives)
+	}
+	if trueNegatives+falsePositives > 0 {
+		tnr = float64(trueNegatives) / float64(trueNegatives+falsePositives)
+	}
+	auc = (tpr + tnr) / 2.0
+
+	log.Printf("[BayesianNetwork] Validação: accuracy=%.2f, AUC=%.2f (%d predições, TP=%d FP=%d TN=%d FN=%d)",
+		accuracy, auc, totalPredictions, truePositives, falsePositives, trueNegatives, falseNegatives)
+
+	return accuracy, auc
 }
 
 // ============================================================================

@@ -8,6 +8,9 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"time"
 )
 
@@ -308,30 +311,130 @@ func (pg *PDFGenerator) generateWeeklySummaryHTML(patient *PatientInfo, metrics 
 	return buf.String()
 }
 
-// htmlToPDF converte HTML para PDF
+// htmlToPDF converte HTML para PDF usando wkhtmltopdf.
+// Se wkhtmltopdf não estiver disponível, retorna o HTML como bytes (fallback).
 func (pg *PDFGenerator) htmlToPDF(htmlContent string) ([]byte, error) {
-	// TODO: Integrar com biblioteca de geração de PDF
-	// Opções:
-	// 1. wkhtmltopdf (via exec.Command)
-	// 2. chromedp (headless Chrome)
-	// 3. go-wkhtmltopdf
-	// 4. API externa (e.g., PDF.co, DocRaptor)
+	// Verificar se wkhtmltopdf está disponível no PATH
+	wkhtmltopdfPath, err := exec.LookPath("wkhtmltopdf")
+	if err != nil {
+		log.Printf("⚠️ [PDF] wkhtmltopdf não encontrado, usando fallback HTML: %v", err)
+		return []byte(htmlContent), nil
+	}
 
-	// Placeholder: retornar HTML como bytes (para desenvolvimento)
-	log.Printf("⚠️ [PDF] Usando placeholder - integrar biblioteca PDF real")
-	return []byte(htmlContent), nil
+	// Criar diretório temporário para os arquivos
+	tmpDir, err := os.MkdirTemp("", "eva-pdf-*")
+	if err != nil {
+		log.Printf("⚠️ [PDF] Erro ao criar diretório temporário, usando fallback HTML: %v", err)
+		return []byte(htmlContent), nil
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Escrever HTML em arquivo temporário
+	inputPath := filepath.Join(tmpDir, "input.html")
+	if err := os.WriteFile(inputPath, []byte(htmlContent), 0644); err != nil {
+		log.Printf("⚠️ [PDF] Erro ao escrever HTML temporário, usando fallback HTML: %v", err)
+		return []byte(htmlContent), nil
+	}
+
+	// Definir caminho do PDF de saída
+	outputPath := filepath.Join(tmpDir, "output.pdf")
+
+	// Executar wkhtmltopdf com parâmetros de formatação
+	cmd := exec.Command(wkhtmltopdfPath,
+		"--page-size", "A4",
+		"--margin-top", "15mm",
+		"--margin-bottom", "15mm",
+		"--margin-left", "15mm",
+		"--margin-right", "15mm",
+		"--encoding", "utf-8",
+		inputPath,
+		outputPath,
+	)
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		log.Printf("⚠️ [PDF] wkhtmltopdf falhou (stderr: %s), usando fallback HTML: %v", stderr.String(), err)
+		return []byte(htmlContent), nil
+	}
+
+	// Ler o PDF gerado
+	pdfBytes, err := os.ReadFile(outputPath)
+	if err != nil {
+		log.Printf("⚠️ [PDF] Erro ao ler PDF gerado, usando fallback HTML: %v", err)
+		return []byte(htmlContent), nil
+	}
+
+	log.Printf("✅ [PDF] PDF gerado com sucesso via wkhtmltopdf (%d bytes)", len(pdfBytes))
+	return pdfBytes, nil
 }
 
-// uploadToS3 faz upload do PDF para S3
+// uploadToGCS faz upload do PDF para Google Cloud Storage.
+// Se GCS_BUCKET não estiver configurado, salva localmente como fallback.
 func (pg *PDFGenerator) uploadToS3(pdfBytes []byte, filename string) (string, error) {
-	// TODO: Integrar com AWS S3
-	// Usar github.com/aws/aws-sdk-go-v2/service/s3
+	bucket := os.Getenv("GCS_BUCKET")
 
-	// Placeholder
-	s3URL := fmt.Sprintf("s3://eva-reports/%s.pdf", filename)
-	log.Printf("📤 [PDF] Upload placeholder para: %s", s3URL)
+	if bucket == "" {
+		// Fallback: salvar localmente
+		localDir := filepath.Join(os.TempDir(), "eva-reports")
+		if err := os.MkdirAll(localDir, 0755); err != nil {
+			return "", fmt.Errorf("erro ao criar diretório local: %w", err)
+		}
 
-	return s3URL, nil
+		localPath := filepath.Join(localDir, filename+".pdf")
+		if err := os.WriteFile(localPath, pdfBytes, 0644); err != nil {
+			return "", fmt.Errorf("erro ao salvar PDF localmente: %w", err)
+		}
+
+		log.Printf("📁 [PDF] GCS_BUCKET não configurado, salvo localmente: %s", localPath)
+		return "file://" + localPath, nil
+	}
+
+	// Upload para Google Cloud Storage via gsutil
+	gsutilPath, err := exec.LookPath("gsutil")
+	if err != nil {
+		// Fallback se gsutil não está disponível: salvar localmente
+		localDir := filepath.Join(os.TempDir(), "eva-reports")
+		os.MkdirAll(localDir, 0755)
+		localPath := filepath.Join(localDir, filename+".pdf")
+		if writeErr := os.WriteFile(localPath, pdfBytes, 0644); writeErr != nil {
+			return "", fmt.Errorf("gsutil não encontrado e falha ao salvar localmente: %w", writeErr)
+		}
+		log.Printf("⚠️ [PDF] gsutil não encontrado, salvo localmente: %s", localPath)
+		return "file://" + localPath, nil
+	}
+
+	// Escrever PDF em arquivo temporário para upload
+	tmpFile, err := os.CreateTemp("", "eva-upload-*.pdf")
+	if err != nil {
+		return "", fmt.Errorf("erro ao criar arquivo temporário para upload: %w", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.Write(pdfBytes); err != nil {
+		tmpFile.Close()
+		return "", fmt.Errorf("erro ao escrever arquivo temporário: %w", err)
+	}
+	tmpFile.Close()
+
+	// Caminho no GCS
+	gcsPath := fmt.Sprintf("gs://%s/reports/%s.pdf", bucket, filename)
+
+	// Upload via gsutil
+	cmd := exec.Command(gsutilPath, "cp", tmpFile.Name(), gcsPath)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("erro ao fazer upload para GCS (stderr: %s): %w", stderr.String(), err)
+	}
+
+	// URL pública (ou autenticada) do GCS
+	gcsURL := fmt.Sprintf("https://storage.googleapis.com/%s/reports/%s.pdf", bucket, filename)
+	log.Printf("☁️ [PDF] Upload para GCS concluído: %s", gcsURL)
+
+	return gcsURL, nil
 }
 
 // getPatientInfo busca informações do paciente

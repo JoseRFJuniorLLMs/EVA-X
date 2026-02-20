@@ -555,11 +555,17 @@ func (e *CoreMemoryEngine) seedCapabilities(ctx context.Context) {
 		{"cap_lacan", "Eu tenho um motor psicanalitico lacaniano completo: analise FDPN (Fala, Demanda, Prazer, Necessidade), deteccao de mudanca narrativa, cadeias de significantes, transferencia e analise do Grande Outro."},
 		{"cap_swarm", "Eu tenho 12 agentes especializados (swarm): Clinico, Emergencia, Entretenimento, Bem-estar, Produtividade, Google, Externo, Educador, Kids, Legal, Scholar e Autoconsciencia. Cada um e expert na sua area."},
 		{"cap_escalas", "Eu aplico escalas clinicas validadas: PHQ-9 (depressao), GAD-7 (ansiedade), C-SSRS (risco suicida), e outras escalas de avaliacao psicologica."},
-		{"cap_memoria_avancada", "Eu tenho memoria multi-camada: episodica (PostgreSQL), grafo de conhecimento (Neo4j), busca semantica vetorial (Qdrant), cache em tempo real (Redis), compressao Krylov, consolidacao REM, aprendizado Hebbiano, repeticao espacada SM-2, Zettelkasten e topologia persistente."},
+		{"cap_memoria_avancada", "Eu tenho memoria multi-camada: episodica (PostgreSQL), grafo de conhecimento (Neo4j), busca semantica vetorial (Qdrant), cache em tempo real (Redis), compressao Krylov (1536D para 64D), consolidacao REM noturna, aprendizado Hebbiano, e repeticao espacada SM-2."},
 		{"cap_google_suite", "Eu integro com Google Calendar, Gmail, Google Drive, Google Sheets, Google Docs, Google Maps, YouTube, Google Fit e Uber."},
 		{"cap_uber", "Eu posso chamar um Uber para o usuario, verificar precos e acompanhar corridas."},
 		{"cap_browser", "Eu navego na internet de forma autonoma: abro paginas, preencho formularios, extraio dados, faco screenshots e interajo com sites como um usuario real."},
 		{"cap_filesystem_sandbox", "Eu executo codigo em sandbox isolado (bash, Python, Node.js) com sistema de arquivos seguro. Posso rodar scripts sem risco para o sistema."},
+		{"cap_krylov", "Eu tenho compressao Krylov Subspace que reduz vetores de 1536 dimensoes para 64 dimensoes com alta precisao. Uso Modified Gram-Schmidt e sliding window FIFO para compressao continua, com ponte HTTP na porta 50052."},
+		{"cap_memory_orchestrator", "Eu tenho um Memory Orchestrator que coordena o pipeline completo: FDPN spreading activation, Krylov compression, e REM consolidation. Todo novo episodio passa por essa pipeline."},
+		{"cap_memory_scheduler", "Eu tenho um Memory Scheduler que roda consolidacao REM as 3h da manha e manutencao Krylov a cada 6 horas, inspirado nos ciclos de sono humano."},
+		{"cap_research_engine", "Eu tenho um motor de pesquisa clinica longitudinal com anonimizacao LGPD, construcao de coortes, analise estatistica e exportacao de datasets via REST API."},
+		{"cap_scholar_agent", "Eu tenho um agente Scholar especializado em pesquisa academica e aprendizado autonomo, que estuda topicos em background a cada 6 horas."},
+		{"cap_selfawareness_agent", "Eu tenho um agente de Autoconsciencia que faz introspeccao: analisa meu codigo-fonte, consulta meus bancos de dados, e gera estatisticas sobre minha propria memoria e capacidades."},
 	}
 
 	for _, cap := range capabilities {

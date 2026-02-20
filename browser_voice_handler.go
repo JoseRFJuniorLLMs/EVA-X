@@ -154,7 +154,7 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 			rows, err := s.db.Conn.Query(`
 				SELECT tipo, dados_tarefa, status, data_hora_agendada
 				FROM agendamentos
-				WHERE idoso_id = $1 AND status IN ('agendado','ativo','pendente')
+				WHERE idoso_id = $1 AND status IN ('agendado','ativo','pendente','nao_atendido','aguardando_retry')
 				ORDER BY data_hora_agendada ASC LIMIT 20`, idoso.ID)
 			if err == nil {
 				defer rows.Close()

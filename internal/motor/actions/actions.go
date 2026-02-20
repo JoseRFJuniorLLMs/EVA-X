@@ -218,7 +218,7 @@ func ConfirmMedication(db *sql.DB, pushService *push.FirebaseService, idosoID in
 	// 2. Atualizar status do agendamento de hoje
 	_, err = db.Exec(`
 		UPDATE agendamentos 
-		SET medicamento_confirmado = true, 
+		SET medicamento_tomado = true,
 		    status = 'concluido'
 		WHERE idoso_id = $1 
 		  AND DATE(data_hora_agendada) = CURRENT_DATE

@@ -493,17 +493,19 @@ SWARM SYSTEM
 	- Priority-based timeouts:
 	  Critical: 2s, High: 5s, Medium: 10s, Low: 15s
 
-	Agent types:
-	  clinical      - Medical decision support
-	  educator      - Patient education
-	  emergency     - Crisis protocols and escalation
-	  entertainment - Distraction and leisure
-	  external      - External API calls
-	  google        - Google services (Calendar, Maps, etc.)
-	  kids          - Pediatric conversation mode
-	  legal         - Legal compliance (LGPD, data rights)
-	  productivity  - Task management
-	  wellness      - Wellness monitoring
+	12 agent types:
+	  clinical       - Medical decision support
+	  educator       - Patient education
+	  emergency      - Crisis protocols and escalation
+	  entertainment  - Distraction and leisure
+	  external       - External API calls (Uber, SQL, voice change)
+	  google         - Google services (Calendar, Maps, Sheets, Docs, Fit)
+	  kids           - Pediatric conversation mode
+	  legal          - Legal compliance (LGPD, data rights)
+	  productivity   - Task management
+	  scholar        - Academic research and autonomous learning
+	  selfawareness  - Introspection (code, databases, memory stats)
+	  wellness       - Wellness monitoring
 
 
 CONSCIOUSNESS MODEL
@@ -531,7 +533,7 @@ BUILDING
 
 	Prerequisites:
 
-	- Go 1.21 or later
+	- Go 1.24 or later
 	- Neo4j 5.x (two instances: patients on 7687, EVA self on 7688)
 	- Qdrant vector database
 	- PostgreSQL 15+
@@ -625,6 +627,8 @@ API ENDPOINTS
 	Voice:
 		GET  /ws/pcm                  - Twilio PCM WebSocket
 		GET  /ws/browser              - Browser WebSocket (voice + video)
+		GET  /ws/eva                  - EVA text chat WebSocket (Malaria-Angolar)
+		GET  /ws/logs                 - Real-time log streaming WebSocket
 		GET  /calls/stream/{id}       - Twilio Media Stream (legacy)
 		POST /api/chat                - Text chat API
 
@@ -647,17 +651,23 @@ API ENDPOINTS
 		PATCH /api/v1/idosos/sync-token-by-cpf - Sync push token
 
 	Self (EVA's own memory):
-		GET  /self/personality         - EVA's Big Five + Enneagram
-		GET  /self/identity            - EVA's context for priming
-		GET  /self/memories            - List EVA's own memories
-		POST /self/memories/search     - Semantic search in EVA's memory
-		GET  /self/memories/stats      - Memory statistics
-		GET  /self/insights            - List meta-insights
-		GET  /self/insights/{id}       - Get specific insight
-		POST /self/teach               - Teach EVA directly
-		POST /self/session/process     - Post-session reflection
-		GET  /self/analytics/diversity - Diversity score
-		GET  /self/analytics/growth    - Personality growth over time
+		GET  /api/v1/self/personality         - EVA's Big Five + Enneagram
+		GET  /api/v1/self/identity            - EVA's context for priming
+		GET  /api/v1/self/memories            - List EVA's own memories
+		POST /api/v1/self/memories/search     - Semantic search in EVA's memory
+		GET  /api/v1/self/memories/stats      - Memory statistics
+		GET  /api/v1/self/insights            - List meta-insights
+		GET  /api/v1/self/insights/{id}       - Get specific insight
+		POST /api/v1/self/teach               - Teach EVA directly
+		POST /api/v1/self/session/process     - Post-session reflection
+		GET  /api/v1/self/analytics/diversity - Diversity score
+		GET  /api/v1/self/analytics/growth    - Personality growth over time
+
+	Research (Clinical Research Engine):
+		POST /api/v1/research/cohorts             - Create research cohort
+		GET  /api/v1/research/cohorts/{id}        - Get cohort details
+		GET  /api/v1/research/cohorts/{id}/report - Generate study report
+		POST /api/v1/research/cohorts/{id}/export - Export dataset to CSV
 
 	MCP (Model Context Protocol):
 		GET  /mcp/resources            - List memory resources
@@ -680,6 +690,120 @@ API ENDPOINTS
 	Health:
 		GET  /api/health               - Health check
 		GET  /metrics                  - Prometheus metrics
+
+
+MCP SERVER (CLAUDE CODE INTEGRATION)
+-------------------------------------
+
+	EVA exposes 44 tools via Model Context Protocol (MCP) for
+	Claude Code integration. The MCP server communicates over
+	JSON-RPC 2.0 via stdin/stdout (stdio transport).
+
+	Executable: eva-mcp-server.exe
+	Config:     .mcp.json
+	Source:     cmd/mcp-server/main.go
+	Protocol:   MCP 2024-11-05
+
+	Setup:
+
+		claude mcp add eva-mind -- ./eva-mcp-server.exe
+
+	Environment variables:
+
+		EVA_API_URL   - EVA backend URL (default: http://34.35.36.178:8080)
+		MCP_API_KEY   - Authentication key for EVA API
+
+	All tool calls are routed to the EVA backend via
+	POST /api/v1/tools/execute with X-MCP-Key header.
+
+	Tools by category (44 total, 11 categories):
+
+	Memory & Knowledge (5 tools):
+		eva_remember       - Store a memory in EVA (teach, register
+		                     decisions, save context)
+		eva_recall         - Search EVA's memories by query, returns
+		                     relevant stored memories
+		eva_teach          - Teach EVA something new, writes as
+		                     CoreMemory to Neo4j (port 7688)
+		eva_identity       - Returns EVA's current identity:
+		                     personality, memories, capabilities
+		eva_learn_topic    - EVA autonomously studies a topic: web
+		                     research, Gemini summary, Qdrant storage
+
+	Communication (7 tools):
+		eva_send_email     - Send email via Gmail API
+		eva_send_whatsapp  - Send message via Meta Graph API
+		eva_send_telegram  - Send message via Telegram Bot API
+		eva_send_slack     - Send message via Slack Web API
+		eva_send_discord   - Send message via Discord Bot API
+		eva_send_teams     - Send message via Microsoft Teams webhook
+		eva_send_signal    - Send message via signal-cli
+
+	Productivity (6 tools):
+		eva_calendar_create - Create event in Google Calendar
+		eva_calendar_list   - List upcoming Google Calendar events
+		eva_drive_save      - Save file to Google Drive
+		eva_create_reminder - Create scheduled task (cron-like)
+		eva_list_reminders  - List active scheduled tasks
+		eva_cancel_reminder - Cancel a scheduled task by ID
+
+	Media & Web (4 tools):
+		eva_youtube_search - Search YouTube videos (title, URL,
+		                     thumbnail)
+		eva_spotify_search - Search Spotify tracks (name, artist,
+		                     URI)
+		eva_web_browse     - Navigate a web page, extract content
+		                     (title, text, links)
+		eva_web_search     - Search the internet, returns summarized
+		                     results
+
+	Databases (4 tools):
+		eva_query_postgres   - Execute SQL on PostgreSQL (130+
+		                       tables: patients, schedules, meds)
+		eva_query_neo4j      - Execute Cypher on Neo4j general
+		                       (:7687) knowledge graph (Person,
+		                       Condition, Medication, Symptom)
+		eva_query_neo4j_core - Execute Cypher on Neo4j Core (:7688)
+		                       EVA's personal memory (EvaSelf,
+		                       CoreMemory, MetaInsight)
+		eva_query_qdrant     - Vector similarity search on Qdrant
+		                       (20+ collections, 3072-dim embeddings)
+
+	Code Execution (1 tool):
+		eva_execute_code   - Run code in secure sandbox (bash,
+		                     Python, Node.js). Timeout max 2 min.
+
+	Runtime Skills (4 tools):
+		eva_create_skill   - Create new skill (persisted as JSON)
+		eva_list_skills    - List all available skills
+		eva_run_skill      - Execute an existing skill with args
+		eva_delete_skill   - Remove a skill
+
+	Filesystem (3 tools):
+		eva_read_file      - Read file from EVA workspace
+		eva_write_file     - Write file to EVA workspace
+		eva_list_files     - List directory contents in workspace
+
+	Smart Home / IoT (2 tools):
+		eva_smart_home_control - Control device via Home Assistant
+		                         (on, off, toggle, brightness)
+		eva_smart_home_status  - List devices and their current
+		                         states
+
+	Webhooks (3 tools):
+		eva_create_webhook  - Register webhook (name, URL, events)
+		eva_list_webhooks   - List all configured webhooks
+		eva_trigger_webhook - Fire webhook manually with payload
+
+	Self-Coding (4 tools):
+		eva_read_source    - Read EVA-Mind source code file
+		eva_edit_source    - Edit source code (eva/* branches only)
+		eva_run_tests      - Execute go test ./...
+		eva_get_diff       - Show git diff of uncommitted changes
+
+	Multi-LLM (1 tool):
+		eva_ask_llm        - Query another LLM (Claude, GPT,
+		                     DeepSeek) for second opinion
 
 
 DEPLOYMENTS

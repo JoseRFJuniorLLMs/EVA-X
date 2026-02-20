@@ -6,9 +6,14 @@ package ingestion
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 
+	"github.com/google/generative-ai-go/genai"
 	"github.com/rs/zerolog/log"
+	"google.golang.org/api/option"
 )
 
 // AtomicFact represents a single, indivisible piece of information
@@ -28,7 +33,9 @@ type AtomicFact struct {
 
 // FactExtractor extracts atomic facts from conversation text
 type FactExtractor struct {
-	db *sql.DB
+	db     *sql.DB
+	apiKey string
+	model  string
 }
 
 // NewFactExtractor creates a new fact extractor
@@ -36,13 +43,16 @@ func NewFactExtractor(db *sql.DB) *FactExtractor {
 	return &FactExtractor{db: db}
 }
 
-// ExtractFacts extracts atomic facts from text using LLM
-func (f *FactExtractor) ExtractFacts(ctx context.Context, text string, patientID int64) ([]*AtomicFact, error) {
-	// TODO: Call LLM to extract facts
-	// For now, return placeholder
+// NewFactExtractorWithLLM creates a fact extractor with LLM support
+func NewFactExtractorWithLLM(db *sql.DB, apiKey, model string) *FactExtractor {
+	return &FactExtractor{db: db, apiKey: apiKey, model: model}
+}
 
-	facts := []*AtomicFact{
-		{
+// ExtractFacts extracts atomic facts from text using Gemini LLM
+func (f *FactExtractor) ExtractFacts(ctx context.Context, text string, patientID int64) ([]*AtomicFact, error) {
+	if f.apiKey == "" || strings.TrimSpace(text) == "" {
+		// Fallback: return raw text as single fact
+		return []*AtomicFact{{
 			Content:       text,
 			Confidence:    0.8,
 			Source:        "user_stated",
@@ -51,9 +61,81 @@ func (f *FactExtractor) ExtractFacts(ctx context.Context, text string, patientID
 			PatientID:     patientID,
 			EventTime:     time.Now(),
 			IngestionTime: time.Now(),
-		},
+		}}, nil
 	}
 
+	client, err := genai.NewClient(ctx, option.WithAPIKey(f.apiKey))
+	if err != nil {
+		log.Warn().Err(err).Msg("[FACTS] Gemini client failed, falling back to raw text")
+		return []*AtomicFact{{Content: text, Confidence: 0.5, Source: "user_stated", Revisable: true, Version: 1, PatientID: patientID, EventTime: time.Now(), IngestionTime: time.Now()}}, nil
+	}
+	defer client.Close()
+
+	model := client.GenerativeModel(f.model)
+	model.SetTemperature(0.1)
+
+	prompt := fmt.Sprintf(`Extraia fatos atômicos (informações indivisíveis) do texto abaixo.
+Retorne um JSON array com objetos contendo:
+- "content": o fato atômico em uma frase clara
+- "confidence": confiança de 0.0 a 1.0
+- "source": "user_stated" se o paciente disse, "inferred" se foi inferido, "observed" se foi observado
+
+Texto: "%s"
+
+Responda APENAS o JSON array, sem markdown.`, text)
+
+	resp, err := model.GenerateContent(ctx, genai.Text(prompt))
+	if err != nil {
+		log.Warn().Err(err).Msg("[FACTS] Gemini extraction failed, falling back to raw text")
+		return []*AtomicFact{{Content: text, Confidence: 0.5, Source: "user_stated", Revisable: true, Version: 1, PatientID: patientID, EventTime: time.Now(), IngestionTime: time.Now()}}, nil
+	}
+
+	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
+		return []*AtomicFact{{Content: text, Confidence: 0.5, Source: "user_stated", Revisable: true, Version: 1, PatientID: patientID, EventTime: time.Now(), IngestionTime: time.Now()}}, nil
+	}
+
+	responseText := fmt.Sprintf("%v", resp.Candidates[0].Content.Parts[0])
+	responseText = strings.TrimSpace(responseText)
+	responseText = strings.TrimPrefix(responseText, "```json")
+	responseText = strings.TrimPrefix(responseText, "```")
+	responseText = strings.TrimSuffix(responseText, "```")
+	responseText = strings.TrimSpace(responseText)
+
+	var extracted []struct {
+		Content    string  `json:"content"`
+		Confidence float64 `json:"confidence"`
+		Source     string  `json:"source"`
+	}
+
+	if err := json.Unmarshal([]byte(responseText), &extracted); err != nil {
+		log.Warn().Err(err).Str("response", responseText).Msg("[FACTS] Failed to parse LLM response")
+		return []*AtomicFact{{Content: text, Confidence: 0.5, Source: "user_stated", Revisable: true, Version: 1, PatientID: patientID, EventTime: time.Now(), IngestionTime: time.Now()}}, nil
+	}
+
+	facts := make([]*AtomicFact, 0, len(extracted))
+	now := time.Now()
+	for _, e := range extracted {
+		source := e.Source
+		if source == "" {
+			source = "user_stated"
+		}
+		facts = append(facts, &AtomicFact{
+			Content:       e.Content,
+			Confidence:    e.Confidence,
+			Source:        source,
+			Revisable:     true,
+			Version:       1,
+			PatientID:     patientID,
+			EventTime:     now,
+			IngestionTime: now,
+		})
+	}
+
+	if len(facts) == 0 {
+		facts = append(facts, &AtomicFact{Content: text, Confidence: 0.5, Source: "user_stated", Revisable: true, Version: 1, PatientID: patientID, EventTime: now, IngestionTime: now})
+	}
+
+	log.Info().Int("facts_extracted", len(facts)).Int64("patient_id", patientID).Msg("[FACTS] Extracted atomic facts via Gemini")
 	return facts, nil
 }
 
@@ -154,11 +236,87 @@ type FactContradiction struct {
 	DetectedAt time.Time
 }
 
-// DetectContradictions finds contradictory facts
+// DetectContradictions finds contradictory facts using Gemini LLM
 func (f *FactExtractor) DetectContradictions(ctx context.Context, patientID int64) ([]*FactContradiction, error) {
-	// TODO: Use LLM to detect semantic contradictions
-	// For now, return empty
-	return []*FactContradiction{}, nil
+	// Get recent facts for this patient
+	facts, err := f.GetFacts(ctx, patientID, 50)
+	if err != nil {
+		return nil, err
+	}
+	if len(facts) < 2 || f.apiKey == "" {
+		return []*FactContradiction{}, nil
+	}
+
+	// Build facts list for LLM
+	var factsText strings.Builder
+	for _, fact := range facts {
+		factsText.WriteString(fmt.Sprintf("ID=%d: %s\n", fact.ID, fact.Content))
+	}
+
+	client, err := genai.NewClient(ctx, option.WithAPIKey(f.apiKey))
+	if err != nil {
+		log.Warn().Err(err).Msg("[FACTS] Gemini client failed for contradiction detection")
+		return []*FactContradiction{}, nil
+	}
+	defer client.Close()
+
+	model := client.GenerativeModel(f.model)
+	model.SetTemperature(0.1)
+
+	prompt := fmt.Sprintf(`Analise os fatos abaixo e identifique contradições semânticas.
+Retorne um JSON array com objetos contendo:
+- "fact1_id": ID do primeiro fato
+- "fact2_id": ID do segundo fato contraditório
+- "confidence": confiança na contradição (0.0 a 1.0)
+
+Se não houver contradições, retorne [].
+
+Fatos:
+%s
+
+Responda APENAS o JSON array, sem markdown.`, factsText.String())
+
+	resp, err := model.GenerateContent(ctx, genai.Text(prompt))
+	if err != nil {
+		log.Warn().Err(err).Msg("[FACTS] Contradiction detection failed")
+		return []*FactContradiction{}, nil
+	}
+
+	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
+		return []*FactContradiction{}, nil
+	}
+
+	responseText := fmt.Sprintf("%v", resp.Candidates[0].Content.Parts[0])
+	responseText = strings.TrimSpace(responseText)
+	responseText = strings.TrimPrefix(responseText, "```json")
+	responseText = strings.TrimPrefix(responseText, "```")
+	responseText = strings.TrimSuffix(responseText, "```")
+	responseText = strings.TrimSpace(responseText)
+
+	var detected []struct {
+		Fact1ID    int64   `json:"fact1_id"`
+		Fact2ID    int64   `json:"fact2_id"`
+		Confidence float64 `json:"confidence"`
+	}
+
+	if err := json.Unmarshal([]byte(responseText), &detected); err != nil {
+		log.Warn().Err(err).Str("response", responseText).Msg("[FACTS] Failed to parse contradiction response")
+		return []*FactContradiction{}, nil
+	}
+
+	contradictions := make([]*FactContradiction, 0, len(detected))
+	now := time.Now()
+	for _, d := range detected {
+		contradictions = append(contradictions, &FactContradiction{
+			Fact1ID:    d.Fact1ID,
+			Fact2ID:    d.Fact2ID,
+			Confidence: d.Confidence,
+			DetectedAt: now,
+		})
+	}
+
+	log.Info().Int("contradictions", len(contradictions)).Int64("patient_id", patientID).Msg("[FACTS] Contradiction detection complete")
+	return contradictions, nil
 }
 
 // ReviseFact creates a new version of a fact

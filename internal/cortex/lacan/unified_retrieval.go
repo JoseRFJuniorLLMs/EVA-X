@@ -67,16 +67,23 @@ var CREATOR_CPF = getCreatorCPF()
 const CREATOR_NAME = "Jose R F Junior" // Nome do Criador da Matrix
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 🦟 MALÁRIA - Acesso restrito por CPF
+// 📚 COLEÇÕES PERSONALIZADAS - Agora dinâmicas via tabela idosos.colecoes
 // ═══════════════════════════════════════════════════════════════════════════════
-// Coleções de conhecimento sobre malária (Qdrant) - acesso exclusivo
-const MALARIA_ACCESS_CPF = "10275371387"
 
-// MalariaCollections define as coleções Qdrant de malária
-var MalariaCollections = []string{
-	"malaria_global",       // Epidemiologia, tratamento, prevenção mundial
-	"malaria_africa",       // Dados específicos do continente africano
-	"malaria_angola",       // Dados específicos de Angola
+// parseCollections splits a comma-separated collection string into a trimmed slice.
+func parseCollections(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	var result []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			result = append(result, p)
+		}
+	}
+	return result
 }
 
 // getCreatorCPF obtém CPF do criador de forma segura
@@ -257,7 +264,7 @@ func (u *UnifiedRetrieval) BuildUnifiedContext(
 
 	// Resultados das goroutines
 	var lacanResult *InterpretationResult
-	var medicalContext, name, cpf, idioma, persona string
+	var medicalContext, name, cpf, idioma, persona, colecoes string
 	var agendamentos string
 	var recentMemories []string
 	var wisdomContext string
@@ -281,13 +288,14 @@ func (u *UnifiedRetrieval) BuildUnifiedContext(
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		mc, n, c, lang, p := u.getMedicalContextAndName(ctxWithTimeout, idosoID)
+		mc, n, c, lang, p, col := u.getMedicalContextAndName(ctxWithTimeout, idosoID)
 		mu.Lock()
 		medicalContext = mc
 		name = n
 		cpf = c
 		idioma = lang
 		persona = p
+		colecoes = col
 		mu.Unlock()
 	}()
 
@@ -345,19 +353,22 @@ func (u *UnifiedRetrieval) BuildUnifiedContext(
 	wg.Wait()
 
 	// ============================================================================
-	// 🦟 MALÁRIA: Coleções exclusivas por CPF (pós wg.Wait, CPF já disponível)
+	// 📚 COLEÇÕES PERSONALIZADAS: Busca em coleções específicas do idoso
 	// ============================================================================
-	cleanCPFForMalaria := strings.ReplaceAll(strings.ReplaceAll(cpf, ".", ""), "-", "")
-	if u.wisdom != nil && cleanCPFForMalaria == MALARIA_ACCESS_CPF && currentText != "" {
-		log.Printf("🦟 [MALARIA] Acesso autorizado para CPF %s - buscando coleções de malária", cleanCPFForMalaria[:3]+"***")
-		malariaCtx := u.wisdom.GetWisdomContext(ctxWithTimeout, currentText, &knowledge.WisdomSearchOptions{
-			Collections: MalariaCollections,
-			Limit:       5,
-			MinScore:    0.65,
-		})
-		if malariaCtx != "" {
-			wisdomContext += "\n🦟 CONHECIMENTO ESPECIALIZADO - MALÁRIA:\n" + malariaCtx
-			log.Printf("🦟 [MALARIA] Contexto de malária injetado no prompt")
+	if u.wisdom != nil && colecoes != "" && currentText != "" {
+		userCollections := parseCollections(colecoes)
+		if len(userCollections) > 0 {
+			log.Printf("📚 [COLLECTIONS] Buscando em %d coleções personalizadas para idoso %d: %v",
+				len(userCollections), idosoID, userCollections)
+			customCtx := u.wisdom.GetWisdomContext(ctxWithTimeout, currentText, &knowledge.WisdomSearchOptions{
+				Collections: userCollections,
+				Limit:       5,
+				MinScore:    0.65,
+			})
+			if customCtx != "" {
+				wisdomContext += "\n📚 CONHECIMENTO ESPECIALIZADO:\n" + customCtx
+				log.Printf("📚 [COLLECTIONS] Contexto personalizado injetado para idoso %d", idosoID)
+			}
 		}
 	}
 
@@ -418,16 +429,16 @@ func (u *UnifiedRetrieval) BuildUnifiedContext(
 // NOME, CPF e IDIOMA vem do POSTGRES (tabela idosos), NÃO do Neo4j!
 // MEDICAMENTOS vêm da tabela AGENDAMENTOS (tipo='medicamento')
 // PERFORMANCE FIX: Adicionado timeout para evitar travamentos
-func (u *UnifiedRetrieval) getMedicalContextAndName(ctx context.Context, idosoID int64) (string, string, string, string, string) {
-	var name, cpf, idioma, persona string
+func (u *UnifiedRetrieval) getMedicalContextAndName(ctx context.Context, idosoID int64) (string, string, string, string, string, string) {
+	var name, cpf, idioma, persona, colecoes string
 
 	// PERFORMANCE: Timeout específico para queries
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()
 
 	// 1. BUSCAR NOME, CPF, IDIOMA E PERSONA PREFERIDA DA TABELA IDOSOS (usando idoso_id)
-	nameQuery := `SELECT nome, COALESCE(cpf, ''), COALESCE(idioma, 'pt-BR'), COALESCE(persona_preferida, 'companion') FROM idosos WHERE id = $1 LIMIT 1`
-	err := u.db.QueryRowContext(ctxWithTimeout, nameQuery, idosoID).Scan(&name, &cpf, &idioma, &persona)
+	nameQuery := `SELECT nome, COALESCE(cpf, ''), COALESCE(idioma, 'pt-BR'), COALESCE(persona_preferida, 'companion'), COALESCE(colecoes, '') FROM idosos WHERE id = $1 LIMIT 1`
+	err := u.db.QueryRowContext(ctxWithTimeout, nameQuery, idosoID).Scan(&name, &cpf, &idioma, &persona, &colecoes)
 	if err != nil {
 		log.Printf("⚠️ [UnifiedRetrieval] Nome/CPF/Idioma/Persona não encontrado na tabela idosos: %v", err)
 		name = ""
@@ -501,7 +512,7 @@ func (u *UnifiedRetrieval) getMedicalContextAndName(ctx context.Context, idosoID
 		}
 	}
 
-	return medicalContext, name, cpf, idioma, persona
+	return medicalContext, name, cpf, idioma, persona, colecoes
 }
 
 // getRecentMemories recupera memórias episódicas recentes
@@ -600,14 +611,14 @@ func (u *UnifiedRetrieval) retrieveAgendamentos(ctx context.Context, idosoID int
 		WHERE idoso_id = $1
 		  AND (
 			  -- Agendamentos futuros (consultas, exames, etc.)
-			  (data_hora_agendada > NOW() AND status = 'agendado' AND tipo != 'medicamento')
+			  (data_hora_agendada > NOW() AND status = 'agendado' AND tipo != 'lembrete_medicamento')
 			  OR
 			  -- TOP medicamentos ativos (ordenados por data)
-			  (tipo = 'medicamento' AND status IN ('agendado', 'ativo', 'pendente'))
+			  (tipo = 'lembrete_medicamento' AND status IN ('agendado', 'ativo', 'pendente', 'nao_atendido', 'aguardando_retry'))
 		  )
 		ORDER BY
-			CASE WHEN tipo = 'medicamento' THEN 0 ELSE 1 END,
-			updated_at DESC,
+			CASE WHEN tipo = 'lembrete_medicamento' THEN 0 ELSE 1 END,
+			atualizado_em DESC,
 			data_hora_agendada ASC
 		LIMIT $2
 	`
@@ -635,7 +646,7 @@ func (u *UnifiedRetrieval) retrieveAgendamentos(ctx context.Context, idosoID int
 				}
 			}
 
-			if tipo == "medicamento" {
+			if tipo == "lembrete_medicamento" || tipo == "medicamento" {
 				// 🔴 CRÍTICO: Parse do JSON dados_tarefa para extrair detalhes do medicamento
 				var medData MedicamentoData
 				if err := json.Unmarshal([]byte(dadosTarefa), &medData); err != nil {
@@ -647,6 +658,15 @@ func (u *UnifiedRetrieval) retrieveAgendamentos(ctx context.Context, idosoID int
 					}
 					medicamentos = append(medicamentos, fmt.Sprintf("• %s", desc))
 					continue
+				}
+
+				// Fallback: formato legacy {"description": "..."}
+				if medData.Nome == "" {
+					if desc, ok := rawData["description"].(string); ok && desc != "" {
+						medData.Nome = desc
+					} else if medName, ok := rawData["medicamento"].(string); ok && medName != "" {
+						medData.Nome = medName
+					}
 				}
 
 				// Construir descrição formatada do medicamento

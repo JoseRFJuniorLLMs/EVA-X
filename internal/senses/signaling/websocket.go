@@ -1978,8 +1978,8 @@ func (s *SignalingServer) BuildInstructions(idosoID int64) string {
 		"{{.NivelCognitivo}}":   nivelCognitivo,
 		"{{tom_voz}}":           tomVoz,
 		"{{.TomVoz}}":           tomVoz,
-		"{{condicoes_medicas}}": getString(condicoesMedicas, ""),
-		"{{.CondicoesMedicas}}": getString(condicoesMedicas, ""),
+		"{{condicoes_medicas}}": sanitizeMedicalConditions(getString(condicoesMedicas, "")),
+		"{{.CondicoesMedicas}}": sanitizeMedicalConditions(getString(condicoesMedicas, "")),
 	}
 
 	instructions := template + "\n\n" + dossier
@@ -2071,6 +2071,45 @@ func getString(ns sql.NullString, def string) string {
 		return ns.String
 	}
 	return def
+}
+
+// sanitizeMedicalConditions filtra dados sujos/invalidos das condicoes medicas
+// antes de injetar no prompt do LLM (previne prompt pollution).
+func sanitizeMedicalConditions(raw string) string {
+	if raw == "" {
+		return ""
+	}
+
+	// Termos invalidos conhecidos (dados sujos injetados no banco)
+	invalidTerms := map[string]bool{
+		"morto": true, "feio": true, "alejado": true,
+		"lixo": true, "teste": true, "xxx": true,
+		"null": true, "undefined": true, "none": true,
+	}
+
+	var cleaned []string
+	// Suporta separacao por virgula ou ponto-e-virgula
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';'
+	})
+
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		lower := strings.ToLower(trimmed)
+		if invalidTerms[lower] {
+			continue
+		}
+		// Rejeitar entradas com menos de 3 caracteres (provavelmente lixo)
+		if len(trimmed) < 3 {
+			continue
+		}
+		cleaned = append(cleaned, trimmed)
+	}
+
+	return strings.Join(cleaned, ", ")
 }
 
 func generateSessionID() string {

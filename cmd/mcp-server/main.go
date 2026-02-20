@@ -15,7 +15,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -94,7 +96,8 @@ func NewEVAMCPServer() *EVAMCPServer {
 
 	apiKey := os.Getenv("MCP_API_KEY")
 	if apiKey == "" {
-		apiKey = "eva-mcp-dev-2026"
+		fmt.Fprintf(os.Stderr, "FATAL: MCP_API_KEY not set — refusing to start with no authentication\n")
+		os.Exit(1)
 	}
 
 	return &EVAMCPServer{
@@ -113,6 +116,15 @@ func main() {
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // 1MB buffer
 
+	// Graceful shutdown on SIGINT/SIGTERM
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		sig := <-sigCh
+		fmt.Fprintf(os.Stderr, "MCP server shutting down (signal: %v)\n", sig)
+		os.Exit(0)
+	}()
+
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
@@ -121,6 +133,7 @@ func main() {
 
 		var req JSONRPCRequest
 		if err := json.Unmarshal(line, &req); err != nil {
+			fmt.Fprintf(os.Stderr, "MCP: invalid JSON-RPC: %v\n", err)
 			continue
 		}
 
@@ -148,6 +161,11 @@ func main() {
 		out, _ := json.Marshal(resp)
 		fmt.Fprintf(os.Stdout, "%s\n", out)
 	}
+
+	// Log scanner error if stdin closed unexpectedly
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "MCP: stdin read error: %v\n", err)
+	}
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -168,7 +186,7 @@ func (s *EVAMCPServer) handleInitialize() interface{} {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Tools List — ALL 42 tools
+// Tools List — ALL 44 tools
 // ═══════════════════════════════════════════════════════════════════
 
 func (s *EVAMCPServer) handleToolsList() interface{} {
@@ -729,12 +747,12 @@ func (s *EVAMCPServer) handleToolsList() interface{} {
 
 // mcpToEVA maps MCP tool names to EVA internal tool names
 var mcpToEVA = map[string]string{
-	// Memory
-	"eva_remember":    "remember",
-	"eva_recall":      "recall",
-	"eva_teach":       "teach_eva",
-	"eva_identity":    "get_identity",
-	"eva_learn_topic": "learn_topic",
+	// Memory & Knowledge
+	"eva_remember":    "mcp_remember",
+	"eva_recall":      "mcp_recall",
+	"eva_teach":       "mcp_teach_eva",
+	"eva_identity":    "mcp_get_identity",
+	"eva_learn_topic": "mcp_learn_topic",
 	// Communication
 	"eva_send_email":    "send_email",
 	"eva_send_whatsapp": "send_whatsapp",
@@ -756,9 +774,9 @@ var mcpToEVA = map[string]string{
 	"eva_web_browse":     "browser_navigate",
 	"eva_web_search":     "web_search",
 	// Databases
-	"eva_query_postgres":   "query_postgres",
+	"eva_query_postgres":   "query_postgresql",
 	"eva_query_neo4j":      "query_neo4j",
-	"eva_query_neo4j_core": "query_neo4j_core",
+	"eva_query_neo4j_core": "mcp_query_neo4j_core",
 	"eva_query_qdrant":     "query_qdrant",
 	// Code & Skills
 	"eva_execute_code": "execute_code",
@@ -778,8 +796,8 @@ var mcpToEVA = map[string]string{
 	"eva_list_webhooks":   "list_webhooks",
 	"eva_trigger_webhook": "trigger_webhook",
 	// Self-Coding
-	"eva_read_source": "read_source_file",
-	"eva_edit_source": "edit_source_file",
+	"eva_read_source": "mcp_read_source",
+	"eva_edit_source": "mcp_edit_source",
 	"eva_run_tests":   "run_tests",
 	"eva_get_diff":    "get_code_diff",
 	// Multi-LLM

@@ -106,6 +106,9 @@ type AgentMetrics struct {
 	CircuitOpen    bool          `json:"circuit_open"`
 }
 
+// AlertFunc envia alerta real para cuidadores (push + email + SMS)
+type AlertFunc func(ctx context.Context, userID int64, reason, severity string) error
+
 // Dependencies agrupa dependências compartilhadas entre swarms
 type Dependencies struct {
 	DB           interface{} // *database.DB
@@ -116,6 +119,7 @@ type Dependencies struct {
 	Config       interface{} // *config.Config
 	GoogleAPIKey string
 	Krylov       interface{} // *memory.KrylovMemoryManager
+	AlertFamily  AlertFunc   // Envia notificacao real para familia/cuidadores
 }
 
 // SwarmAgent é a interface que todo swarm agent deve implementar

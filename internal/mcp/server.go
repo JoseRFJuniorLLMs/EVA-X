@@ -4,20 +4,37 @@
 package mcp
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/rs/zerolog/log"
 )
 
+// EmbeddingFunc generates embeddings for text
+type EmbeddingFunc func(ctx context.Context, text string) ([]float32, error)
+
+// VectorSearchFunc searches vectors in Qdrant
+type VectorSearchFunc func(ctx context.Context, collection string, vector []float32, limit int) ([]VectorResult, error)
+
+// VectorResult represents a vector search result
+type VectorResult struct {
+	ID      int64
+	Score   float32
+	Content string
+}
+
 // Server implements Model Context Protocol server
 type Server struct {
-	db     *sql.DB
-	router *mux.Router
+	db           *sql.DB
+	router       *mux.Router
+	embedFunc    EmbeddingFunc
+	vectorSearch VectorSearchFunc
 }
 
 // NewServer creates a new MCP server
@@ -29,6 +46,16 @@ func NewServer(db *sql.DB) *Server {
 
 	s.setupRoutes()
 	return s
+}
+
+// SetEmbeddingFunc sets the embedding function for vector search
+func (s *Server) SetEmbeddingFunc(f EmbeddingFunc) {
+	s.embedFunc = f
+}
+
+// SetVectorSearchFunc sets the vector search function
+func (s *Server) SetVectorSearchFunc(f VectorSearchFunc) {
+	s.vectorSearch = f
 }
 
 // setupRoutes configures MCP endpoints
@@ -201,7 +228,24 @@ func (s *Server) recallTool(w http.ResponseWriter, r *http.Request) {
 		req.Limit = 10
 	}
 
-	// Simple text search (TODO: use vector search)
+	// Vector search with ILIKE fallback
+	if s.embedFunc != nil && s.vectorSearch != nil {
+		memories, vectorErr := s.recallWithVectorSearch(ctx, req)
+		if vectorErr == nil && len(memories) > 0 {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"memories": memories,
+				"count":    len(memories),
+				"method":   "vector",
+			})
+			return
+		}
+		if vectorErr != nil {
+			log.Warn().Err(vectorErr).Msg("[MCP] Vector search failed, falling back to text search")
+		}
+	}
+
+	// Fallback: text search
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, content, event_time, importance_score
 		FROM memories
@@ -287,23 +331,88 @@ func (s *Server) listPrompts(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// getPrompt retrieves a specific prompt
+// getPrompt retrieves a specific prompt by name
 func (s *Server) getPrompt(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	promptName := vars["name"]
 
-	// TODO: Load from database or config
-	prompt := Prompt{
-		Name:        promptName,
-		Description: "System prompt",
-		Template:    "Default template",
+	// Lookup from known prompts
+	knownPrompts := map[string]Prompt{
+		"therapeutic_conversation": {
+			Name:        "therapeutic_conversation",
+			Description: "System prompt for therapeutic conversations",
+			Template:    "You are EVA, a compassionate AI therapist. Your role is to provide emotional support and guidance.",
+			Arguments: []PromptArgument{
+				{Name: "patient_name", Description: "Patient's name", Required: true},
+				{Name: "persona_type", Description: "Enneagram persona type", Required: false},
+			},
+		},
+		"crisis_intervention": {
+			Name:        "crisis_intervention",
+			Description: "System prompt for crisis situations",
+			Template:    "CRISIS MODE: Provide immediate emotional support and safety assessment.",
+			Arguments: []PromptArgument{
+				{Name: "severity_level", Description: "Crisis severity (low/medium/high/critical)", Required: true},
+			},
+		},
+	}
+
+	prompt, ok := knownPrompts[promptName]
+	if !ok {
+		http.Error(w, fmt.Sprintf(`{"error":"prompt not found: %s"}`, promptName), http.StatusNotFound)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(prompt)
 }
 
+// recallWithVectorSearch performs semantic recall using vector embeddings
+func (s *Server) recallWithVectorSearch(ctx context.Context, req RecallRequest) ([]map[string]interface{}, error) {
+	embedding, err := s.embedFunc(ctx, req.Query)
+	if err != nil {
+		return nil, fmt.Errorf("embedding generation failed: %w", err)
+	}
+
+	results, err := s.vectorSearch(ctx, "memories", embedding, req.Limit)
+	if err != nil {
+		return nil, fmt.Errorf("vector search failed: %w", err)
+	}
+
+	memories := make([]map[string]interface{}, 0, len(results))
+	for _, r := range results {
+		memories = append(memories, map[string]interface{}{
+			"id":         r.ID,
+			"content":    r.Content,
+			"score":      r.Score,
+		})
+	}
+
+	return memories, nil
+}
+
+// authMiddleware validates MCP_API_KEY on all legacy MCP endpoints
+func (s *Server) authMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		apiKey := os.Getenv("MCP_API_KEY")
+		if apiKey == "" {
+			http.Error(w, `{"error":"MCP endpoint disabled: MCP_API_KEY not configured"}`, http.StatusForbidden)
+			return
+		}
+		authHeader := r.Header.Get("X-MCP-Key")
+		if authHeader == "" {
+			authHeader = r.Header.Get("Authorization")
+		}
+		if authHeader != apiKey {
+			log.Warn().Str("ip", r.RemoteAddr).Msg("[MCP-Legacy] Unauthorized access attempt")
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // ServeHTTP implements http.Handler
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	s.router.ServeHTTP(w, r)
+	s.authMiddleware(s.router).ServeHTTP(w, r)
 }

@@ -271,11 +271,37 @@ func getOrDefault(m map[string]float64, key string, defaultValue float64) float6
 
 func getDefaultStressorKeywords() map[string][]string {
 	return map[string][]string{
-		"luto": {"faleceu", "morreu", "morte", "velório", "funeral", "falecimento"},
-		"hospital": {"hospital", "internado", "internação", "uti", "emergência"},
-		"doença": {"doente", "doença", "enfermo", "mal", "sintoma"},
+		"luto":        {"faleceu", "morreu", "morte", "velório", "funeral", "falecimento"},
+		"hospital":    {"hospital", "internado", "internação", "uti", "emergência"},
+		"doença":      {"doente", "doença", "enfermo", "mal", "sintoma"},
 		"aniversário": {"aniversário", "niver", "parabéns"},
-		"festa": {"festa", "celebração", "comemoração", "confraternização"},
-		"crise": {"crise", "pânico", "desespero", "emergência", "ajuda"},
+		"festa":       {"festa", "celebração", "comemoração", "confraternização"},
+		"crise":       {"crise", "pânico", "desespero", "emergência", "ajuda"},
 	}
+}
+
+// GetEnneagramBaseWeights returns base cognitive weights for an Enneagram type (1-9)
+// Migrated from internal/cortex/personality/situation_modulator.go (consolidation)
+func GetEnneagramBaseWeights(enneaType int) map[string]float64 {
+	baseWeights := map[int]map[string]float64{
+		1: {"PERFECCIONISMO": 0.9, "FRUSTRAÇÃO": 0.7, "RESPONSABILIDADE": 0.8},
+		2: {"BUSCA_CONEXAO": 0.9, "EMPATIA": 0.8, "NECESSIDADE_APROVACAO": 0.7},
+		3: {"AMBIÇÃO": 0.9, "IMAGEM": 0.8, "EFICIÊNCIA": 0.8},
+		4: {"PROFUNDIDADE_EMOCIONAL": 0.9, "AUTENTICIDADE": 0.8, "TRISTEZA": 0.6},
+		5: {"AUTONOMIA": 0.9, "ANÁLISE": 0.8, "ISOLAMENTO": 0.6},
+		6: {"ANSIEDADE": 0.9, "BUSCA_SEGURANÇA": 0.8, "LEALDADE": 0.7},
+		7: {"ENTUSIASMO": 0.9, "INQUIETAÇÃO": 0.7, "EVITAÇÃO_DOR": 0.6},
+		8: {"CONTROLE": 0.9, "RESISTÊNCIA": 0.8, "PROTEÇÃO": 0.7},
+		9: {"HARMONIA": 0.9, "APATIA": 0.6, "EVITAÇÃO_CONFLITO": 0.8},
+	}
+
+	if weights, exists := baseWeights[enneaType]; exists {
+		result := make(map[string]float64)
+		for k, v := range weights {
+			result[k] = v
+		}
+		return result
+	}
+
+	return map[string]float64{}
 }

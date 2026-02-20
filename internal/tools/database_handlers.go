@@ -4,6 +4,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,11 +26,17 @@ func (h *ToolsHandler) handleQueryPostgreSQL(idosoID int64, args map[string]inte
 
 	normalized := strings.TrimSpace(strings.ToUpper(query))
 
-	// Detectar tipo de operação
+	// SECURITY: Bloquear DML/DDL — apenas SELECT/WITH permitidos
 	isSelect := strings.HasPrefix(normalized, "SELECT") || strings.HasPrefix(normalized, "WITH")
+	if !isSelect {
+		return map[string]interface{}{
+			"error":   "Apenas queries SELECT sao permitidas por seguranca",
+			"message": "Use SELECT ou WITH para consultar dados. INSERT/UPDATE/DELETE/CREATE/ALTER/DROP nao sao permitidos via MCP.",
+		}, nil
+	}
 
-	if isSelect {
-		// SELECT — retorna linhas
+	// SELECT — retorna linhas
+	{
 		rows, err := h.db.Conn.Query(query)
 		if err != nil {
 			return map[string]interface{}{"error": fmt.Sprintf("Erro na query: %v", err)}, nil
@@ -78,21 +85,6 @@ func (h *ToolsHandler) handleQueryPostgreSQL(idosoID int64, args map[string]inte
 			"message": fmt.Sprintf("Query retornou %d resultados.", len(results)),
 		}, nil
 	}
-
-	// INSERT, UPDATE, DELETE, CREATE, ALTER, etc — executa e retorna rows affected
-	result, err := h.db.Conn.Exec(query)
-	if err != nil {
-		return map[string]interface{}{"error": fmt.Sprintf("Erro ao executar: %v", err)}, nil
-	}
-
-	rowsAffected, _ := result.RowsAffected()
-	log.Printf("🗄️ [SQL] Executado: %s → %d rows affected", query[:min(len(query), 80)], rowsAffected)
-
-	return map[string]interface{}{
-		"status":        "sucesso",
-		"rows_affected": rowsAffected,
-		"message":       fmt.Sprintf("Comando executado. %d linhas afetadas.", rowsAffected),
-	}, nil
 }
 
 func min(a, b int) int {
@@ -114,19 +106,49 @@ func (h *ToolsHandler) handleQueryNeo4j(idosoID int64, args map[string]interface
 
 	// SECURITY: Apenas MATCH/RETURN permitido (read-only)
 	normalized := strings.TrimSpace(strings.ToUpper(query))
-	dangerous := []string{"CREATE", "DELETE", "DETACH", "SET ", "REMOVE", "MERGE", "DROP"}
+	dangerous := []string{"CREATE", "DELETE", "DETACH", "SET ", "REMOVE", "MERGE", "DROP", "CALL"}
 	for _, d := range dangerous {
 		if strings.Contains(normalized, d) {
-			return map[string]interface{}{"error": fmt.Sprintf("Operação '%s' não permitida — apenas leitura", d)}, nil
+			return map[string]interface{}{"error": fmt.Sprintf("Operacao '%s' nao permitida — apenas leitura", d)}, nil
 		}
 	}
 
-	// O Neo4j client está no campo Dependencies do orchestrator ou precisa ser injetado
-	// Por enquanto, retornar que Neo4j está disponível via selfawareness agent
+	if h.neo4jClient == nil {
+		return map[string]interface{}{
+			"error":   "Neo4j (porta 7687) nao disponivel",
+			"message": "O client Neo4j nao foi configurado no ToolsHandler",
+		}, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	records, err := h.neo4jClient.ExecuteRead(ctx, query, nil)
+	if err != nil {
+		return map[string]interface{}{"error": fmt.Sprintf("Erro na query Neo4j: %v", err)}, nil
+	}
+
+	var results []map[string]interface{}
+	for _, rec := range records {
+		row := map[string]interface{}{}
+		for i, key := range rec.Keys {
+			row[key] = fmt.Sprintf("%v", rec.Values[i])
+		}
+		results = append(results, row)
+		if len(results) >= 100 {
+			break
+		}
+	}
+
+	if results == nil {
+		results = []map[string]interface{}{}
+	}
+
 	return map[string]interface{}{
-		"status":  "info",
-		"message": "Para queries Neo4j, use 'query_my_database' do serviço de autoconhecimento ou 'search_my_code'. O acesso Cypher direto será implementado em breve.",
-		"query":   query,
+		"status":  "sucesso",
+		"rows":    results,
+		"count":   len(results),
+		"message": fmt.Sprintf("Query Neo4j retornou %d resultados.", len(results)),
 	}, nil
 }
 
@@ -137,23 +159,80 @@ func (h *ToolsHandler) handleQueryNeo4j(idosoID int64, args map[string]interface
 func (h *ToolsHandler) handleQueryQdrant(idosoID int64, args map[string]interface{}) (map[string]interface{}, error) {
 	collection, _ := args["collection"].(string)
 	query, _ := args["query"].(string)
-	limitFloat, _ := args["limit"].(float64)
-	limit := int(limitFloat)
-	if limit <= 0 {
-		limit = 10
+
+	// limit pode vir como string (MCP) ou float64 (JSON)
+	limit := 5
+	if limitStr, ok := args["limit"].(string); ok && limitStr != "" {
+		fmt.Sscanf(limitStr, "%d", &limit)
+	} else if limitFloat, ok := args["limit"].(float64); ok {
+		limit = int(limitFloat)
+	}
+	if limit <= 0 || limit > 50 {
+		limit = 5
 	}
 
-	if collection == "" && query == "" {
-		return map[string]interface{}{"error": "Informe collection e/ou query"}, nil
+	if collection == "" {
+		return map[string]interface{}{"error": "Informe o nome da colecao (collection)"}, nil
+	}
+	if query == "" {
+		return map[string]interface{}{"error": "Informe o texto de busca (query)"}, nil
 	}
 
-	// Usar o serviço de autoconhecimento para busca
+	if h.qdrantClient == nil {
+		return map[string]interface{}{
+			"error":   "Qdrant nao disponivel",
+			"message": "O client Qdrant nao foi configurado no ToolsHandler",
+		}, nil
+	}
+	if h.embedFunc == nil {
+		return map[string]interface{}{
+			"error":   "Servico de embeddings nao disponivel",
+			"message": "EmbedFunc nao configurado — necessario para converter texto em vetor",
+		}, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	// 1. Gerar embedding do texto de busca
+	vector, err := h.embedFunc(ctx, query)
+	if err != nil {
+		return map[string]interface{}{"error": fmt.Sprintf("Erro ao gerar embedding: %v", err)}, nil
+	}
+
+	// 2. Buscar no Qdrant
+	points, err := h.qdrantClient.Search(ctx, collection, vector, uint64(limit), nil)
+	if err != nil {
+		return map[string]interface{}{"error": fmt.Sprintf("Erro na busca Qdrant: %v", err)}, nil
+	}
+
+	// 3. Formatar resultados
+	var results []map[string]interface{}
+	for _, point := range points {
+		item := map[string]interface{}{
+			"score": point.Score,
+		}
+		if point.Id != nil {
+			item["id"] = fmt.Sprintf("%v", point.Id)
+		}
+		if point.Payload != nil {
+			for k, v := range point.Payload {
+				item[k] = v.GetStringValue()
+			}
+		}
+		results = append(results, item)
+	}
+
+	if results == nil {
+		results = []map[string]interface{}{}
+	}
+
 	return map[string]interface{}{
-		"status":     "info",
+		"status":     "sucesso",
 		"collection": collection,
-		"query":      query,
-		"limit":      limit,
-		"message":    "Para buscas vetoriais, use 'search_knowledge' ou 'list_my_collections' do serviço de autoconhecimento. O acesso Qdrant direto será implementado em breve.",
+		"rows":       results,
+		"count":      len(results),
+		"message":    fmt.Sprintf("Busca vetorial em '%s' retornou %d resultados.", collection, len(results)),
 	}, nil
 }
 

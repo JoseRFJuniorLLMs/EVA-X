@@ -147,7 +147,7 @@ func (d *DualWeightSystem) MigrateExistingEdges(ctx context.Context, patientID i
 		RETURN count(r) AS migrated
 	`
 
-	_, err := d.neo4j.ExecuteWrite(ctx, query, map[string]interface{}{
+	records, err := d.neo4j.ExecuteWriteAndReturn(ctx, query, map[string]interface{}{
 		"patientId": patientID,
 		"batchSize": batchSize,
 		"slowRatio": d.slowRatio,
@@ -165,8 +165,11 @@ func (d *DualWeightSystem) MigrateExistingEdges(ctx context.Context, patientID i
 		return result, err
 	}
 
-	// TODO: Extrair count do record
-	result.EdgesMigrated = batchSize
+	if len(records) > 0 {
+		if v, ok := records[0].Get("migrated"); ok {
+			result.EdgesMigrated = int(v.(int64))
+		}
+	}
 
 	log.Printf("✅ [DHP] Migrated %d edges for patient %d", result.EdgesMigrated, patientID)
 
@@ -208,17 +211,35 @@ func (d *DualWeightSystem) NormalizeWeights(ctx context.Context, patientID int64
 			count(r) AS totalEdges
 	`
 
-	_, err := d.neo4j.ExecuteRead(ctx, statsQuery, map[string]interface{}{
+	statsRecords, err := d.neo4j.ExecuteRead(ctx, statsQuery, map[string]interface{}{
 		"patientId": patientID,
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	// TODO: Extrair stats do record
 	avgWeight := 0.5
 	stdWeight := 0.2
 	maxWeight := 1.0
+
+	if len(statsRecords) > 0 {
+		rec := statsRecords[0]
+		if v, ok := rec.Get("avgWeight"); ok {
+			if f, ok := v.(float64); ok {
+				avgWeight = f
+			}
+		}
+		if v, ok := rec.Get("stdWeight"); ok {
+			if f, ok := v.(float64); ok {
+				stdWeight = f
+			}
+		}
+		if v, ok := rec.Get("maxWeight"); ok {
+			if f, ok := v.(float64); ok {
+				maxWeight = f
+			}
+		}
+	}
 
 	result := &NormalizationResult{
 		PatientID:      patientID,
@@ -290,12 +311,19 @@ func (d *DualWeightSystem) GetEdgeWeights(ctx context.Context, nodeA, nodeB stri
 		return nil, fmt.Errorf("edge not found")
 	}
 
-	// TODO: Extrair do record
-	weights := &EdgeWeights{
-		SlowWeight:     0.5,
-		FastWeight:     0.5,
-		CombinedWeight: 0.5,
-		CoActivations:  0,
+	rec := records[0]
+	weights := &EdgeWeights{}
+	if v, ok := rec.Get("slowWeight"); ok {
+		weights.SlowWeight, _ = v.(float64)
+	}
+	if v, ok := rec.Get("fastWeight"); ok {
+		weights.FastWeight, _ = v.(float64)
+	}
+	if v, ok := rec.Get("combinedWeight"); ok {
+		weights.CombinedWeight, _ = v.(float64)
+	}
+	if v, ok := rec.Get("coActivations"); ok {
+		weights.CoActivations = int(v.(int64))
 	}
 
 	return weights, nil

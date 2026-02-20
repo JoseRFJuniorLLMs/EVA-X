@@ -75,6 +75,10 @@ func Worker() zerolog.Logger {
 	return Logger.With().Str("component", "worker").Logger()
 }
 
+func Nietzsche() zerolog.Logger {
+	return Logger.With().Str("component", "nietzsche").Logger()
+}
+
 // Exemplo de uso:
 //
 // import "eva-mind/internal/brainstem/logger"
