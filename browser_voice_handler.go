@@ -48,9 +48,12 @@ var browserWSUpgrader = gws.Upgrader{
 
 // browserMessage formato de mensagem browser <-> server
 type browserMessage struct {
-	Type string `json:"type"`           // "audio", "text", "config", "status"
-	Data string `json:"data,omitempty"` // base64 PCM para audio / "user" para transcricao
-	Text string `json:"text,omitempty"` // texto para subtitles/chat
+	Type     string      `json:"type"`                // "audio", "text", "config", "status", "tool_event"
+	Data     string      `json:"data,omitempty"`      // base64 PCM para audio / "user" para transcricao
+	Text     string      `json:"text,omitempty"`      // texto para subtitles/chat
+	Tool     string      `json:"tool,omitempty"`      // nome da tool executada
+	ToolData interface{} `json:"tool_data,omitempty"` // payload estruturado da tool
+	Status   string      `json:"status,omitempty"`    // "executing", "success", "error"
 }
 
 // browserSignalKind classifica o tipo de sinal do loop de reconexao
@@ -350,6 +353,26 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 
 	// --- Estado compartilhado entre goroutines ---
 	var writeMu sync.Mutex      // protege escritas no conn do browser
+
+	// --- Registrar browser listener para resultados assincronos de tools ---
+	// (deve vir apos writeMu para poder usar o mutex no callback)
+	if s.toolsHandler != nil && idosoID > 0 {
+		s.toolsHandler.RegisterBrowserListener(idosoID, func(msgType string, payload interface{}) {
+			toolData, _ := payload.(map[string]interface{})
+			if toolData == nil {
+				toolData = map[string]interface{}{"message": fmt.Sprintf("%v", payload)}
+			}
+			writeMu.Lock()
+			conn.WriteJSON(browserMessage{
+				Type:     "tool_event",
+				Tool:     msgType,
+				ToolData: toolData,
+				Status:   "success",
+			})
+			writeMu.Unlock()
+		})
+		defer s.toolsHandler.UnregisterBrowserListener(idosoID)
+	}
 	var geminiMu sync.RWMutex   // protege geminiRef
 	geminiRef := initialClient  // client Gemini ativo
 	var currentGen int64 = 1    // geracao atual (incrementada a cada reconexao)
@@ -469,7 +492,17 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 									if c != nil {
 										c.SendText(toolMsg)
 									}
-									log.Info().Str("tool", tc.Name).Msg("[TOOLS] Resultado enviado ao Gemini")
+									// Envia tool_event ao browser para renderizacao rica
+									writeMu.Lock()
+									conn.WriteJSON(browserMessage{
+										Type:     "tool_event",
+										Tool:     tc.Name,
+										ToolData: result,
+										Status:   "success",
+									})
+									writeMu.Unlock()
+
+									log.Info().Str("tool", tc.Name).Msg("[TOOLS] Resultado enviado ao Gemini e browser")
 								}
 							}(text, idosoID)
 						}

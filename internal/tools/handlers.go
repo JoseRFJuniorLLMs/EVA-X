@@ -6,6 +6,7 @@ package tools
 import (
 	"context"
 	"eva/internal/brainstem/database"
+	"sync"
 	"eva/internal/swarm"
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	"eva/internal/brainstem/oauth"
@@ -78,13 +79,41 @@ type ToolsHandler struct {
 	debugMode         bool                            // ✅ Novas tools só habilitadas em debug
 	swarmRouter       SwarmRouter                     // ✅ Bridge para swarm orchestrator (tools sem case no switch)
 	NotifyFunc        func(idosoID int64, msgType string, payload interface{})
+	browserListeners  map[int64]func(msgType string, payload interface{}) // Per-session browser WS listeners
+	browserListenerMu sync.RWMutex
 }
 
 func NewToolsHandler(db *database.DB, pushService *push.FirebaseService, emailService *email.EmailService) *ToolsHandler {
 	return &ToolsHandler{
-		db:           db,
-		pushService:  pushService,
-		emailService: emailService,
+		db:               db,
+		pushService:      pushService,
+		emailService:     emailService,
+		browserListeners: make(map[int64]func(msgType string, payload interface{})),
+	}
+}
+
+// RegisterBrowserListener registers a per-session callback so async tool results
+// (goroutines using NotifyFunc) also reach the browser WebSocket.
+func (h *ToolsHandler) RegisterBrowserListener(idosoID int64, fn func(msgType string, payload interface{})) {
+	h.browserListenerMu.Lock()
+	h.browserListeners[idosoID] = fn
+	h.browserListenerMu.Unlock()
+}
+
+// UnregisterBrowserListener removes the browser listener for the given session.
+func (h *ToolsHandler) UnregisterBrowserListener(idosoID int64) {
+	h.browserListenerMu.Lock()
+	delete(h.browserListeners, idosoID)
+	h.browserListenerMu.Unlock()
+}
+
+// NotifyBrowser sends an async tool result to the browser listener if registered.
+func (h *ToolsHandler) NotifyBrowser(idosoID int64, msgType string, payload interface{}) {
+	h.browserListenerMu.RLock()
+	fn := h.browserListeners[idosoID]
+	h.browserListenerMu.RUnlock()
+	if fn != nil {
+		fn(msgType, payload)
 	}
 }
 

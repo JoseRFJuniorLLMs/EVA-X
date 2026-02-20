@@ -262,6 +262,7 @@ func NewSignalingServer(
 
 	// ✅ FASE 10: Configurar Callback de Sinalização para Tools (WebRTC, etc)
 	server.tools.NotifyFunc = func(idosoID int64, msgType string, payload interface{}) {
+		// Enviar para sessao WebRTC (app mobile)
 		server.sessions.Range(func(key, value interface{}) bool {
 			session := value.(*WebSocketSession)
 			if session.IdosoID == idosoID {
@@ -276,6 +277,9 @@ func NewSignalingServer(
 			}
 			return true
 		})
+
+		// Enviar tambem para browser listener (se existir sessao browser ativa)
+		server.tools.NotifyBrowser(idosoID, msgType, payload)
 	}
 
 	// ✅ NOVO: Inicializar Cortex (Tools Intelligence)
