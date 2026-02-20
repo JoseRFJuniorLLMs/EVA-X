@@ -86,11 +86,11 @@ type EVAMetrics struct {
 	// MemoryRetrievalLatency measures memory retrieval time
 	MemoryRetrievalLatency prometheus.Histogram
 
-	// VectorSearchLatency measures Qdrant search time
+	// VectorSearchLatency measures NietzscheDB vector search time
 	VectorSearchLatency prometheus.Histogram
 
-	// Neo4jQueryLatency measures Neo4j query time
-	Neo4jQueryLatency prometheus.Histogram
+	// GraphQueryLatency measures NietzscheDB graph query time
+	GraphQueryLatency prometheus.Histogram
 
 	// ========================================
 	// System Health Metrics
@@ -285,14 +285,14 @@ func newEVAMetrics() *EVAMetrics {
 		VectorSearchLatency: prometheus.NewHistogram(
 			prometheus.HistogramOpts{
 				Name:    "eva_vector_search_latency_seconds",
-				Help:    "Qdrant vector search latency",
+				Help:    "NietzscheDB vector search latency",
 				Buckets: []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1},
 			},
 		),
-		Neo4jQueryLatency: prometheus.NewHistogram(
+		GraphQueryLatency: prometheus.NewHistogram(
 			prometheus.HistogramOpts{
-				Name:    "eva_neo4j_query_latency_seconds",
-				Help:    "Neo4j query latency",
+				Name:    "eva_graph_query_latency_seconds",
+				Help:    "NietzscheDB graph query latency",
 				Buckets: []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1},
 			},
 		),
@@ -391,7 +391,7 @@ func newEVAMetrics() *EVAMetrics {
 		m.MemoryOperations,
 		m.MemoryRetrievalLatency,
 		m.VectorSearchLatency,
-		m.Neo4jQueryLatency,
+		m.GraphQueryLatency,
 		// System
 		m.ActiveWebSocketConnections,
 		m.ActivePatients,

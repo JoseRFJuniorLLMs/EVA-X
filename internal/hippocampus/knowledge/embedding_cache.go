@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/redis/go-redis/v9"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 )
 
 // ============================================================================
@@ -24,7 +24,7 @@ import (
 
 // EmbeddingCache gerencia cache de embeddings em dois niveis
 type EmbeddingCache struct {
-	redis     *redis.Client
+	cache     *nietzscheInfra.CacheStore
 	local     *localCache
 	ttl       time.Duration
 	hits      int64
@@ -45,9 +45,9 @@ type cacheItem struct {
 }
 
 // NewEmbeddingCache cria um novo cache de embeddings
-func NewEmbeddingCache(redisClient *redis.Client) *EmbeddingCache {
+func NewEmbeddingCache(cacheStore *nietzscheInfra.CacheStore) *EmbeddingCache {
 	return &EmbeddingCache{
-		redis: redisClient,
+		cache: cacheStore,
 		local: &localCache{
 			items:    make(map[string]*cacheItem),
 			maxItems: 1000, // Cache local com max 1000 embeddings
@@ -72,12 +72,12 @@ func (c *EmbeddingCache) Get(ctx context.Context, text string) ([]float32, bool)
 		return emb, true
 	}
 
-	// 2. Tentar Redis se nao encontrou localmente
-	if c.redis != nil {
-		data, err := c.redis.Get(ctx, key).Bytes()
+	// 2. Tentar CacheStore se nao encontrou localmente
+	if c.cache != nil {
+		data, err := c.cache.Get(ctx, key)
 		if err == nil {
 			var embedding []float32
-			if err := json.Unmarshal(data, &embedding); err == nil {
+			if err := json.Unmarshal([]byte(data), &embedding); err == nil {
 				// Atualizar cache local
 				c.local.set(key, embedding, c.ttl)
 				c.recordHit()
@@ -97,15 +97,15 @@ func (c *EmbeddingCache) Set(ctx context.Context, text string, embedding []float
 	// 1. Salvar no cache local
 	c.local.set(key, embedding, c.ttl)
 
-	// 2. Salvar no Redis (async para nao bloquear)
-	if c.redis != nil {
+	// 2. Salvar no CacheStore (async para nao bloquear)
+	if c.cache != nil {
 		go func() {
 			data, err := json.Marshal(embedding)
 			if err != nil {
 				return
 			}
-			if err := c.redis.Set(ctx, key, data, c.ttl).Err(); err != nil {
-				log.Printf("⚠️ [CACHE] Erro ao salvar embedding no Redis: %v", err)
+			if err := c.cache.Set(ctx, key, string(data), c.ttl); err != nil {
+				log.Printf("⚠️ [CACHE] Erro ao salvar embedding no cache: %v", err)
 			}
 		}()
 	}
@@ -195,15 +195,15 @@ func (lc *localCache) evictOldest() {
 
 // SignifierCache gerencia cache de cadeias de significantes
 type SignifierCache struct {
-	redis *redis.Client
+	cache *nietzscheInfra.CacheStore
 	local *sync.Map
 	ttl   time.Duration
 }
 
 // NewSignifierCache cria cache para signifiers
-func NewSignifierCache(redisClient *redis.Client) *SignifierCache {
+func NewSignifierCache(cacheStore *nietzscheInfra.CacheStore) *SignifierCache {
 	return &SignifierCache{
-		redis: redisClient,
+		cache: cacheStore,
 		local: &sync.Map{},
 		ttl:   5 * time.Minute, // TTL menor pois muda mais frequentemente
 	}
@@ -224,12 +224,12 @@ func (sc *SignifierCache) GetSignifiers(ctx context.Context, idosoID int64, text
 		return val.([]SignifierChain), true
 	}
 
-	// Redis
-	if sc.redis != nil {
-		data, err := sc.redis.Get(ctx, key).Bytes()
+	// CacheStore
+	if sc.cache != nil {
+		data, err := sc.cache.Get(ctx, key)
 		if err == nil {
 			var chains []SignifierChain
-			if err := json.Unmarshal(data, &chains); err == nil {
+			if err := json.Unmarshal([]byte(data), &chains); err == nil {
 				sc.local.Store(key, chains)
 				return chains, true
 			}
@@ -245,13 +245,13 @@ func (sc *SignifierCache) SetSignifiers(ctx context.Context, idosoID int64, text
 
 	sc.local.Store(key, chains)
 
-	if sc.redis != nil {
+	if sc.cache != nil {
 		go func() {
 			data, err := json.Marshal(chains)
 			if err != nil {
 				return
 			}
-			sc.redis.Set(ctx, key, data, sc.ttl)
+			sc.cache.Set(ctx, key, string(data), sc.ttl)
 		}()
 	}
 }

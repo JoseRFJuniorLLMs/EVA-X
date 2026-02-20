@@ -112,9 +112,9 @@ type AlertFunc func(ctx context.Context, userID int64, reason, severity string) 
 // Dependencies agrupa dependências compartilhadas entre swarms
 type Dependencies struct {
 	DB           interface{} // *database.DB
-	Neo4j        interface{} // *graph.Neo4jClient
-	Qdrant       interface{} // *vector.QdrantClient
-	Redis        interface{} // *cache.RedisClient
+	Nietzsche    interface{} // *nietzscheInfra.Client
+	Graph        interface{} // *nietzscheInfra.GraphAdapter
+	Vector       interface{} // *nietzscheInfra.VectorAdapter
 	Push         interface{} // *push.FirebaseService
 	Config       interface{} // *config.Config
 	GoogleAPIKey string

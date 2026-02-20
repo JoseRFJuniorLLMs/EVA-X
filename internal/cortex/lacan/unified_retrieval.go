@@ -5,8 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"eva/internal/brainstem/config"
-	"eva/internal/brainstem/infrastructure/graph"
-	"eva/internal/brainstem/infrastructure/vector"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	"eva/internal/cortex/personality"
 	"eva/internal/hippocampus/knowledge"
 	"eva/pkg/types"
@@ -22,7 +21,7 @@ import (
 // PERFORMANCE: Timeouts e limites
 // ============================================================================
 const (
-	queryTimeout    = 2 * time.Second // Timeout para queries DB/Neo4j
+	queryTimeout    = 2 * time.Second // Timeout para queries DB/NietzscheDB
 	medicationLimit = 10              // Limite de medicamentos (era 50)
 )
 
@@ -50,8 +49,8 @@ type UnifiedRetrieval struct {
 
 	// Infraestrutura
 	db     *sql.DB
-	neo4j  *graph.Neo4jClient
-	qdrant *vector.QdrantClient
+	graph  *nietzscheInfra.GraphAdapter
+	vector *nietzscheInfra.VectorAdapter
 	cfg    *config.Config
 }
 
@@ -160,7 +159,7 @@ type UnifiedContext struct {
 	IsDebugMode bool   // true se usuário é o Criador (José R F Junior)
 
 	// REAL (Corpo, Sintoma, Trauma)
-	MedicalContext   string // Do GraphRAG (Neo4j)
+	MedicalContext   string // Do GraphRAG (NietzscheDB)
 	VitalSigns       string // Sinais vitais recentes
 	ReportedSymptoms string // Sintomas relatados
 	Agendamentos     string // Agendamentos futuros (Real)
@@ -185,41 +184,41 @@ type UnifiedContext struct {
 	SystemPrompt  string // Prompt final integrado
 }
 
-// NewUnifiedRetrieval cria serviço de recuperação unificada
+// NewUnifiedRetrieval cria servico de recuperacao unificada
 func NewUnifiedRetrieval(
 	db *sql.DB,
-	neo4j *graph.Neo4jClient,
-	qdrant *vector.QdrantClient,
+	graphAdapter *nietzscheInfra.GraphAdapter,
+	vectorAdapter *nietzscheInfra.VectorAdapter,
 	cfg *config.Config,
 ) *UnifiedRetrieval {
-	interpretation := NewInterpretationService(db, neo4j)
+	interpretation := NewInterpretationService(db, graphAdapter)
 
-	embedding, err := knowledge.NewEmbeddingService(cfg, qdrant)
+	embedding, err := knowledge.NewEmbeddingService(cfg, vectorAdapter)
 	if err != nil {
-		log.Printf("⚠️ Warning: Embedding service initialization failed: %v", err)
+		log.Printf("[UnifiedRetrieval] Warning: Embedding service initialization failed: %v", err)
 	}
 
-	fdpn := NewFDPNEngine(neo4j)
+	fdpn := NewFDPNEngine(graphAdapter)
 	zeta := NewZetaRouter(interpretation)
 
 	// Inicializar modo debug para o Criador
 	debugMode := NewDebugMode(db)
 
-	// Inicializar serviço de perfil do Criador (carrega do PostgreSQL)
+	// Inicializar servico de perfil do Criador (carrega do PostgreSQL)
 	creatorProfile := personality.NewCreatorProfileService(db)
 
-	// 📚 Inicializar serviço de Sabedoria (busca semântica em histórias/fábulas/ensinamentos)
+	// Inicializar servico de Sabedoria (busca semantica em historias/fabulas/ensinamentos)
 	var wisdomService *knowledge.WisdomService
-	if embedding != nil && qdrant != nil {
-		wisdomService = knowledge.NewWisdomService(qdrant, embedding)
-		log.Printf("✅ [UnifiedRetrieval] WisdomService inicializado")
+	if embedding != nil && vectorAdapter != nil {
+		wisdomService = knowledge.NewWisdomService(vectorAdapter, embedding)
+		log.Printf("[UnifiedRetrieval] WisdomService inicializado")
 	} else {
-		log.Printf("⚠️ [UnifiedRetrieval] WisdomService não inicializado (embedding ou qdrant nil)")
+		log.Printf("[UnifiedRetrieval] WisdomService nao inicializado (embedding ou vector nil)")
 	}
 
 	// PERFORMANCE: Inicializar cache de prompts (TTL 5min)
 	promptCache := NewPromptCache(5 * time.Minute)
-	log.Printf("✅ [UnifiedRetrieval] PromptCache inicializado (TTL 5min)")
+	log.Printf("[UnifiedRetrieval] PromptCache inicializado (TTL 5min)")
 
 	return &UnifiedRetrieval{
 		interpretation: interpretation,
@@ -231,8 +230,8 @@ func NewUnifiedRetrieval(
 		creatorProfile: creatorProfile,
 		promptCache:    promptCache,
 		db:             db,
-		neo4j:          neo4j,
-		qdrant:         qdrant,
+		graph:          graphAdapter,
+		vector:         vectorAdapter,
 		cfg:            cfg,
 	}
 }
@@ -284,7 +283,7 @@ func (u *UnifiedRetrieval) BuildUnifiedContext(
 		}
 	}()
 
-	// 2. CONTEXTO MÉDICO (Neo4j + Postgres) - paralelo
+	// 2. CONTEXTO MEDICO (NietzscheDB + Postgres) - paralelo
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -426,7 +425,7 @@ func (u *UnifiedRetrieval) BuildUnifiedContext(
 }
 
 // getMedicalContextAndName recupera contexto médico, nome, CPF e idioma do paciente
-// NOME, CPF e IDIOMA vem do POSTGRES (tabela idosos), NÃO do Neo4j!
+// NOME, CPF e IDIOMA vem do POSTGRES (tabela idosos), NAO do NietzscheDB!
 // MEDICAMENTOS vêm da tabela AGENDAMENTOS (tipo='medicamento')
 // PERFORMANCE FIX: Adicionado timeout para evitar travamentos
 func (u *UnifiedRetrieval) getMedicalContextAndName(ctx context.Context, idosoID int64) (string, string, string, string, string, string) {
@@ -455,59 +454,87 @@ func (u *UnifiedRetrieval) getMedicalContextAndName(ctx context.Context, idosoID
 
 	var medicalContext string
 
-	// 2. BUSCAR CONTEXTO MÉDICO DO NEO4J (condições e sintomas)
-	if u.neo4j != nil {
-		query := `
-			MATCH (p:Person {id: $idosoId})
-			OPTIONAL MATCH (p)-[:HAS_CONDITION]->(c:Condition)
-			OPTIONAL MATCH (p)-[:TAKES_MEDICATION]->(m:Medication)
-			OPTIONAL MATCH (p)-[:EXPERIENCED]->(s:Symptom)
-			WHERE s.timestamp > datetime() - duration('P7D')
-			RETURN
-				collect(DISTINCT c.name) as conditions,
-				collect(DISTINCT m.name) as medications,
-				collect(DISTINCT s.description) as recent_symptoms
-		`
-
-		records, err := u.neo4j.ExecuteRead(ctx, query, map[string]interface{}{
+	// 2. BUSCAR CONTEXTO MEDICO DO NietzscheDB (condicoes e sintomas)
+	if u.graph != nil {
+		// Find Person node
+		nql := `MATCH (p:Person) WHERE p.id = $idosoId RETURN p`
+		personResult, err := u.graph.ExecuteNQL(ctx, nql, map[string]interface{}{
 			"idosoId": idosoID,
-		})
+		}, "")
 
-		if err == nil && len(records) > 0 {
-			record := records[0]
-			conditions, _ := record.Get("conditions")
-			medications, _ := record.Get("medications")
-			symptoms, _ := record.Get("recent_symptoms")
+		if err == nil && len(personResult.Nodes) > 0 {
+			personID := personResult.Nodes[0].ID
+			hasGraphData := false
 
-			hasNeo4jData := false
-
-			if conds, ok := conditions.([]interface{}); ok && len(conds) > 0 {
-				medicalContext += "\n🏥 Condições de saúde conhecidas:\n"
-				for _, c := range conds {
-					medicalContext += fmt.Sprintf("  • %s\n", c)
+			// Get conditions via BFS with edge type
+			conditionIDs, err := u.graph.BfsWithEdgeType(ctx, personID, "HAS_CONDITION", 1, "")
+			if err == nil && len(conditionIDs) > 0 {
+				var condNames []string
+				for _, cid := range conditionIDs {
+					node, err := u.graph.GetNode(ctx, cid, "")
+					if err == nil {
+						if name, ok := node.Content["name"].(string); ok {
+							condNames = append(condNames, name)
+						}
+					}
 				}
-				hasNeo4jData = true
+				if len(condNames) > 0 {
+					medicalContext += "\nCondicoes de saude conhecidas:\n"
+					for _, c := range condNames {
+						medicalContext += fmt.Sprintf("  - %s\n", c)
+					}
+					hasGraphData = true
+				}
 			}
 
-			// Adicionar medicamentos do Neo4j apenas se não estiverem no Postgres
-			if meds, ok := medications.([]interface{}); ok && len(meds) > 0 {
-				medicalContext += "\n📋 Medicamentos (histórico GraphRAG):\n"
-				for _, m := range meds {
-					medicalContext += fmt.Sprintf("  • %s\n", m)
+			// Get medications via BFS with edge type
+			medIDs, err := u.graph.BfsWithEdgeType(ctx, personID, "TAKES_MEDICATION", 1, "")
+			if err == nil && len(medIDs) > 0 {
+				var medNames []string
+				for _, mid := range medIDs {
+					node, err := u.graph.GetNode(ctx, mid, "")
+					if err == nil {
+						if name, ok := node.Content["name"].(string); ok {
+							medNames = append(medNames, name)
+						}
+					}
 				}
-				hasNeo4jData = true
+				if len(medNames) > 0 {
+					medicalContext += "\nMedicamentos (historico GraphRAG):\n"
+					for _, m := range medNames {
+						medicalContext += fmt.Sprintf("  - %s\n", m)
+					}
+					hasGraphData = true
+				}
 			}
 
-			if symps, ok := symptoms.([]interface{}); ok && len(symps) > 0 {
-				medicalContext += "\n🩺 Sintomas recentes (última semana):\n"
-				for _, s := range symps {
-					medicalContext += fmt.Sprintf("  • %s\n", s)
+			// Get recent symptoms via BFS with edge type
+			symptomIDs, err := u.graph.BfsWithEdgeType(ctx, personID, "EXPERIENCED", 1, "")
+			if err == nil && len(symptomIDs) > 0 {
+				sevenDaysAgo := nietzscheInfra.DaysAgoUnix(7)
+				var symptomDescs []string
+				for _, sid := range symptomIDs {
+					node, err := u.graph.GetNode(ctx, sid, "")
+					if err == nil {
+						// Filter by timestamp (last 7 days)
+						if ts, ok := node.Content["timestamp"].(float64); ok && ts > sevenDaysAgo {
+							if desc, ok := node.Content["description"].(string); ok {
+								symptomDescs = append(symptomDescs, desc)
+							}
+						}
+					}
 				}
-				hasNeo4jData = true
+				if len(symptomDescs) > 0 {
+					medicalContext += "\nSintomas recentes (ultima semana):\n"
+					for _, s := range symptomDescs {
+						medicalContext += fmt.Sprintf("  - %s\n", s)
+					}
+					hasGraphData = true
+				}
 			}
 
-			if hasNeo4jData {
-				log.Printf("✅ [UnifiedRetrieval] Dados médicos do Neo4j incluídos")
+			if hasGraphData {
+				log.Printf("[UnifiedRetrieval] Dados medicos do NietzscheDB incluidos")
 			}
 		}
 	}

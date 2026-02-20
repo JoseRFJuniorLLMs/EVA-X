@@ -10,16 +10,14 @@ import (
 	"sort"
 	"strings"
 
-	"eva/internal/brainstem/infrastructure/vector"
-
-	"github.com/qdrant/go-client/qdrant"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 )
 
 // WisdomService busca sabedoria relevante em múltiplas coleções Qdrant
 // Implementa busca semântica para histórias, fábulas, ensinamentos, técnicas
 type WisdomService struct {
-	qdrant   *vector.QdrantClient
-	embedder *EmbeddingService
+	vectorAdapter *nietzscheInfra.VectorAdapter
+	embedder      *EmbeddingService
 }
 
 // WisdomResult representa um resultado de busca de sabedoria
@@ -32,14 +30,14 @@ type WisdomResult struct {
 	Type       string   `json:"type"`       // story, fable, teaching, exercise, koan
 	Moral      string   `json:"moral"`      // Para fábulas
 	Tags       []string `json:"tags"`
-	Score      float32  `json:"score"`      // Similaridade semântica
+	Score      float64  `json:"score"`      // Similaridade semântica
 	Collection string   `json:"collection"` // Coleção Qdrant de origem
 }
 
 // WisdomSearchOptions define opções de busca
 type WisdomSearchOptions struct {
 	Collections   []string // Coleções específicas para buscar (vazio = todas)
-	MinScore      float32  // Score mínimo de similaridade (default: 0.7)
+	MinScore      float64  // Score mínimo de similaridade (default: 0.7)
 	Limit         int      // Máximo de resultados (default: 5)
 	ExcludeSeen   []string // IDs já vistos/usados para evitar repetição
 	PreferTypes   []string // Tipos preferidos (story, exercise, teaching)
@@ -62,16 +60,16 @@ var WisdomCollections = []string{
 }
 
 // NewWisdomService cria um novo serviço de busca de sabedoria
-func NewWisdomService(qdrant *vector.QdrantClient, embedder *EmbeddingService) *WisdomService {
+func NewWisdomService(vectorAdapter *nietzscheInfra.VectorAdapter, embedder *EmbeddingService) *WisdomService {
 	return &WisdomService{
-		qdrant:   qdrant,
-		embedder: embedder,
+		vectorAdapter: vectorAdapter,
+		embedder:      embedder,
 	}
 }
 
 // SearchWisdom busca sabedoria relevante baseada no texto do usuário
 func (w *WisdomService) SearchWisdom(ctx context.Context, query string, opts *WisdomSearchOptions) ([]*WisdomResult, error) {
-	if w.qdrant == nil || w.embedder == nil {
+	if w.vectorAdapter == nil || w.embedder == nil {
 		return nil, fmt.Errorf("wisdom service not properly initialized")
 	}
 
@@ -152,7 +150,7 @@ func (w *WisdomService) SearchWisdom(ctx context.Context, query string, opts *Wi
 
 // searchCollection busca em uma coleção específica
 func (w *WisdomService) searchCollection(ctx context.Context, collection string, embedding []float32, limit int) ([]*WisdomResult, error) {
-	results, err := w.qdrant.Search(ctx, collection, embedding, uint64(limit), nil)
+	results, err := w.vectorAdapter.Search(ctx, collection, embedding, limit, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -164,28 +162,28 @@ func (w *WisdomService) searchCollection(ctx context.Context, collection string,
 		}
 
 		// Extrair payload
-		if id, ok := extractString(point.Payload, "id"); ok {
+		if id, ok := extractPayloadString(point.Payload, "id"); ok {
 			result.ID = id
 		}
-		if title, ok := extractString(point.Payload, "title"); ok {
+		if title, ok := extractPayloadString(point.Payload, "title"); ok {
 			result.Title = title
 		}
-		if content, ok := extractString(point.Payload, "content"); ok {
+		if content, ok := extractPayloadString(point.Payload, "content"); ok {
 			result.Content = content
 		}
-		if source, ok := extractString(point.Payload, "source"); ok {
+		if source, ok := extractPayloadString(point.Payload, "source"); ok {
 			result.Source = source
 		}
-		if tradition, ok := extractString(point.Payload, "tradition"); ok {
+		if tradition, ok := extractPayloadString(point.Payload, "tradition"); ok {
 			result.Tradition = tradition
 		}
-		if typeStr, ok := extractString(point.Payload, "type"); ok {
+		if typeStr, ok := extractPayloadString(point.Payload, "type"); ok {
 			result.Type = typeStr
 		}
-		if moral, ok := extractString(point.Payload, "moral"); ok {
+		if moral, ok := extractPayloadString(point.Payload, "moral"); ok {
 			result.Moral = moral
 		}
-		if tags, ok := extractStringList(point.Payload, "tags"); ok {
+		if tags, ok := extractPayloadStringList(point.Payload, "tags"); ok {
 			result.Tags = tags
 		}
 
@@ -195,26 +193,18 @@ func (w *WisdomService) searchCollection(ctx context.Context, collection string,
 	return wisdom, nil
 }
 
-// getAvailableCollections retorna coleções que existem no Qdrant
+// getAvailableCollections retorna coleções disponíveis
+// NietzscheDB manages collections internally; we return the full list
 func (w *WisdomService) getAvailableCollections(ctx context.Context) []string {
-	var available []string
-
-	for _, collection := range WisdomCollections {
-		_, err := w.qdrant.GetCollectionInfo(ctx, collection)
-		if err == nil {
-			available = append(available, collection)
-		}
-	}
-
-	return available
+	return WisdomCollections
 }
 
 // boostPreferredTypes reordena resultados dando preferência a certos tipos
 func (w *WisdomService) boostPreferredTypes(results []*WisdomResult, preferTypes []string) []*WisdomResult {
-	preferMap := make(map[string]float32)
+	preferMap := make(map[string]float64)
 	for i, t := range preferTypes {
 		// Boost decrescente: primeiro tipo +0.1, segundo +0.05, etc
-		preferMap[t] = 0.1 - float32(i)*0.025
+		preferMap[t] = 0.1 - float64(i)*0.025
 	}
 
 	for _, result := range results {
@@ -376,23 +366,23 @@ func (w *WisdomService) GetRandomWisdom(ctx context.Context, tradition string) (
 	return results[len(results)/2], nil
 }
 
-// Helpers para extrair valores do payload Qdrant
-func extractString(payload map[string]*qdrant.Value, key string) (string, bool) {
+// Helpers para extrair valores do payload
+func extractPayloadString(payload map[string]interface{}, key string) (string, bool) {
 	if val, ok := payload[key]; ok {
-		if str, ok := val.GetKind().(*qdrant.Value_StringValue); ok {
-			return str.StringValue, true
+		if str, ok := val.(string); ok {
+			return str, true
 		}
 	}
 	return "", false
 }
 
-func extractStringList(payload map[string]*qdrant.Value, key string) ([]string, bool) {
+func extractPayloadStringList(payload map[string]interface{}, key string) ([]string, bool) {
 	if val, ok := payload[key]; ok {
-		if list, ok := val.GetKind().(*qdrant.Value_ListValue); ok {
+		if list, ok := val.([]interface{}); ok {
 			var result []string
-			for _, v := range list.ListValue.Values {
-				if s, ok := v.GetKind().(*qdrant.Value_StringValue); ok {
-					result = append(result, s.StringValue)
+			for _, v := range list {
+				if s, ok := v.(string); ok {
+					result = append(result, s)
 				}
 			}
 			return result, true

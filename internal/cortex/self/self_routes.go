@@ -10,7 +10,6 @@ import (
 	"strconv"
 
 	"github.com/gorilla/mux"
-	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
 )
 
 // RegisterRoutes registra rotas HTTP para Core Memory
@@ -110,47 +109,33 @@ func getMemoriesHandler(engine *CoreMemoryEngine) http.HandlerFunc {
 			}
 		}
 
-		// Query Cypher — relação criada em recordMemory é REMEMBERS
-		query := `
-			MATCH (eva:EvaSelf)-[:REMEMBERS]->(mem:CoreMemory)
-		`
+		// NQL query — relação criada em recordMemory é REMEMBERS
+		nql := `MATCH (eva:EvaSelf)-[:REMEMBERS]->(mem:CoreMemory) RETURN mem`
 		if memoryType != "" {
-			query += fmt.Sprintf("WHERE mem.memory_type = '%s'\n", memoryType)
+			nql = fmt.Sprintf(
+				`MATCH (eva:EvaSelf)-[:REMEMBERS]->(mem:CoreMemory) WHERE mem.memory_type = '%s' RETURN mem`,
+				memoryType,
+			)
 		}
-		query += `
-			RETURN mem.id AS id,
-			       mem.content AS content,
-			       mem.memory_type AS type,
-			       mem.abstraction_level AS abstraction,
-			       mem.importance_weight AS importance,
-			       mem.reinforcement_count AS reinforcement,
-			       mem.created_at AS created_at
-			ORDER BY mem.reinforcement_count DESC, mem.created_at DESC
-			LIMIT $limit
-		`
 
-		session := engine.driver.NewSession(ctx, neo4j.SessionConfig{
-			AccessMode:   neo4j.AccessModeRead,
-			DatabaseName: engine.dbName,
-		})
-		defer session.Close(ctx)
-
-		result, err := session.Run(ctx, query, map[string]interface{}{"limit": limit})
+		records, err := engine.ExecuteReadQuery(ctx, nql, nil)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 
 		var memories []map[string]interface{}
-		for result.Next(ctx) {
-			record := result.Record()
+		for _, record := range records {
 			memory := make(map[string]interface{})
-			for _, key := range []string{"id", "content", "type", "abstraction", "importance", "reinforcement", "created_at"} {
-				if val, ok := record.Get(key); ok {
+			for _, key := range []string{"id", "content", "memory_type", "abstraction_level", "importance_weight", "reinforcement_count", "created_at"} {
+				if val, ok := record[key]; ok {
 					memory[key] = val
 				}
 			}
 			memories = append(memories, memory)
+			if len(memories) >= limit {
+				break
+			}
 		}
 
 		respondJSON(w, http.StatusOK, map[string]interface{}{
@@ -194,10 +179,10 @@ func searchMemoriesHandler(engine *CoreMemoryEngine) http.HandlerFunc {
 		// Converte para ExistingMemory
 		var memories []ExistingMemory
 		for _, record := range records {
-			id, _ := record.Get("id")
-			content, _ := record.Get("content")
-			embeddingRaw, _ := record.Get("embedding")
-			reinforcement, _ := record.Get("reinforcement")
+			id := record["id"]
+			content := record["content"]
+			embeddingRaw := record["embedding"]
+			reinforcement := record["reinforcement_count"]
 
 			// Converte embedding
 			var embedding []float32
@@ -209,11 +194,19 @@ func searchMemoriesHandler(engine *CoreMemoryEngine) http.HandlerFunc {
 				}
 			}
 
+			var reinforcementInt int
+			switch v := reinforcement.(type) {
+			case int64:
+				reinforcementInt = int(v)
+			case float64:
+				reinforcementInt = int(v)
+			}
+
 			memories = append(memories, ExistingMemory{
-				ID:                 id.(string),
-				Content:            content.(string),
+				ID:                 fmt.Sprintf("%v", id),
+				Content:            fmt.Sprintf("%v", content),
 				Embedding:          embedding,
-				ReinforcementCount: int(reinforcement.(int64)),
+				ReinforcementCount: reinforcementInt,
 			})
 		}
 
@@ -253,10 +246,19 @@ func getMemoryStatsHandler(engine *CoreMemoryEngine) http.HandlerFunc {
 		total := 0
 
 		for _, record := range records {
-			memType, _ := record.Get("type")
-			count, _ := record.Get("total")
-			stats[memType.(string)] = int(count.(int64))
-			total += int(count.(int64))
+			memType := record["memory_type"]
+			countVal := record["total"]
+
+			typeStr := fmt.Sprintf("%v", memType)
+			var countInt int
+			switch v := countVal.(type) {
+			case int64:
+				countInt = int(v)
+			case float64:
+				countInt = int(v)
+			}
+			stats[typeStr] = countInt
+			total += countInt
 		}
 
 		respondJSON(w, http.StatusOK, map[string]interface{}{
@@ -290,8 +292,8 @@ func getMetaInsightsHandler(engine *CoreMemoryEngine) http.HandlerFunc {
 		var insights []map[string]interface{}
 		for _, record := range records {
 			insight := make(map[string]interface{})
-			for _, key := range []string{"id", "content", "evidence", "confidence", "discovered_at"} {
-				if val, ok := record.Get(key); ok {
+			for _, key := range []string{"id", "content", "evidence_count", "confidence", "discovered_at"} {
+				if val, ok := record[key]; ok {
 					insight[key] = val
 				}
 			}
@@ -330,8 +332,8 @@ func getMetaInsightByIDHandler(engine *CoreMemoryEngine) http.HandlerFunc {
 		}
 
 		record := records[0]
-		insight, _ := record.Get("insight")
-		memories, _ := record.Get("supporting_memories")
+		insight := record
+		memories := record["supporting_memories"]
 
 		respondJSON(w, http.StatusOK, map[string]interface{}{
 			"insight":             insight,
@@ -434,10 +436,10 @@ func getDiversityScoreHandler(engine *CoreMemoryEngine) http.HandlerFunc {
 
 		var memories []ExistingMemory
 		for _, record := range records {
-			id, _ := record.Get("id")
-			content, _ := record.Get("content")
-			embeddingRaw, _ := record.Get("embedding")
-			reinforcement, _ := record.Get("reinforcement")
+			id := record["id"]
+			content := record["content"]
+			embeddingRaw := record["embedding"]
+			reinforcement := record["reinforcement_count"]
 
 			var embedding []float32
 			if embSlice, ok := embeddingRaw.([]interface{}); ok {
@@ -448,11 +450,19 @@ func getDiversityScoreHandler(engine *CoreMemoryEngine) http.HandlerFunc {
 				}
 			}
 
+			var reinforcementInt int
+			switch v := reinforcement.(type) {
+			case int64:
+				reinforcementInt = int(v)
+			case float64:
+				reinforcementInt = int(v)
+			}
+
 			memories = append(memories, ExistingMemory{
-				ID:                 id.(string),
-				Content:            content.(string),
+				ID:                 fmt.Sprintf("%v", id),
+				Content:            fmt.Sprintf("%v", content),
 				Embedding:          embedding,
-				ReinforcementCount: int(reinforcement.(int64)),
+				ReinforcementCount: reinforcementInt,
 			})
 		}
 

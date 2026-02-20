@@ -15,10 +15,9 @@ import (
 	"time"
 
 	"eva/internal/brainstem/config"
-	"eva/internal/brainstem/infrastructure/vector"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	"eva/internal/hippocampus/knowledge"
 
-	"github.com/qdrant/go-client/qdrant"
 	"github.com/rs/zerolog/log"
 )
 
@@ -52,23 +51,23 @@ type CurriculumItem struct {
 
 // AutonomousLearner motor de aprendizagem autonoma da EVA
 type AutonomousLearner struct {
-	db         *sql.DB
-	cfg        *config.Config
-	qdrant     *vector.QdrantClient
-	embedSvc   *knowledge.EmbeddingService
-	httpClient *http.Client
-	collection string
+	db            *sql.DB
+	cfg           *config.Config
+	vectorAdapter *nietzscheInfra.VectorAdapter
+	embedSvc      *knowledge.EmbeddingService
+	httpClient    *http.Client
+	collection    string
 }
 
 // NewAutonomousLearner cria um novo motor de aprendizagem
-func NewAutonomousLearner(db *sql.DB, cfg *config.Config, qdrant *vector.QdrantClient, embedSvc *knowledge.EmbeddingService) *AutonomousLearner {
+func NewAutonomousLearner(db *sql.DB, cfg *config.Config, vectorAdapter *nietzscheInfra.VectorAdapter, embedSvc *knowledge.EmbeddingService) *AutonomousLearner {
 	return &AutonomousLearner{
-		db:         db,
-		cfg:        cfg,
-		qdrant:     qdrant,
-		embedSvc:   embedSvc,
-		httpClient: &http.Client{Timeout: 60 * time.Second},
-		collection: "eva_learnings",
+		db:            db,
+		cfg:           cfg,
+		vectorAdapter: vectorAdapter,
+		embedSvc:      embedSvc,
+		httpClient:    &http.Client{Timeout: 60 * time.Second},
+		collection:    "eva_learnings",
 	}
 }
 
@@ -77,7 +76,7 @@ func (l *AutonomousLearner) Start(ctx context.Context) {
 	log.Info().Msg("📚 Autonomous Learner started (cycle: 6h)")
 
 	// Garantir que a collection existe
-	if l.qdrant != nil {
+	if l.vectorAdapter != nil {
 		l.ensureCollection(ctx)
 	}
 
@@ -103,16 +102,8 @@ func (l *AutonomousLearner) Start(ctx context.Context) {
 	}
 }
 
+// ensureCollection is a no-op - NietzscheDB handles collection management.
 func (l *AutonomousLearner) ensureCollection(ctx context.Context) {
-	_, err := l.qdrant.GetCollectionInfo(ctx, l.collection)
-	if err == nil {
-		return
-	}
-	if err := l.qdrant.CreateCollection(ctx, l.collection, 3072); err != nil {
-		log.Warn().Err(err).Msg("[LEARNER] Failed to create eva_learnings collection")
-	} else {
-		log.Info().Msg("📚 Created Qdrant collection: eva_learnings (3072-dim)")
-	}
 }
 
 func (l *AutonomousLearner) runCycle(ctx context.Context) {
@@ -166,7 +157,7 @@ func (l *AutonomousLearner) StudyTopic(ctx context.Context, topic string) ([]Lea
 	}
 
 	// 3. Armazenar no Qdrant
-	if l.qdrant != nil && l.embedSvc != nil {
+	if l.vectorAdapter != nil && l.embedSvc != nil {
 		if err := l.storeInsights(ctx, insights); err != nil {
 			log.Warn().Err(err).Msg("[LEARNER] Failed to store in Qdrant (insights still returned)")
 		}
@@ -332,7 +323,7 @@ CONTEUDO:
 	return insights, nil
 }
 
-// storeInsights armazena insights no Qdrant com embeddings
+// storeInsights armazena insights no NietzscheDB com embeddings
 func (l *AutonomousLearner) storeInsights(ctx context.Context, insights []LearningInsight) error {
 	for _, insight := range insights {
 		// Gerar embedding do conteudo combinado
@@ -343,7 +334,7 @@ func (l *AutonomousLearner) storeInsights(ctx context.Context, insights []Learni
 			continue
 		}
 
-		pointID := uint64(time.Now().UnixNano())
+		pointID := fmt.Sprintf("%d", time.Now().UnixNano())
 
 		tagsStr := strings.Join(insight.Tags, ",")
 		payload := map[string]interface{}{
@@ -357,8 +348,7 @@ func (l *AutonomousLearner) storeInsights(ctx context.Context, insights []Learni
 			"learned_at": insight.LearnedAt.Unix(),
 		}
 
-		point := vector.CreatePoint(pointID, embedding, payload)
-		if err := l.qdrant.Upsert(ctx, l.collection, []*qdrant.PointStruct{point}); err != nil {
+		if err := l.vectorAdapter.Upsert(ctx, l.collection, pointID, embedding, payload); err != nil {
 			log.Warn().Err(err).Str("title", insight.Title).Msg("[LEARNER] Failed to upsert point")
 			continue
 		}
@@ -372,7 +362,7 @@ func (l *AutonomousLearner) storeInsights(ctx context.Context, insights []Learni
 
 // SearchLearnings busca semanticamente no conhecimento aprendido
 func (l *AutonomousLearner) SearchLearnings(ctx context.Context, query string, limit int) ([]LearningInsight, error) {
-	if l.qdrant == nil || l.embedSvc == nil {
+	if l.vectorAdapter == nil || l.embedSvc == nil {
 		return nil, nil
 	}
 
@@ -381,7 +371,7 @@ func (l *AutonomousLearner) SearchLearnings(ctx context.Context, query string, l
 		return nil, err
 	}
 
-	results, err := l.qdrant.Search(ctx, l.collection, embedding, uint64(limit), nil)
+	results, err := l.vectorAdapter.Search(ctx, l.collection, embedding, limit, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -394,38 +384,41 @@ func (l *AutonomousLearner) SearchLearnings(ctx context.Context, query string, l
 
 		insight := LearningInsight{}
 		if v, ok := point.Payload["topic"]; ok {
-			if s, ok := v.GetKind().(*qdrant.Value_StringValue); ok {
-				insight.Topic = s.StringValue
+			if s, ok := v.(string); ok {
+				insight.Topic = s
 			}
 		}
 		if v, ok := point.Payload["title"]; ok {
-			if s, ok := v.GetKind().(*qdrant.Value_StringValue); ok {
-				insight.Title = s.StringValue
+			if s, ok := v.(string); ok {
+				insight.Title = s
 			}
 		}
 		if v, ok := point.Payload["summary"]; ok {
-			if s, ok := v.GetKind().(*qdrant.Value_StringValue); ok {
-				insight.Summary = s.StringValue
+			if s, ok := v.(string); ok {
+				insight.Summary = s
 			}
 		}
 		if v, ok := point.Payload["source"]; ok {
-			if s, ok := v.GetKind().(*qdrant.Value_StringValue); ok {
-				insight.Source = s.StringValue
+			if s, ok := v.(string); ok {
+				insight.Source = s
 			}
 		}
 		if v, ok := point.Payload["category"]; ok {
-			if s, ok := v.GetKind().(*qdrant.Value_StringValue); ok {
-				insight.Category = s.StringValue
+			if s, ok := v.(string); ok {
+				insight.Category = s
 			}
 		}
 		if v, ok := point.Payload["confidence"]; ok {
-			if d, ok := v.GetKind().(*qdrant.Value_DoubleValue); ok {
-				insight.Confidence = d.DoubleValue
+			if d, ok := v.(float64); ok {
+				insight.Confidence = d
 			}
 		}
 		if v, ok := point.Payload["learned_at"]; ok {
-			if i, ok := v.GetKind().(*qdrant.Value_IntegerValue); ok {
-				insight.LearnedAt = time.Unix(i.IntegerValue, 0)
+			switch ts := v.(type) {
+			case int64:
+				insight.LearnedAt = time.Unix(ts, 0)
+			case float64:
+				insight.LearnedAt = time.Unix(int64(ts), 0)
 			}
 		}
 
@@ -437,7 +430,7 @@ func (l *AutonomousLearner) SearchLearnings(ctx context.Context, query string, l
 
 // GetLearningContext monta contexto de conhecimento aprendido para injetar no prompt
 func (l *AutonomousLearner) GetLearningContext(ctx context.Context, query string) string {
-	if query == "" || l.qdrant == nil || l.embedSvc == nil {
+	if query == "" || l.vectorAdapter == nil || l.embedSvc == nil { //nolint:staticcheck
 		return ""
 	}
 

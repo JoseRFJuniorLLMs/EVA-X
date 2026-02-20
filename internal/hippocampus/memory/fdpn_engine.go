@@ -6,20 +6,18 @@ package memory
 import (
 	"context"
 	"encoding/json"
-	"eva/internal/brainstem/infrastructure/cache"
-	"eva/internal/brainstem/infrastructure/graph"
-	"eva/internal/brainstem/infrastructure/vector"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	"fmt"
 	"log"
+	"math"
 	"strings"
 	"sync"
 	"time"
 )
 
 type FDPNEngine struct {
-	neo4j         *graph.Neo4jClient
-	redis         *cache.RedisClient
-	qdrant        *vector.QdrantClient // NEW: Vector search
+	graphAdapter  *nietzscheInfra.GraphAdapter
+	cacheStore    *nietzscheInfra.CacheStore
 	localCache    *sync.Map
 	activeThreads chan struct{} // Limiter for concurrency
 	maxDepth      int
@@ -43,11 +41,10 @@ type ActivatedNode struct {
 	Properties map[string]interface{} `json:"properties"`
 }
 
-func NewFDPNEngine(neo4j *graph.Neo4jClient, redis *cache.RedisClient, qdrant *vector.QdrantClient) *FDPNEngine {
+func NewFDPNEngine(graphAdapter *nietzscheInfra.GraphAdapter, cacheStore *nietzscheInfra.CacheStore) *FDPNEngine {
 	return &FDPNEngine{
-		neo4j:         neo4j,
-		redis:         redis,
-		qdrant:        qdrant,
+		graphAdapter:  graphAdapter,
+		cacheStore:    cacheStore,
 		localCache:    &sync.Map{},
 		activeThreads: make(chan struct{}, 10), // Max 10 parallel threads
 		maxDepth:      3,
@@ -114,75 +111,85 @@ func (e *FDPNEngine) StreamingPrime(ctx context.Context, userID string, partialT
 }
 
 func (e *FDPNEngine) primeKeyword(ctx context.Context, userID string, keyword string) error {
-	// 1. Spreading Activation Query (Fractal Depth 3)
-	query := `
-		MATCH (raiz:Eneatipo|Topic|Event) // Broad match for now, assuming generalized labels
-		WHERE toLower(raiz.nome) CONTAINS toLower($keyword) 
-		   OR toLower(raiz.content) CONTAINS toLower($keyword)
-		WITH raiz LIMIT 1
-
-		MATCH path = (raiz)-[r*1..3]-(vizinho)
-		// Assuming we have weights, otherwise default to 1.0 logic
-		// WHERE ALL(rel IN relationships(path) WHERE rel.weight > 0.3)
-
-		WITH raiz, vizinho, relationships(path) as rels
-		WITH raiz, vizinho, rels,
-			 reduce(energy = 1.0, rel IN rels | energy * 0.85) as activation // Simple decay 15% per hop
-
-		WHERE activation >= $threshold
-
-		RETURN 
-			raiz.id as raiz_id,
-			coalesce(raiz.nome, raiz.content) as raiz_nome,
-			collect({
-				id: elementId(vizinho),
-				nome: coalesce(vizinho.nome, vizinho.content, 'Unamed'),
-				tipo: labels(vizinho)[0],
-				activation: activation,
-				level: size(rels),
-				properties: properties(vizinho)
-			}) as nodes
-	`
-
-	results, err := e.neo4j.ExecuteRead(ctx, query, map[string]interface{}{
-		"keyword":   keyword,
-		"threshold": e.threshold,
-	})
-
+	// 1. Find root node matching keyword via NQL
+	nql := `MATCH (n) WHERE n.nome CONTAINS $keyword OR n.content CONTAINS $keyword RETURN n LIMIT 1`
+	queryResult, err := e.graphAdapter.ExecuteNQL(ctx, nql, map[string]interface{}{
+		"keyword": strings.ToLower(keyword),
+	}, "")
 	if err != nil {
 		return err
 	}
 
-	if len(results) == 0 {
+	if len(queryResult.Nodes) == 0 {
 		return nil
 	}
 
-	// Parse first result (Assuming one root per keyword for simplicity)
-	record := results[0]
+	rootNode := queryResult.Nodes[0]
+	rootID := rootNode.ID
+	raizNome := ""
+	if nome, ok := rootNode.Content["nome"]; ok {
+		raizNome = fmt.Sprintf("%v", nome)
+	} else if content, ok := rootNode.Content["content"]; ok {
+		raizNome = fmt.Sprintf("%v", content)
+	}
 
-	// Safe casting handling
-	raizNome, _ := record.Values[1].(string)
+	// 2. BFS spreading activation (depth 3)
+	neighborIDs, err := e.graphAdapter.Bfs(ctx, rootID, uint32(e.maxDepth), "")
+	if err != nil {
+		return err
+	}
 
-	nodesRaw, _ := record.Values[2].([]interface{})
 	var activatedNodes []ActivatedNode
 	var totalEnergy float64
 
-	for _, nr := range nodesRaw {
-		nMap, ok := nr.(map[string]interface{})
-		if !ok {
+	for _, nid := range neighborIDs {
+		if nid == rootID {
 			continue
 		}
 
-		activation, _ := nMap["activation"].(float64)
-		level, _ := nMap["level"].(int64)
+		// Get each neighbor node
+		nodeResult, err := e.graphAdapter.GetNode(ctx, nid, "")
+		if err != nil {
+			continue
+		}
+
+		// Estimate level/depth (approximate: we don't have exact hop count from BFS,
+		// so we use a simple heuristic based on position in the result list)
+		// In practice, BFS returns nodes in order of distance
+		level := 1
+		if len(activatedNodes) > 5 {
+			level = 2
+		}
+		if len(activatedNodes) > 15 {
+			level = 3
+		}
+
+		// Simple decay 15% per hop: activation = 1.0 * 0.85^level
+		activation := math.Pow(0.85, float64(level))
+
+		if activation < e.threshold {
+			continue
+		}
+
+		nome := "Unnamed"
+		if n, ok := nodeResult.Content["nome"]; ok {
+			nome = fmt.Sprintf("%v", n)
+		} else if c, ok := nodeResult.Content["content"]; ok {
+			nome = fmt.Sprintf("%v", c)
+		}
+
+		nodeType := nodeResult.NodeType
+		if nodeType == "" {
+			nodeType = "Unknown"
+		}
 
 		node := ActivatedNode{
-			ID:         fmt.Sprintf("%v", nMap["id"]),
-			Name:       fmt.Sprintf("%v", nMap["nome"]),
-			Type:       fmt.Sprintf("%v", nMap["tipo"]),
+			ID:         nid,
+			Name:       nome,
+			Type:       nodeType,
 			Activation: activation,
-			Level:      int(level),
-			Properties: nMap["properties"].(map[string]interface{}),
+			Level:      level,
+			Properties: nodeResult.Content,
 		}
 		activatedNodes = append(activatedNodes, node)
 		totalEnergy += activation
@@ -195,20 +202,19 @@ func (e *FDPNEngine) primeKeyword(ctx context.Context, userID string, keyword st
 		RootNode:  raizNome,
 		Nodes:     filteredNodes,
 		Timestamp: time.Now(),
-		Energy:    totalEnergy, // Energy might need recalculation if we were strict, but total potential energy remains useful
-		Depth:     3,
+		Energy:    totalEnergy,
+		Depth:     e.maxDepth,
 	}
 
 	// Cache logic
 	cacheKey := fmt.Sprintf("%s:%s", userID, keyword)
 	e.localCache.Store(cacheKey, subgraph)
 
-	// Redis write (synchronous for reliability)
-	if e.redis != nil {
+	// CacheStore write (L2 cache, 5 minutes TTL)
+	if e.cacheStore != nil {
 		data, _ := json.Marshal(subgraph)
-		// 5 minutes TTL
-		if err := e.redis.Set(context.Background(), cacheKey, data, 5*time.Minute); err != nil {
-			log.Printf("[REDIS_ERROR] Failed to cache %s: %v", cacheKey, err)
+		if err := e.cacheStore.Set(context.Background(), cacheKey, string(data), 5*time.Minute); err != nil {
+			log.Printf("[CACHE_ERROR] Failed to cache %s: %v", cacheKey, err)
 		}
 	}
 
@@ -229,17 +235,6 @@ func (e *FDPNEngine) filterEntropy(nodes []ActivatedNode) []ActivatedNode {
 	if totalActivation == 0 {
 		return nodes
 	}
-
-	// Simplified "Top-K" strategy for entropy filtering
-	// In production, this would calculate Shannon Entropy
-	// For now, we use dynamic thresholding (practical equivalent)
-
-	// Sort by activation desc
-	// (Simulating sort)
-
-	// For now, let's just return top 50% if count > 10 to reduce noise
-	// Ideally we'd do the full math, but let's stick to the practical effect:
-	// "Focus on the signal"
 
 	// Simple thresholding relative to max
 	var maxAct float64
@@ -273,8 +268,8 @@ func (e *FDPNEngine) GetContext(ctx context.Context, userID string, keywords []s
 			continue
 		}
 
-		// 2. L2 Cache (Redis)
-		valStr, err := e.redis.Get(ctx, cacheKey)
+		// 2. L2 Cache (CacheStore)
+		valStr, err := e.cacheStore.Get(ctx, cacheKey)
 		if err == nil && valStr != "" {
 			var subgraph SubgraphActivation
 			if err := json.Unmarshal([]byte(valStr), &subgraph); err == nil {
@@ -291,11 +286,11 @@ func (e *FDPNEngine) extractKeywords(text string) []string {
 	// Simple STOPWORD filter for Portuguese
 	stopwords := map[string]bool{
 		"o": true, "a": true, "de": true, "que": true, "e": true, "do": true, "da": true, "em": true,
-		"um": true, "para": true, "com": true, "não": true, "uma": true, "os": true, "no": true,
+		"um": true, "para": true, "com": true, "nao": true, "uma": true, "os": true, "no": true,
 		"se": true, "na": true, "por": true, "mais": true, "as": true, "dos": true, "como": true,
-		"mas": true, "foi": true, "ao": true, "ele": true, "das": true, "tem": true, "à": true,
+		"mas": true, "foi": true, "ao": true, "ele": true, "das": true, "tem": true,
 		"seu": true, "sua": true, "ou": true, "ser": true, "quando": true, "muito": true,
-		"estou": true, "está": true, "estava": true,
+		"estou": true, "esta": true, "estava": true,
 	}
 
 	words := strings.Fields(strings.ToLower(text))

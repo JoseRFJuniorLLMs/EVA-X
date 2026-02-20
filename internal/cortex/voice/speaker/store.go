@@ -10,16 +10,15 @@ import (
 	"time"
 
 	"eva/internal/brainstem/database"
-	"eva/internal/brainstem/infrastructure/vector"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 
 	"github.com/google/uuid"
-	"github.com/qdrant/go-client/qdrant"
 	"github.com/rs/zerolog/log"
 )
 
 const (
-	qdrantCollection = "speaker_embeddings"
-	qdrantVectorSize = 192
+	speakerCollection = "speaker_embeddings"
+	speakerVectorSize = 192
 	matchThreshold   = 0.75
 )
 
@@ -49,43 +48,40 @@ type VocalFeatures struct {
 	DurationMs int
 }
 
-// SpeakerStore handles persistence of speaker profiles (PostgreSQL) and embeddings (Qdrant).
+// SpeakerStore handles persistence of speaker profiles (PostgreSQL) and embeddings (NietzscheDB).
 type SpeakerStore struct {
-	db     *database.DB
-	qdrant *vector.QdrantClient
+	db            *database.DB
+	vectorAdapter *nietzscheInfra.VectorAdapter
 }
 
 // NewSpeakerStore creates a new store.
-func NewSpeakerStore(db *database.DB, qdrant *vector.QdrantClient) *SpeakerStore {
-	return &SpeakerStore{db: db, qdrant: qdrant}
+func NewSpeakerStore(db *database.DB, vectorAdapter *nietzscheInfra.VectorAdapter) *SpeakerStore {
+	return &SpeakerStore{db: db, vectorAdapter: vectorAdapter}
 }
 
-// EnsureQdrantCollection creates the Qdrant collection if it doesn't exist.
+// EnsureQdrantCollection is a no-op - NietzscheDB handles collection management.
 func (s *SpeakerStore) EnsureQdrantCollection(ctx context.Context) error {
-	if s.qdrant == nil {
-		return nil
-	}
-	return s.qdrant.CreateCollection(ctx, qdrantCollection, qdrantVectorSize)
+	return nil
 }
 
 // FindSpeaker searches for a matching speaker by embedding similarity via Qdrant.
 // Returns the best matching profile, similarity score, and error.
 // Returns nil profile if no match above threshold.
 func (s *SpeakerStore) FindSpeaker(ctx context.Context, embedding []float32) (*SpeakerProfile, float64, error) {
-	if s.qdrant == nil {
-		return nil, 0, fmt.Errorf("qdrant not available")
+	if s.vectorAdapter == nil {
+		return nil, 0, fmt.Errorf("vector store not available")
 	}
 
-	results, err := s.qdrant.Search(ctx, qdrantCollection, embedding, 1, nil)
+	results, err := s.vectorAdapter.Search(ctx, speakerCollection, embedding, 1, 0)
 	if err != nil {
-		return nil, 0, fmt.Errorf("qdrant search failed: %w", err)
+		return nil, 0, fmt.Errorf("vector search failed: %w", err)
 	}
 
 	if len(results) == 0 {
 		return nil, 0, nil
 	}
 
-	score := float64(results[0].Score)
+	score := results[0].Score
 	if score < matchThreshold {
 		return nil, score, nil
 	}
@@ -93,7 +89,16 @@ func (s *SpeakerStore) FindSpeaker(ctx context.Context, embedding []float32) (*S
 	// Extract speaker_id from payload
 	payload := results[0].Payload
 	if spkVal, ok := payload["speaker_id"]; ok {
-		if intVal := spkVal.GetIntegerValue(); intVal > 0 {
+		var intVal int64
+		switch v := spkVal.(type) {
+		case int64:
+			intVal = v
+		case float64:
+			intVal = int64(v)
+		case int:
+			intVal = int64(v)
+		}
+		if intVal > 0 {
 			profile, err := s.GetProfileByID(ctx, int(intVal))
 			if err == nil {
 				return profile, score, nil
@@ -126,7 +131,7 @@ func (s *SpeakerStore) EnrollSpeaker(ctx context.Context, profile *SpeakerProfil
 	}
 
 	// Store embedding in Qdrant
-	if s.qdrant != nil {
+	if s.vectorAdapter != nil {
 		s.storeEmbeddingQdrant(ctx, id, embedding)
 	}
 
@@ -134,28 +139,17 @@ func (s *SpeakerStore) EnrollSpeaker(ctx context.Context, profile *SpeakerProfil
 	return id, nil
 }
 
-// storeEmbeddingQdrant stores an embedding in Qdrant.
+// storeEmbedding stores an embedding in NietzscheDB.
 func (s *SpeakerStore) storeEmbeddingQdrant(ctx context.Context, speakerID int, embedding []float32) {
 	pointID := uuid.New().String()
-	points := []*qdrant.PointStruct{
-		{
-			Id: &qdrant.PointId{
-				PointIdOptions: &qdrant.PointId_Uuid{Uuid: pointID},
-			},
-			Vectors: &qdrant.Vectors{
-				VectorsOptions: &qdrant.Vectors_Vector{
-					Vector: &qdrant.Vector{Data: embedding},
-				},
-			},
-			Payload: map[string]*qdrant.Value{
-				"speaker_id": {Kind: &qdrant.Value_IntegerValue{IntegerValue: int64(speakerID)}},
-			},
-		},
+
+	payload := map[string]interface{}{
+		"speaker_id": int64(speakerID),
 	}
 
-	err := s.qdrant.Upsert(ctx, qdrantCollection, points)
+	err := s.vectorAdapter.Upsert(ctx, speakerCollection, pointID, embedding, payload)
 	if err != nil {
-		log.Warn().Err(err).Int("speaker_id", speakerID).Msg("Failed to store embedding in Qdrant")
+		log.Warn().Err(err).Int("speaker_id", speakerID).Msg("Failed to store embedding")
 	}
 }
 

@@ -5,11 +5,12 @@ package knowledge
 
 import (
 	"context"
-	"eva/internal/brainstem/config"
-	"eva/internal/cortex/gemini"
-	"eva/internal/brainstem/infrastructure/redis"
 	"fmt"
 	"log"
+
+	"eva/internal/brainstem/config"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
+	"eva/internal/cortex/gemini"
 )
 
 type AudioAnalysisService struct {

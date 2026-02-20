@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"eva/internal/brainstem/config"
-	"eva/internal/brainstem/infrastructure/vector"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	"eva/internal/hippocampus/memory"
 	"fmt"
 	"log"
@@ -13,20 +13,19 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
-	"github.com/qdrant/go-client/qdrant"
 )
 
 // WisdomSource define uma fonte de sabedoria
 type WisdomSource struct {
 	Name       string // Nome para CLI
 	File       string // Caminho do arquivo
-	Collection string // Nome da coleção no Qdrant
-	Tradition  string // Tradição (sufi, quarto_caminho, zen, etc)
+	Collection string // Nome da colecao no NietzscheDB
+	Tradition  string // Tradicao (sufi, quarto_caminho, zen, etc)
 	Type       string // Tipo (teaching, story, exercise, poem, koan)
 	Tags       []string
 }
 
-// Todas as fontes de sabedoria disponíveis
+// Todas as fontes de sabedoria disponiveis
 var WisdomSources = []WisdomSource{
 	// Mestres do Criador
 	{
@@ -35,7 +34,7 @@ var WisdomSources = []WisdomSource{
 		Collection: "gurdjieff_teachings",
 		Tradition:  "quarto_caminho",
 		Type:       "teaching",
-		Tags:       []string{"auto-observação", "despertar", "trabalho", "consciência"},
+		Tags:       []string{"auto-observacao", "despertar", "trabalho", "consciencia"},
 	},
 	{
 		Name:       "osho",
@@ -43,7 +42,7 @@ var WisdomSources = []WisdomSource{
 		Collection: "osho_insights",
 		Tradition:  "osho",
 		Type:       "insight",
-		Tags:       []string{"testemunho", "meditação", "celebração", "provocação"},
+		Tags:       []string{"testemunho", "meditacao", "celebracao", "provocacao"},
 	},
 	{
 		Name:       "ouspensky",
@@ -51,7 +50,7 @@ var WisdomSources = []WisdomSource{
 		Collection: "ouspensky_fragments",
 		Tradition:  "quarto_caminho",
 		Type:       "teaching",
-		Tags:       []string{"máquina", "centros", "tipos", "desenvolvimento"},
+		Tags:       []string{"maquina", "centros", "tipos", "desenvolvimento"},
 	},
 	{
 		Name:       "nietzsche",
@@ -59,16 +58,16 @@ var WisdomSources = []WisdomSource{
 		Collection: "nietzsche_aphorisms",
 		Tradition:  "filosofia",
 		Type:       "aphorism",
-		Tags:       []string{"super-homem", "vontade", "força", "transvaloração"},
+		Tags:       []string{"super-homem", "vontade", "forca", "transvaloracao"},
 	},
-	// Tradições
+	// Tradicoes
 	{
 		Name:       "zen",
 		File:       "sabedoria/conhecimento/ZEN_KOANS.txt",
 		Collection: "zen_koans",
 		Tradition:  "zen",
 		Type:       "koan",
-		Tags:       []string{"paradoxo", "não-mente", "iluminação", "presente"},
+		Tags:       []string{"paradoxo", "nao-mente", "iluminacao", "presente"},
 	},
 	{
 		Name:       "rumi",
@@ -76,7 +75,7 @@ var WisdomSources = []WisdomSource{
 		Collection: "rumi_poems",
 		Tradition:  "sufi",
 		Type:       "poem",
-		Tags:       []string{"amor", "união", "divino", "coração"},
+		Tags:       []string{"amor", "uniao", "divino", "coracao"},
 	},
 	{
 		Name:       "estoicos",
@@ -84,16 +83,16 @@ var WisdomSources = []WisdomSource{
 		Collection: "stoic_meditations",
 		Tradition:  "estoica",
 		Type:       "meditation",
-		Tags:       []string{"aceitação", "controle", "virtude", "resiliência"},
+		Tags:       []string{"aceitacao", "controle", "virtude", "resiliencia"},
 	},
-	// Técnicas
+	// Tecnicas
 	{
 		Name:       "osho_med",
 		File:       "sabedoria/conhecimento/OSHO_MEDITATIONS.txt",
 		Collection: "osho_meditations",
 		Tradition:  "osho",
 		Type:       "meditation",
-		Tags:       []string{"ativa", "catarse", "energia", "silêncio"},
+		Tags:       []string{"ativa", "catarse", "energia", "silencio"},
 	},
 	{
 		Name:       "respiracao",
@@ -101,7 +100,7 @@ var WisdomSources = []WisdomSource{
 		Collection: "breathing_scripts",
 		Tradition:  "integrativa",
 		Type:       "exercise",
-		Tags:       []string{"respiração", "regulação", "calma", "energia"},
+		Tags:       []string{"respiracao", "regulacao", "calma", "energia"},
 	},
 	{
 		Name:       "hipnose",
@@ -109,15 +108,15 @@ var WisdomSources = []WisdomSource{
 		Collection: "hypnosis_scripts",
 		Tradition:  "hipnoterapia",
 		Type:       "script",
-		Tags:       []string{"autoindução", "relaxamento", "reprogramação", "transe"},
+		Tags:       []string{"autoinducao", "relaxamento", "reprogramacao", "transe"},
 	},
 	{
 		Name:       "somatico",
 		File:       "sabedoria/conhecimento/SOMATIC_EXERCISES.txt",
 		Collection: "somatic_exercises",
-		Tradition:  "somática",
+		Tradition:  "somatica",
 		Type:       "exercise",
-		Tags:       []string{"corpo", "grounding", "regulação", "trauma"},
+		Tags:       []string{"corpo", "grounding", "regulacao", "trauma"},
 	},
 	{
 		Name:       "gestalt",
@@ -133,7 +132,7 @@ var WisdomSources = []WisdomSource{
 		Collection: "wim_hof_protocols",
 		Tradition:  "wim_hof",
 		Type:       "protocol",
-		Tags:       []string{"respiração", "frio", "foco", "energia"},
+		Tags:       []string{"respiracao", "frio", "foco", "energia"},
 	},
 	// Psicologia
 	{
@@ -142,9 +141,9 @@ var WisdomSources = []WisdomSource{
 		Collection: "jung_archetypes",
 		Tradition:  "junguiana",
 		Type:       "concept",
-		Tags:       []string{"arquétipo", "sombra", "individuação", "inconsciente"},
+		Tags:       []string{"arquetipo", "sombra", "individuacao", "inconsciente"},
 	},
-	// Já existentes em docs/
+	// Ja existentes em docs/
 	{
 		Name:       "nasrudin",
 		File:       "sabedoria/nasrudin/NASRUDIN_STORIES.txt",
@@ -159,7 +158,7 @@ var WisdomSources = []WisdomSource{
 		Collection: "aesop_fables",
 		Tradition:  "grega",
 		Type:       "fable",
-		Tags:       []string{"moral", "animais", "lição", "fábula"},
+		Tags:       []string{"moral", "animais", "licao", "fabula"},
 	},
 }
 
@@ -167,9 +166,9 @@ func main() {
 	log.Println("🌱 EVA Wisdom Seeder - Base de Conhecimento (3072 dims)")
 	log.Println("═══════════════════════════════════════════════════════════")
 
-	// Carregar .env explicitamente (pode estar em diretório diferente com go run)
+	// Carregar .env explicitamente (pode estar em diretorio diferente com go run)
 	if err := godotenv.Load(); err != nil {
-		log.Printf("⚠️ Não encontrou .env no diretório atual, tentando caminhos alternativos...")
+		log.Printf("⚠️ Nao encontrou .env no diretorio atual, tentando caminhos alternativos...")
 		// Tenta caminhos comuns
 		paths := []string{".env", "../.env", "../../.env"}
 		loaded := false
@@ -181,13 +180,13 @@ func main() {
 			}
 		}
 		if !loaded {
-			log.Println("⚠️ .env não encontrado, usando variáveis de ambiente do sistema")
+			log.Println("⚠️ .env nao encontrado, usando variaveis de ambiente do sistema")
 		}
 	}
 
-	// Debug: mostrar diretório atual
+	// Debug: mostrar diretorio atual
 	cwd, _ := os.Getwd()
-	log.Printf("📂 Diretório atual: %s", cwd)
+	log.Printf("📂 Diretorio atual: %s", cwd)
 
 	// Carregar Config
 	cfg, err := config.Load()
@@ -205,21 +204,19 @@ func main() {
 		log.Fatal("❌ Nenhuma credencial encontrada (VERTEX_ACCESS_TOKEN ou GOOGLE_API_KEY)")
 	}
 
-	// Conectar Qdrant (usa config do .env)
-	qdrantHost := cfg.QdrantHost
-	qdrantPort := cfg.QdrantPort
-	if qdrantHost == "" {
-		qdrantHost = "localhost"
+	// Conectar NietzscheDB
+	nietzscheAddr := cfg.NietzscheGRPCAddr
+	if nietzscheAddr == "" {
+		nietzscheAddr = "localhost:50051"
 	}
-	if qdrantPort == 0 {
-		qdrantPort = 6333
-	}
-	log.Printf("🔌 Conectando ao Qdrant: %s:%d", qdrantHost, qdrantPort)
+	log.Printf("🔌 Conectando ao NietzscheDB: %s", nietzscheAddr)
 
-	qClient, err := vector.NewQdrantClient(qdrantHost, qdrantPort)
+	nietzscheClient, err := nietzscheInfra.NewClient(nietzscheAddr)
 	if err != nil {
-		log.Fatalf("❌ Erro ao conectar Qdrant: %v", err)
+		log.Fatalf("Failed to connect to NietzscheDB: %v", err)
 	}
+	defer nietzscheClient.Close()
+	vectorAdapter := nietzscheInfra.NewVectorAdapter(nietzscheClient)
 
 	// Criar embedder (detecta automaticamente Vertex AI ou API Key)
 	embedder := memory.NewEmbeddingServiceFromEnv()
@@ -235,17 +232,17 @@ func main() {
 
 	switch source {
 	case "all":
-		seedAll(ctx, qClient, embedder)
+		seedAll(ctx, nietzscheClient, vectorAdapter, embedder)
 	case "list":
 		listSources()
 	case "status":
-		checkStatus(ctx, qClient)
+		checkStatus(ctx, nietzscheClient)
 	default:
-		// Buscar fonte específica
+		// Buscar fonte especifica
 		found := false
 		for _, ws := range WisdomSources {
 			if ws.Name == source {
-				seedSource(ctx, qClient, embedder, ws)
+				seedSource(ctx, nietzscheClient, vectorAdapter, embedder, ws)
 				found = true
 				break
 			}
@@ -264,47 +261,57 @@ func printUsage() {
 	fmt.Println("\nUso: seed_wisdom <comando>")
 	fmt.Println("\nComandos:")
 	fmt.Println("  all      - Seed de todas as fontes")
-	fmt.Println("  list     - Lista todas as fontes disponíveis")
-	fmt.Println("  status   - Verifica status das coleções no Qdrant")
-	fmt.Println("  <fonte>  - Seed de uma fonte específica")
-	fmt.Println("\nFontes disponíveis:")
+	fmt.Println("  list     - Lista todas as fontes disponiveis")
+	fmt.Println("  status   - Verifica status das colecoes no NietzscheDB")
+	fmt.Println("  <fonte>  - Seed de uma fonte especifica")
+	fmt.Println("\nFontes disponiveis:")
 	for _, ws := range WisdomSources {
 		fmt.Printf("  %-12s → %s\n", ws.Name, ws.Collection)
 	}
 }
 
 func listSources() {
-	fmt.Println("\n📚 Fontes de Sabedoria Disponíveis")
+	fmt.Println("\n📚 Fontes de Sabedoria Disponiveis")
 	fmt.Println("═══════════════════════════════════════════════════════════")
-	fmt.Printf("%-12s │ %-25s │ %-15s │ %s\n", "NOME", "COLEÇÃO", "TRADIÇÃO", "ARQUIVO")
+	fmt.Printf("%-12s │ %-25s │ %-15s │ %s\n", "NOME", "COLECAO", "TRADICAO", "ARQUIVO")
 	fmt.Println("─────────────┼───────────────────────────┼─────────────────┼────────────────────────────────")
 	for _, ws := range WisdomSources {
 		fmt.Printf("%-12s │ %-25s │ %-15s │ %s\n", ws.Name, ws.Collection, ws.Tradition, ws.File)
 	}
 }
 
-func checkStatus(ctx context.Context, qClient *vector.QdrantClient) {
-	fmt.Println("\n📊 Status das Coleções no Qdrant")
+func checkStatus(ctx context.Context, client *nietzscheInfra.Client) {
+	fmt.Println("\n📊 Status das Colecoes no NietzscheDB")
 	fmt.Println("═══════════════════════════════════════════════════════════")
-	fmt.Printf("%-25s │ %s\n", "COLEÇÃO", "STATUS")
+	fmt.Printf("%-25s │ %s\n", "COLECAO", "STATUS")
 	fmt.Println("──────────────────────────┼────────────────────────────────")
 
 	for _, ws := range WisdomSources {
-		info, err := qClient.GetCollectionInfo(ctx, ws.Collection)
+		collections, err := client.ListCollections(ctx)
 		if err != nil {
-			fmt.Printf("%-25s │ ❌ Não existe\n", ws.Collection)
-		} else {
-			fmt.Printf("%-25s │ ✅ %d pontos\n", ws.Collection, info.PointsCount)
+			fmt.Printf("%-25s │ ❌ Erro ao listar colecoes\n", ws.Collection)
+			continue
+		}
+		found := false
+		for _, c := range collections {
+			if c.Name == ws.Collection {
+				fmt.Printf("%-25s │ ✅ Existe\n", ws.Collection)
+				found = true
+				break
+			}
+		}
+		if !found {
+			fmt.Printf("%-25s │ ❌ Nao existe\n", ws.Collection)
 		}
 	}
 }
 
-func seedAll(ctx context.Context, qClient *vector.QdrantClient, embedder *memory.EmbeddingService) {
+func seedAll(ctx context.Context, client *nietzscheInfra.Client, vectorAdapter *nietzscheInfra.VectorAdapter, embedder *memory.EmbeddingService) {
 	log.Println("🚀 Iniciando seed de TODAS as fontes...")
 	log.Println("")
 
 	for _, ws := range WisdomSources {
-		seedSource(ctx, qClient, embedder, ws)
+		seedSource(ctx, client, vectorAdapter, embedder, ws)
 		log.Println("")
 	}
 
@@ -312,7 +319,7 @@ func seedAll(ctx context.Context, qClient *vector.QdrantClient, embedder *memory
 	log.Println("🎉 Seed completo de todas as fontes!")
 }
 
-func seedSource(ctx context.Context, qClient *vector.QdrantClient, embedder *memory.EmbeddingService, ws WisdomSource) {
+func seedSource(ctx context.Context, client *nietzscheInfra.Client, vectorAdapter *nietzscheInfra.VectorAdapter, embedder *memory.EmbeddingService, ws WisdomSource) {
 	log.Printf("📖 [%s] Processando %s...", ws.Name, ws.File)
 
 	// Verificar se arquivo existe
@@ -322,11 +329,11 @@ func seedSource(ctx context.Context, qClient *vector.QdrantClient, embedder *mem
 		return
 	}
 
-	// Criar coleção com dimensão correta (768 para Vertex AI)
-	dim := uint64(embedder.GetExpectedDimension())
-	err = qClient.CreateCollection(ctx, ws.Collection, dim)
+	// Criar colecao com dimensao correta (3072 para Gemini embeddings)
+	dim := uint32(embedder.GetExpectedDimension())
+	err = client.EnsureCollection(ctx, ws.Collection, dim, "cosine")
 	if err != nil {
-		log.Printf("⚠️ [%s] Coleção já existe ou erro: %v", ws.Name, err)
+		log.Printf("⚠️ [%s] Colecao ja existe ou erro: %v", ws.Name, err)
 	}
 
 	// Parsear entradas (parser customizado por fonte)
@@ -347,7 +354,7 @@ func seedSource(ctx context.Context, qClient *vector.QdrantClient, embedder *mem
 	}
 
 	// Processar em batches
-	var points []*qdrant.PointStruct
+	var batch []nietzscheInfra.BatchVectorItem
 	batchSize := 10
 	totalProcessed := 0
 
@@ -364,36 +371,40 @@ func seedSource(ctx context.Context, qClient *vector.QdrantClient, embedder *mem
 			continue
 		}
 
-		point := createPoint(uint64(i+1), vec, map[string]interface{}{
+		payload := map[string]interface{}{
 			"id":        fmt.Sprintf("%s_%d", ws.Name, i+1),
 			"content":   entry,
 			"source":    ws.Name,
 			"tradition": ws.Tradition,
 			"type":      ws.Type,
 			"tags":      ws.Tags,
-		})
+		}
 
-		points = append(points, point)
+		batch = append(batch, nietzscheInfra.BatchVectorItem{
+			ID:      fmt.Sprintf("%s_%d", ws.Name, i+1),
+			Vector:  vec,
+			Payload: payload,
+		})
 		totalProcessed++
 
 		// Upsert em batches
-		if len(points) >= batchSize {
-			if err := qClient.Upsert(ctx, ws.Collection, points); err != nil {
+		if len(batch) >= batchSize {
+			if err := vectorAdapter.BatchUpsert(ctx, ws.Collection, batch); err != nil {
 				log.Printf("❌ [%s] Erro no upsert batch: %v", ws.Name, err)
 			} else {
-				log.Printf("✅ [%s] Batch: %d entradas (total: %d)", ws.Name, len(points), totalProcessed)
+				log.Printf("✅ [%s] Batch: %d entradas (total: %d)", ws.Name, len(batch), totalProcessed)
 			}
-			points = nil
+			batch = nil
 			time.Sleep(500 * time.Millisecond) // Rate limit
 		}
 	}
 
 	// Upsert restante
-	if len(points) > 0 {
-		if err := qClient.Upsert(ctx, ws.Collection, points); err != nil {
+	if len(batch) > 0 {
+		if err := vectorAdapter.BatchUpsert(ctx, ws.Collection, batch); err != nil {
 			log.Printf("❌ [%s] Erro no upsert final: %v", ws.Name, err)
 		} else {
-			log.Printf("✅ [%s] Batch final: %d entradas", ws.Name, len(points))
+			log.Printf("✅ [%s] Batch final: %d entradas", ws.Name, len(batch))
 		}
 	}
 
@@ -404,7 +415,7 @@ func seedSource(ctx context.Context, qClient *vector.QdrantClient, embedder *mem
 func parseEntries(content string) []string {
 	var entries []string
 
-	// Remove linhas de placeholder como "[... arquivo completo contém X entradas]"
+	// Remove linhas de placeholder como "[... arquivo completo contem X entradas]"
 	placeholderRe := regexp.MustCompile(`\[\.\.\..*?\]`)
 	content = placeholderRe.ReplaceAllString(content, "")
 
@@ -415,7 +426,7 @@ func parseEntries(content string) []string {
 	// Dividir por linhas
 	lines := strings.Split(content, "\n")
 
-	// Regex para detectar início de entrada numerada
+	// Regex para detectar inicio de entrada numerada
 	numRe := regexp.MustCompile(`^\s*(\d+)\.\s+(.+)`)
 
 	var currentEntry strings.Builder
@@ -424,7 +435,7 @@ func parseEntries(content string) []string {
 	for _, line := range lines {
 		line = strings.TrimRight(line, " \t\r")
 
-		// Verifica se é nova entrada numerada
+		// Verifica se e nova entrada numerada
 		if match := numRe.FindStringSubmatch(line); match != nil {
 			// Salvar entrada anterior se existir
 			if inEntry && currentEntry.Len() > 0 {
@@ -440,13 +451,13 @@ func parseEntries(content string) []string {
 			currentEntry.WriteString(match[2])
 			inEntry = true
 		} else if inEntry && len(line) > 0 {
-			// Continuar entrada atual (linha não vazia)
+			// Continuar entrada atual (linha nao vazia)
 			currentEntry.WriteString(" ")
 			currentEntry.WriteString(line)
 		}
 	}
 
-	// Salvar última entrada
+	// Salvar ultima entrada
 	if inEntry && currentEntry.Len() > 0 {
 		text := strings.TrimSpace(currentEntry.String())
 		text = regexp.MustCompile(`\s+`).ReplaceAllString(text, " ")
@@ -458,8 +469,8 @@ func parseEntries(content string) []string {
 	return entries
 }
 
-// parseNasrudinStories divide prosa contínua em chunks de ~350 palavras
-// O arquivo é texto corrido com single newlines, sem parágrafos claros
+// parseNasrudinStories divide prosa continua em chunks de ~350 palavras
+// O arquivo e texto corrido com single newlines, sem paragrafos claros
 func parseNasrudinStories(content string) []string {
 	var entries []string
 
@@ -468,7 +479,7 @@ func parseNasrudinStories(content string) []string {
 	content = regexp.MustCompile(`CAP[ÍI]TULO\s*\d+`).ReplaceAllString(content, "")
 	content = strings.ReplaceAll(content, "Mulla Nasrudin", "")
 
-	// Juntar tudo numa linha, colapsar espaços
+	// Juntar tudo numa linha, colapsar espacos
 	content = regexp.MustCompile(`[\n\t]+`).ReplaceAllString(content, " ")
 	content = regexp.MustCompile(`\s{2,}`).ReplaceAllString(content, " ")
 	content = strings.TrimSpace(content)
@@ -491,7 +502,7 @@ func parseNasrudinStories(content string) []string {
 	return entries
 }
 
-// parseAesopFables divide por "Fábula" seguido de numeral romano
+// parseAesopFables divide por "Fabula" seguido de numeral romano
 func parseAesopFables(content string) []string {
 	var entries []string
 
@@ -499,8 +510,8 @@ func parseAesopFables(content string) []string {
 	content = strings.ReplaceAll(content, "\r\n", "\n")
 	content = strings.ReplaceAll(content, "\r", "\n")
 
-	// Split por "Fábula" + espaço + romano (case insensitive para acentos)
-	// Usar split simples por "Fábula " que é mais robusto
+	// Split por "Fabula" + espaco + romano (case insensitive para acentos)
+	// Usar split simples por "Fabula " que e mais robusto
 	parts := regexp.MustCompile(`(?m)\nF[áa]bula\s+[IVXLCDM]+\s*\n`).Split(content, -1)
 
 	for _, part := range parts {
@@ -509,7 +520,7 @@ func parseAesopFables(content string) []string {
 			continue
 		}
 
-		// Remover códigos de referência (H1865, MW1919, etc.)
+		// Remover codigos de referencia (H1865, MW1919, etc.)
 		cleaned := regexp.MustCompile(`(?m)^[A-Z]+\d+\s*$`).ReplaceAllString(part, "")
 
 		// Colapsar whitespace e newlines
@@ -525,43 +536,4 @@ func parseAesopFables(content string) []string {
 	}
 
 	return entries
-}
-
-func createPoint(id uint64, vec []float32, payload map[string]interface{}) *qdrant.PointStruct {
-	point := &qdrant.PointStruct{
-		Id: &qdrant.PointId{
-			PointIdOptions: &qdrant.PointId_Num{Num: id},
-		},
-		Vectors: &qdrant.Vectors{
-			VectorsOptions: &qdrant.Vectors_Vector{Vector: &qdrant.Vector{Data: vec}},
-		},
-		Payload: make(map[string]*qdrant.Value),
-	}
-
-	for k, v := range payload {
-		point.Payload[k] = toQdrantValue(v)
-	}
-
-	return point
-}
-
-func toQdrantValue(v interface{}) *qdrant.Value {
-	switch val := v.(type) {
-	case string:
-		return &qdrant.Value{Kind: &qdrant.Value_StringValue{StringValue: val}}
-	case int:
-		return &qdrant.Value{Kind: &qdrant.Value_IntegerValue{IntegerValue: int64(val)}}
-	case int64:
-		return &qdrant.Value{Kind: &qdrant.Value_IntegerValue{IntegerValue: val}}
-	case float64:
-		return &qdrant.Value{Kind: &qdrant.Value_DoubleValue{DoubleValue: val}}
-	case []string:
-		list := &qdrant.ListValue{}
-		for _, s := range val {
-			list.Values = append(list.Values, &qdrant.Value{Kind: &qdrant.Value_StringValue{StringValue: s}})
-		}
-		return &qdrant.Value{Kind: &qdrant.Value_ListValue{ListValue: list}}
-	default:
-		return &qdrant.Value{Kind: &qdrant.Value_StringValue{StringValue: fmt.Sprintf("%v", val)}}
-	}
 }

@@ -8,8 +8,7 @@ import (
 	"database/sql"
 	"time"
 
-	"eva/internal/brainstem/infrastructure/graph"
-	"eva/internal/brainstem/infrastructure/vector"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	"eva/internal/hippocampus/memory"
 	"eva/internal/memory/consolidation"
 	"eva/internal/memory/krylov"
@@ -20,9 +19,9 @@ import (
 // MemoryOrchestrator integrates the full memory pipeline
 // Voice → FDPN → Krylov → Spectral → REM
 type MemoryOrchestrator struct {
-	db     *sql.DB
-	neo4j  *graph.Neo4jClient
-	qdrant *vector.QdrantClient
+	db            *sql.DB
+	graphAdapter  *nietzscheInfra.GraphAdapter  // NietzscheDB GraphAdapter (substitui Neo4j)
+	vectorAdapter *nietzscheInfra.VectorAdapter // NietzscheDB VectorAdapter (substitui Qdrant)
 
 	// Pipeline components
 	fdpnEngine      *memory.FDPNEngine
@@ -33,18 +32,18 @@ type MemoryOrchestrator struct {
 // NewMemoryOrchestrator creates a new memory orchestrator
 func NewMemoryOrchestrator(
 	db *sql.DB,
-	neo4j *graph.Neo4jClient,
-	qdrant *vector.QdrantClient,
+	graphAdapter *nietzscheInfra.GraphAdapter,
+	vectorAdapter *nietzscheInfra.VectorAdapter,
 	fdpn *memory.FDPNEngine,
 	krylovMgr *krylov.KrylovMemoryManager,
 ) *MemoryOrchestrator {
 	return &MemoryOrchestrator{
 		db:              db,
-		neo4j:           neo4j,
-		qdrant:          qdrant,
+		graphAdapter:    graphAdapter,
+		vectorAdapter:   vectorAdapter,
 		fdpnEngine:      fdpn,
 		krylovManager:   krylovMgr,
-		remConsolidator: consolidation.NewREMConsolidator(neo4j, krylovMgr),
+		remConsolidator: consolidation.NewREMConsolidator(graphAdapter, krylovMgr),
 	}
 }
 

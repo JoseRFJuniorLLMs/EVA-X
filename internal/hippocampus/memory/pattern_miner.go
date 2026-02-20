@@ -5,117 +5,168 @@ package memory
 
 import (
 	"context"
-	"eva/internal/brainstem/infrastructure/graph"
-	"eva/pkg/types"
 	"fmt"
+	"math"
+	"sort"
 	"time"
+
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
+	"eva/pkg/types"
 )
 
 type PatternMiner struct {
-	neo4j *graph.Neo4jClient
+	graphAdapter *nietzscheInfra.GraphAdapter
 }
 
 // Structs moved to pkg/types
 
-func NewPatternMiner(neo4j *graph.Neo4jClient) *PatternMiner {
-	return &PatternMiner{neo4j: neo4j}
+func NewPatternMiner(graphAdapter *nietzscheInfra.GraphAdapter) *PatternMiner {
+	return &PatternMiner{graphAdapter: graphAdapter}
 }
 
-// MineRecurrentPatterns identifica tópicos que aparecem múltiplas vezes
+// MineRecurrentPatterns identifica topicos que aparecem multiplas vezes
+// Rewritten from complex Cypher (reduce, collect, CASE WHEN) to Go loops.
 func (pm *PatternMiner) MineRecurrentPatterns(ctx context.Context, idosoID int64, minFrequency int) ([]*types.RecurrentPattern, error) {
-	query := `
-        MATCH (p:Person {id: $idosoId})-[:EXPERIENCED]->(e:Event)-[:RELATED_TO]->(t:Topic)
-        WITH t, e
-        ORDER BY e.timestamp
-        WITH t, 
-             count(e) as frequency,
-             collect(e.timestamp) as timestamps,
-             collect(e.emotion) as emotions,
-             collect(e.importance) as importances
-        WHERE frequency >= $minFrequency
-        
-        // Calcular intervalo médio entre ocorrências
-        WITH t, frequency, timestamps, emotions, importances,
-             [i IN range(0, size(timestamps)-2) | 
-              duration.between(timestamps[i], timestamps[i+1]).days] as intervals
-        
-        // Detectar tendência de severidade (importância crescente/decrescente)
-        WITH t, frequency, timestamps, emotions, importances, intervals,
-             [i IN range(0, size(importances)-2) | 
-              importances[i+1] - importances[i]] as severity_deltas
-        
-        RETURN 
-            t.name as topic,
-            frequency,
-            timestamps[0] as first_seen,
-            timestamps[size(timestamps)-1] as last_seen,
-            CASE 
-                WHEN size(intervals) > 0 THEN reduce(sum = 0.0, x IN intervals | sum + x) / size(intervals)
-                ELSE 0.0
-            END as avg_interval,
-            emotions,
-            CASE 
-                WHEN size(severity_deltas) > 0 AND (reduce(sum = 0.0, d IN severity_deltas | sum + d) / size(severity_deltas)) > 0.1 THEN 'increasing'
-                WHEN size(severity_deltas) > 0 AND (reduce(sum = 0.0, d IN severity_deltas | sum + d) / size(severity_deltas)) < -0.1 THEN 'decreasing'
-                ELSE 'stable'
-            END as severity_trend,
-            toFloat(frequency) / 10.0 as confidence
-    `
+	// 1. Find Person node
+	patientNodeID := fmt.Sprintf("%d", idosoID)
 
-	params := map[string]interface{}{
-		"idosoId":      idosoID,
-		"minFrequency": minFrequency,
-	}
-
-	records, err := pm.neo4j.ExecuteRead(ctx, query, params)
+	// 2. BFS from Person to find EXPERIENCED events (depth 1 for direct edges)
+	nql := `MATCH (p:Person)-[:EXPERIENCED]->(e:Event) WHERE p.id = $idosoId RETURN e`
+	eventsResult, err := pm.graphAdapter.ExecuteNQL(ctx, nql, map[string]interface{}{
+		"idosoId": idosoID,
+	}, "")
 	if err != nil {
-		return nil, fmt.Errorf("failed to mine patterns: %w", err)
+		return nil, fmt.Errorf("failed to query events: %w", err)
 	}
 
-	var patterns []*types.RecurrentPattern
+	// 3. For each event, find connected Topics
+	// Build a map: topic_name -> list of event data
+	type eventData struct {
+		timestamp  time.Time
+		emotion    string
+		importance float64
+	}
+	topicEvents := make(map[string][]eventData)
+	topicNodeIDs := make(map[string]string) // topic name -> node ID (for later use)
+	_ = patientNodeID // used for context
 
-	for _, record := range records {
-		topic, _ := record.Get("topic")
-		frequency, _ := record.Get("frequency")
-		firstSeen, _ := record.Get("first_seen")
-		lastSeen, _ := record.Get("last_seen")
-		avgInterval, _ := record.Get("avg_interval")
-		emotions, _ := record.Get("emotions")
-		severityTrend, _ := record.Get("severity_trend")
-		confidence, _ := record.Get("confidence")
+	for _, eventNode := range eventsResult.Nodes {
+		eventID := eventNode.ID
 
-		// Parse emotions (vem como []interface{})
-		emotionsList := []string{}
-		if emList, ok := emotions.([]interface{}); ok {
-			for _, em := range emList {
-				if emStr, ok := em.(string); ok {
-					emotionsList = append(emotionsList, emStr)
-				}
+		// Find topics connected to this event
+		topicNQL := `MATCH (e:Event)-[:RELATED_TO]->(t:Topic) WHERE e.id = $eventID RETURN t`
+		topicResult, err := pm.graphAdapter.ExecuteNQL(ctx, topicNQL, map[string]interface{}{
+			"eventID": eventID,
+		}, "")
+		if err != nil {
+			continue
+		}
+
+		// Extract event data
+		var ts time.Time
+		if v, ok := eventNode.Content["timestamp"]; ok {
+			if f, ok := v.(float64); ok {
+				ts = time.Unix(int64(f), 0)
+			}
+		}
+		emotion := ""
+		if v, ok := eventNode.Content["emotion"]; ok {
+			emotion = fmt.Sprintf("%v", v)
+		}
+		importance := 0.0
+		if v, ok := eventNode.Content["importance"]; ok {
+			switch iv := v.(type) {
+			case float64:
+				importance = iv
+			case int64:
+				importance = float64(iv)
+			case int:
+				importance = float64(iv)
 			}
 		}
 
-		var firstSeenTime, lastSeenTime time.Time
-		if t, ok := firstSeen.(time.Time); ok {
-			firstSeenTime = t
-		}
-		if t, ok := lastSeen.(time.Time); ok {
-			lastSeenTime = t
+		ed := eventData{
+			timestamp:  ts,
+			emotion:    emotion,
+			importance: importance,
 		}
 
-		var avgIntervalVal float64
-		if v, ok := avgInterval.(float64); ok {
-			avgIntervalVal = v
+		for _, topicNode := range topicResult.Nodes {
+			topicName := ""
+			if n, ok := topicNode.Content["name"]; ok {
+				topicName = fmt.Sprintf("%v", n)
+			}
+			if topicName == "" {
+				continue
+			}
+			topicEvents[topicName] = append(topicEvents[topicName], ed)
+			topicNodeIDs[topicName] = topicNode.ID
 		}
+	}
+
+	// 4. Filter by minFrequency and build patterns
+	var patterns []*types.RecurrentPattern
+
+	for topic, events := range topicEvents {
+		if len(events) < minFrequency {
+			continue
+		}
+
+		// Sort events by timestamp
+		sort.Slice(events, func(i, j int) bool {
+			return events[i].timestamp.Before(events[j].timestamp)
+		})
+
+		frequency := len(events)
+		firstSeen := events[0].timestamp
+		lastSeen := events[len(events)-1].timestamp
+
+		// Collect emotions
+		emotionsList := make([]string, 0, len(events))
+		for _, e := range events {
+			if e.emotion != "" {
+				emotionsList = append(emotionsList, e.emotion)
+			}
+		}
+
+		// Calculate average interval between occurrences (in days)
+		avgInterval := 0.0
+		if len(events) > 1 {
+			var totalDays float64
+			for i := 0; i < len(events)-1; i++ {
+				days := events[i+1].timestamp.Sub(events[i].timestamp).Hours() / 24
+				totalDays += days
+			}
+			avgInterval = totalDays / float64(len(events)-1)
+		}
+
+		// Calculate severity trend from importance deltas
+		severityTrend := "stable"
+		if len(events) > 1 {
+			var deltaSum float64
+			for i := 0; i < len(events)-1; i++ {
+				deltaSum += events[i+1].importance - events[i].importance
+			}
+			avgDelta := deltaSum / float64(len(events)-1)
+			if avgDelta > 0.1 {
+				severityTrend = "increasing"
+			} else if avgDelta < -0.1 {
+				severityTrend = "decreasing"
+			}
+		}
+
+		// Confidence: frequency / 10.0
+		confidence := math.Min(float64(frequency)/10.0, 1.0)
 
 		pattern := &types.RecurrentPattern{
-			Topic:         topic.(string),
-			Frequency:     int(frequency.(int64)),
-			FirstSeen:     firstSeenTime,
-			LastSeen:      lastSeenTime,
-			AvgInterval:   avgIntervalVal,
+			Topic:         topic,
+			Frequency:     frequency,
+			FirstSeen:     firstSeen,
+			LastSeen:      lastSeen,
+			AvgInterval:   avgInterval,
 			Emotions:      emotionsList,
-			SeverityTrend: severityTrend.(string),
-			Confidence:    confidence.(float64),
+			SeverityTrend: severityTrend,
+			Confidence:    confidence,
 		}
 
 		patterns = append(patterns, pattern)
@@ -124,110 +175,187 @@ func (pm *PatternMiner) MineRecurrentPatterns(ctx context.Context, idosoID int64
 	return patterns, nil
 }
 
-// MineTemporalPatterns identifica quando certos tópicos aparecem (hora do dia, dia da semana)
+// MineTemporalPatterns identifica quando certos topicos aparecem (hora do dia, dia da semana)
+// Rewritten from complex Cypher (CASE WHEN on timestamp fields) to Go loops.
 func (pm *PatternMiner) MineTemporalPatterns(ctx context.Context, idosoID int64) ([]*types.TemporalPattern, error) {
-	query := `
-        MATCH (p:Person {id: $idosoId})-[:EXPERIENCED]->(e:Event)-[:RELATED_TO]->(t:Topic)
-        WITH t, e,
-             CASE 
-                WHEN e.timestamp.hour >= 6 AND e.timestamp.hour < 12 THEN 'morning'
-                WHEN e.timestamp.hour >= 12 AND e.timestamp.hour < 18 THEN 'afternoon'
-                WHEN e.timestamp.hour >= 18 AND e.timestamp.hour < 22 THEN 'evening'
-                ELSE 'night'
-             END as time_of_day,
-             CASE 
-                WHEN e.timestamp.dayOfWeek IN [6, 7] THEN 'weekend'
-                ELSE 'weekday'
-             END as day_type
-        
-        WITH t.name as topic, time_of_day, day_type, count(*) as occurrences
-        WHERE occurrences >= 3
-        
-        RETURN topic, time_of_day, day_type, occurrences
-        ORDER BY occurrences DESC
-    `
-
-	params := map[string]interface{}{
+	// 1. Find events for this person
+	nql := `MATCH (p:Person)-[:EXPERIENCED]->(e:Event) WHERE p.id = $idosoId RETURN e`
+	eventsResult, err := pm.graphAdapter.ExecuteNQL(ctx, nql, map[string]interface{}{
 		"idosoId": idosoID,
-	}
-
-	records, err := pm.neo4j.ExecuteRead(ctx, query, params)
+	}, "")
 	if err != nil {
-		return nil, fmt.Errorf("failed to mine temporal patterns: %w", err)
+		return nil, fmt.Errorf("failed to query events: %w", err)
 	}
 
+	// 2. For each event, find topics and classify time
+	type temporalKey struct {
+		topic     string
+		timeOfDay string
+		dayType   string
+	}
+	counts := make(map[temporalKey]int)
+
+	for _, eventNode := range eventsResult.Nodes {
+		eventID := eventNode.ID
+
+		// Get timestamp
+		var ts time.Time
+		if v, ok := eventNode.Content["timestamp"]; ok {
+			if f, ok := v.(float64); ok {
+				ts = time.Unix(int64(f), 0)
+			}
+		}
+		if ts.IsZero() {
+			continue
+		}
+
+		// Classify time of day
+		hour := ts.Hour()
+		var timeOfDay string
+		switch {
+		case hour >= 6 && hour < 12:
+			timeOfDay = "morning"
+		case hour >= 12 && hour < 18:
+			timeOfDay = "afternoon"
+		case hour >= 18 && hour < 22:
+			timeOfDay = "evening"
+		default:
+			timeOfDay = "night"
+		}
+
+		// Classify day type
+		dayType := "weekday"
+		weekday := ts.Weekday()
+		if weekday == time.Saturday || weekday == time.Sunday {
+			dayType = "weekend"
+		}
+
+		// Find topics for this event
+		topicNQL := `MATCH (e:Event)-[:RELATED_TO]->(t:Topic) WHERE e.id = $eventID RETURN t`
+		topicResult, err := pm.graphAdapter.ExecuteNQL(ctx, topicNQL, map[string]interface{}{
+			"eventID": eventID,
+		}, "")
+		if err != nil {
+			continue
+		}
+
+		for _, topicNode := range topicResult.Nodes {
+			topicName := ""
+			if n, ok := topicNode.Content["name"]; ok {
+				topicName = fmt.Sprintf("%v", n)
+			}
+			if topicName == "" {
+				continue
+			}
+
+			key := temporalKey{
+				topic:     topicName,
+				timeOfDay: timeOfDay,
+				dayType:   dayType,
+			}
+			counts[key]++
+		}
+	}
+
+	// 3. Filter by minimum 3 occurrences and build patterns
 	var patterns []*types.TemporalPattern
 
-	for _, record := range records {
-		topic, _ := record.Get("topic")
-		timeOfDay, _ := record.Get("time_of_day")
-		dayType, _ := record.Get("day_type")
-		occurrences, _ := record.Get("occurrences")
+	for key, count := range counts {
+		if count < 3 {
+			continue
+		}
 
 		pattern := &types.TemporalPattern{
-			Topic:       topic.(string),
-			TimeOfDay:   timeOfDay.(string),
-			DayOfWeek:   dayType.(string),
-			Occurrences: int(occurrences.(int64)),
+			Topic:       key.topic,
+			TimeOfDay:   key.timeOfDay,
+			DayOfWeek:   key.dayType,
+			Occurrences: count,
 		}
 
 		patterns = append(patterns, pattern)
 	}
 
+	// Sort by occurrences desc
+	sort.Slice(patterns, func(i, j int) bool {
+		return patterns[i].Occurrences > patterns[j].Occurrences
+	})
+
 	return patterns, nil
 }
 
-// CreatePatternNodes materializa os padrões como nós no grafo
+// CreatePatternNodes materializa os padroes como nos no grafo
 func (pm *PatternMiner) CreatePatternNodes(ctx context.Context, idosoID int64) error {
-	patterns, err := pm.MineRecurrentPatterns(ctx, idosoID, 3) // mínimo 3 ocorrências
+	patterns, err := pm.MineRecurrentPatterns(ctx, idosoID, 3) // minimo 3 ocorrencias
 	if err != nil {
 		return err
 	}
 
-	for _, pattern := range patterns {
-		query := `
-            MATCH (p:Person {id: $idosoId})
-            MERGE (pat:Pattern {
-                person_id: $idosoId,
-                topic: $topic
-            })
-            ON CREATE SET 
-                pat.created = datetime(),
-                pat.frequency = $frequency,
-                pat.first_seen = datetime($firstSeen),
-                pat.last_seen = datetime($lastSeen),
-                pat.avg_interval_days = $avgInterval,
-                pat.severity_trend = $severityTrend,
-                pat.confidence = $confidence
-            ON MATCH SET
-                pat.updated = datetime(),
-                pat.frequency = $frequency,
-                pat.last_seen = datetime($lastSeen),
-                pat.avg_interval_days = $avgInterval,
-                pat.severity_trend = $severityTrend,
-                pat.confidence = $confidence
-            
-            MERGE (p)-[:HAS_PATTERN]->(pat)
-            
-            // Conectar ao tópico original
-            WITH pat
-            MATCH (t:Topic {name: $topic})
-            MERGE (pat)-[:REPRESENTS]->(t)
-        `
+	// Find/create person node
+	personResult, err := pm.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+		NodeType:  "Person",
+		MatchKeys: map[string]interface{}{"id": idosoID},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to merge Person node: %w", err)
+	}
+	personNodeID := personResult.NodeID
 
-		params := map[string]interface{}{
-			"idosoId":       idosoID,
-			"topic":         pattern.Topic,
-			"frequency":     pattern.Frequency,
-			"firstSeen":     pattern.FirstSeen.Format(time.RFC3339),
-			"lastSeen":      pattern.LastSeen.Format(time.RFC3339),
-			"avgInterval":   pattern.AvgInterval,
-			"severityTrend": pattern.SeverityTrend,
-			"confidence":    pattern.Confidence,
+	for _, pattern := range patterns {
+		// Merge Pattern node
+		patResult, err := pm.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+			NodeType: "Pattern",
+			MatchKeys: map[string]interface{}{
+				"person_id": idosoID,
+				"topic":     pattern.Topic,
+			},
+			OnCreateSet: map[string]interface{}{
+				"created":            nietzscheInfra.NowUnix(),
+				"frequency":          pattern.Frequency,
+				"first_seen":         float64(pattern.FirstSeen.Unix()),
+				"last_seen":          float64(pattern.LastSeen.Unix()),
+				"avg_interval_days":  pattern.AvgInterval,
+				"severity_trend":     pattern.SeverityTrend,
+				"confidence":         pattern.Confidence,
+			},
+			OnMatchSet: map[string]interface{}{
+				"updated":            nietzscheInfra.NowUnix(),
+				"frequency":          pattern.Frequency,
+				"last_seen":          float64(pattern.LastSeen.Unix()),
+				"avg_interval_days":  pattern.AvgInterval,
+				"severity_trend":     pattern.SeverityTrend,
+				"confidence":         pattern.Confidence,
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("failed to create pattern node: %w", err)
+		}
+		patternNodeID := patResult.NodeID
+
+		// Person -> HAS_PATTERN -> Pattern
+		_, err = pm.graphAdapter.MergeEdge(ctx, nietzscheInfra.MergeEdgeOpts{
+			FromNodeID: personNodeID,
+			ToNodeID:   patternNodeID,
+			EdgeType:   "HAS_PATTERN",
+		})
+		if err != nil {
+			return fmt.Errorf("failed to create HAS_PATTERN edge: %w", err)
 		}
 
-		if _, err := pm.neo4j.ExecuteWrite(ctx, query, params); err != nil {
-			return fmt.Errorf("failed to create pattern node: %w", err)
+		// Pattern -> REPRESENTS -> Topic (find topic node first)
+		topicNQL := `MATCH (t:Topic) WHERE t.name = $topic RETURN t LIMIT 1`
+		topicResult, err := pm.graphAdapter.ExecuteNQL(ctx, topicNQL, map[string]interface{}{
+			"topic": pattern.Topic,
+		}, "")
+		if err == nil && len(topicResult.Nodes) > 0 {
+			topicNodeID := topicResult.Nodes[0].ID
+			_, err = pm.graphAdapter.MergeEdge(ctx, nietzscheInfra.MergeEdgeOpts{
+				FromNodeID: patternNodeID,
+				ToNodeID:   topicNodeID,
+				EdgeType:   "REPRESENTS",
+			})
+			if err != nil {
+				return fmt.Errorf("failed to create REPRESENTS edge: %w", err)
+			}
 		}
 	}
 

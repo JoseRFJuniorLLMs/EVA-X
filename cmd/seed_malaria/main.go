@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"eva/internal/brainstem/config"
-	"eva/internal/brainstem/infrastructure/vector"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	"eva/internal/hippocampus/memory"
 	"fmt"
 	"log"
@@ -13,10 +13,9 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
-	"github.com/qdrant/go-client/qdrant"
 )
 
-// MalariaSource define uma fonte de conhecimento sobre malária
+// MalariaSource define uma fonte de conhecimento sobre malaria
 type MalariaSource struct {
 	Name       string
 	File       string
@@ -25,35 +24,35 @@ type MalariaSource struct {
 	Tags       []string
 }
 
-// Fontes de conhecimento sobre malária
+// Fontes de conhecimento sobre malaria
 var MalariaSources = []MalariaSource{
 	{
 		Name:       "global",
 		File:       "sabedoria/conhecimento/MALARIA_GLOBAL.txt",
 		Collection: "malaria_global",
 		Category:   "epidemiologia_global",
-		Tags:       []string{"malária", "epidemiologia", "tratamento", "prevenção", "vacinas", "OMS", "global"},
+		Tags:       []string{"malaria", "epidemiologia", "tratamento", "prevencao", "vacinas", "OMS", "global"},
 	},
 	{
 		Name:       "africa",
 		File:       "sabedoria/conhecimento/MALARIA_AFRICA.txt",
 		Collection: "malaria_africa",
-		Category:   "malária_africa",
-		Tags:       []string{"malária", "áfrica", "subsaariana", "epidemiologia", "vacinas", "ITN", "SMC"},
+		Category:   "malaria_africa",
+		Tags:       []string{"malaria", "africa", "subsaariana", "epidemiologia", "vacinas", "ITN", "SMC"},
 	},
 	{
 		Name:       "angola",
 		File:       "sabedoria/conhecimento/MALARIA_ANGOLA.txt",
 		Collection: "malaria_angola",
-		Category:   "malária_angola",
-		Tags:       []string{"malária", "angola", "luanda", "províncias", "PNCM", "PMI", "Global Fund"},
+		Category:   "malaria_angola",
+		Tags:       []string{"malaria", "angola", "luanda", "provincias", "PNCM", "PMI", "Global Fund"},
 	},
 }
 
 func main() {
 	log.Println("🦟 EVA Malaria Knowledge Seeder")
 	log.Println("═══════════════════════════════════════════════════════════")
-	log.Println("⚠️  ACESSO RESTRITO: Estas coleções são filtradas por CPF")
+	log.Println("⚠️  ACESSO RESTRITO: Estas colecoes sao filtradas por CPF")
 	log.Println("═══════════════════════════════════════════════════════════")
 
 	// Carregar .env
@@ -68,12 +67,12 @@ func main() {
 			}
 		}
 		if !loaded {
-			log.Println("⚠️ .env não encontrado, usando variáveis de ambiente do sistema")
+			log.Println("⚠️ .env nao encontrado, usando variaveis de ambiente do sistema")
 		}
 	}
 
 	cwd, _ := os.Getwd()
-	log.Printf("📂 Diretório atual: %s", cwd)
+	log.Printf("📂 Diretorio atual: %s", cwd)
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -90,21 +89,19 @@ func main() {
 		log.Fatal("❌ Nenhuma credencial encontrada (VERTEX_ACCESS_TOKEN ou GOOGLE_API_KEY)")
 	}
 
-	// Conectar Qdrant
-	qdrantHost := cfg.QdrantHost
-	qdrantPort := cfg.QdrantPort
-	if qdrantHost == "" {
-		qdrantHost = "localhost"
+	// Conectar NietzscheDB
+	nietzscheAddr := cfg.NietzscheGRPCAddr
+	if nietzscheAddr == "" {
+		nietzscheAddr = "localhost:50051"
 	}
-	if qdrantPort == 0 {
-		qdrantPort = 6333
-	}
-	log.Printf("🔌 Conectando ao Qdrant: %s:%d", qdrantHost, qdrantPort)
+	log.Printf("🔌 Conectando ao NietzscheDB: %s", nietzscheAddr)
 
-	qClient, err := vector.NewQdrantClient(qdrantHost, qdrantPort)
+	nietzscheClient, err := nietzscheInfra.NewClient(nietzscheAddr)
 	if err != nil {
-		log.Fatalf("❌ Erro ao conectar Qdrant: %v", err)
+		log.Fatalf("Failed to connect to NietzscheDB: %v", err)
 	}
+	defer nietzscheClient.Close()
+	vectorAdapter := nietzscheInfra.NewVectorAdapter(nietzscheClient)
 
 	embedder := memory.NewEmbeddingServiceFromEnv()
 	ctx := context.Background()
@@ -119,16 +116,16 @@ func main() {
 
 	switch source {
 	case "all":
-		seedAll(ctx, qClient, embedder)
+		seedAll(ctx, nietzscheClient, vectorAdapter, embedder)
 	case "list":
 		listSources()
 	case "status":
-		checkStatus(ctx, qClient)
+		checkStatus(ctx, nietzscheClient)
 	default:
 		found := false
 		for _, ms := range MalariaSources {
 			if ms.Name == source {
-				seedSource(ctx, qClient, embedder, ms)
+				seedSource(ctx, nietzscheClient, vectorAdapter, embedder, ms)
 				found = true
 				break
 			}
@@ -146,59 +143,69 @@ func printUsage() {
 	fmt.Println("════════════════════════════════")
 	fmt.Println("\nUso: seed_malaria <comando>")
 	fmt.Println("\nComandos:")
-	fmt.Println("  all      - Seed de todas as fontes de malária")
-	fmt.Println("  list     - Lista todas as fontes disponíveis")
-	fmt.Println("  status   - Verifica status das coleções no Qdrant")
-	fmt.Println("  <fonte>  - Seed de uma fonte específica")
-	fmt.Println("\nFontes disponíveis:")
+	fmt.Println("  all      - Seed de todas as fontes de malaria")
+	fmt.Println("  list     - Lista todas as fontes disponiveis")
+	fmt.Println("  status   - Verifica status das colecoes no NietzscheDB")
+	fmt.Println("  <fonte>  - Seed de uma fonte especifica")
+	fmt.Println("\nFontes disponiveis:")
 	for _, ms := range MalariaSources {
 		fmt.Printf("  %-12s → %s\n", ms.Name, ms.Collection)
 	}
-	fmt.Println("\n⚠️  NOTA: Estas coleções só são acessíveis via CPF autorizado")
+	fmt.Println("\n⚠️  NOTA: Estas colecoes so sao acessiveis via CPF autorizado")
 }
 
 func listSources() {
-	fmt.Println("\n🦟 Fontes de Conhecimento sobre Malária")
+	fmt.Println("\n🦟 Fontes de Conhecimento sobre Malaria")
 	fmt.Println("═══════════════════════════════════════════════════════════")
-	fmt.Printf("%-12s │ %-20s │ %-25s │ %s\n", "NOME", "COLEÇÃO", "CATEGORIA", "ARQUIVO")
+	fmt.Printf("%-12s │ %-20s │ %-25s │ %s\n", "NOME", "COLECAO", "CATEGORIA", "ARQUIVO")
 	fmt.Println("─────────────┼──────────────────────┼───────────────────────────┼─────────────────────────────────────")
 	for _, ms := range MalariaSources {
 		fmt.Printf("%-12s │ %-20s │ %-25s │ %s\n", ms.Name, ms.Collection, ms.Category, ms.File)
 	}
 }
 
-func checkStatus(ctx context.Context, qClient *vector.QdrantClient) {
-	fmt.Println("\n📊 Status das Coleções de Malária no Qdrant")
+func checkStatus(ctx context.Context, client *nietzscheInfra.Client) {
+	fmt.Println("\n📊 Status das Colecoes de Malaria no NietzscheDB")
 	fmt.Println("═══════════════════════════════════════════════════════════")
-	fmt.Printf("%-20s │ %s\n", "COLEÇÃO", "STATUS")
+	fmt.Printf("%-20s │ %s\n", "COLECAO", "STATUS")
 	fmt.Println("─────────────────────┼────────────────────────────────")
 
 	for _, ms := range MalariaSources {
-		info, err := qClient.GetCollectionInfo(ctx, ms.Collection)
+		collections, err := client.ListCollections(ctx)
 		if err != nil {
-			fmt.Printf("%-20s │ ❌ Não existe\n", ms.Collection)
-		} else {
-			fmt.Printf("%-20s │ ✅ %d pontos\n", ms.Collection, info.PointsCount)
+			fmt.Printf("%-20s │ ❌ Erro ao listar colecoes\n", ms.Collection)
+			continue
+		}
+		found := false
+		for _, c := range collections {
+			if c.Name == ms.Collection {
+				fmt.Printf("%-20s │ ✅ Existe\n", ms.Collection)
+				found = true
+				break
+			}
+		}
+		if !found {
+			fmt.Printf("%-20s │ ❌ Nao existe\n", ms.Collection)
 		}
 	}
 }
 
-func seedAll(ctx context.Context, qClient *vector.QdrantClient, embedder *memory.EmbeddingService) {
-	log.Println("🚀 Iniciando seed de TODAS as fontes de malária...")
+func seedAll(ctx context.Context, client *nietzscheInfra.Client, vectorAdapter *nietzscheInfra.VectorAdapter, embedder *memory.EmbeddingService) {
+	log.Println("🚀 Iniciando seed de TODAS as fontes de malaria...")
 	log.Println("")
 
 	totalEntries := 0
 	for _, ms := range MalariaSources {
-		n := seedSource(ctx, qClient, embedder, ms)
+		n := seedSource(ctx, client, vectorAdapter, embedder, ms)
 		totalEntries += n
 		log.Println("")
 	}
 
 	log.Println("═══════════════════════════════════════════════════════════")
-	log.Printf("🎉 Seed completo! Total: %d entradas em %d coleções", totalEntries, len(MalariaSources))
+	log.Printf("🎉 Seed completo! Total: %d entradas em %d colecoes", totalEntries, len(MalariaSources))
 }
 
-func seedSource(ctx context.Context, qClient *vector.QdrantClient, embedder *memory.EmbeddingService, ms MalariaSource) int {
+func seedSource(ctx context.Context, client *nietzscheInfra.Client, vectorAdapter *nietzscheInfra.VectorAdapter, embedder *memory.EmbeddingService, ms MalariaSource) int {
 	log.Printf("🦟 [%s] Processando %s...", ms.Name, ms.File)
 
 	content, err := os.ReadFile(ms.File)
@@ -207,11 +214,11 @@ func seedSource(ctx context.Context, qClient *vector.QdrantClient, embedder *mem
 		return 0
 	}
 
-	// Criar coleção
-	dim := uint64(embedder.GetExpectedDimension())
-	err = qClient.CreateCollection(ctx, ms.Collection, dim)
+	// Criar colecao
+	dim := uint32(embedder.GetExpectedDimension())
+	err = client.EnsureCollection(ctx, ms.Collection, dim, "cosine")
 	if err != nil {
-		log.Printf("⚠️ [%s] Coleção já existe ou erro: %v", ms.Name, err)
+		log.Printf("⚠️ [%s] Colecao ja existe ou erro: %v", ms.Name, err)
 	}
 
 	// Parsear entradas numeradas
@@ -224,7 +231,7 @@ func seedSource(ctx context.Context, qClient *vector.QdrantClient, embedder *mem
 	}
 
 	// Processar em batches
-	var points []*qdrant.PointStruct
+	var batch []nietzscheInfra.BatchVectorItem
 	batchSize := 5 // Menor batch por entrada grande
 	totalProcessed := 0
 
@@ -234,7 +241,7 @@ func seedSource(ctx context.Context, qClient *vector.QdrantClient, embedder *mem
 		}
 
 		// Gerar embedding com contexto
-		textToEmbed := fmt.Sprintf("malária %s: %s", ms.Category, entry.content)
+		textToEmbed := fmt.Sprintf("malaria %s: %s", ms.Category, entry.content)
 		vec, err := embedder.GenerateEmbedding(ctx, textToEmbed)
 		if err != nil {
 			log.Printf("⚠️ [%s] Erro embedding entrada %d: %v", ms.Name, i+1, err)
@@ -242,7 +249,7 @@ func seedSource(ctx context.Context, qClient *vector.QdrantClient, embedder *mem
 			continue
 		}
 
-		point := createPoint(uint64(i+1), vec, map[string]interface{}{
+		payload := map[string]interface{}{
 			"id":       fmt.Sprintf("malaria_%s_%d", ms.Name, i+1),
 			"title":    entry.title,
 			"content":  entry.content,
@@ -250,29 +257,33 @@ func seedSource(ctx context.Context, qClient *vector.QdrantClient, embedder *mem
 			"category": ms.Category,
 			"type":     "knowledge",
 			"tags":     ms.Tags,
-		})
+		}
 
-		points = append(points, point)
+		batch = append(batch, nietzscheInfra.BatchVectorItem{
+			ID:      fmt.Sprintf("malaria_%s_%d", ms.Name, i+1),
+			Vector:  vec,
+			Payload: payload,
+		})
 		totalProcessed++
 
 		// Upsert em batches
-		if len(points) >= batchSize {
-			if err := qClient.Upsert(ctx, ms.Collection, points); err != nil {
+		if len(batch) >= batchSize {
+			if err := vectorAdapter.BatchUpsert(ctx, ms.Collection, batch); err != nil {
 				log.Printf("❌ [%s] Erro no upsert batch: %v", ms.Name, err)
 			} else {
-				log.Printf("✅ [%s] Batch: %d entradas (total: %d/%d)", ms.Name, len(points), totalProcessed, len(entries))
+				log.Printf("✅ [%s] Batch: %d entradas (total: %d/%d)", ms.Name, len(batch), totalProcessed, len(entries))
 			}
-			points = nil
+			batch = nil
 			time.Sleep(500 * time.Millisecond) // Rate limit
 		}
 	}
 
 	// Upsert restante
-	if len(points) > 0 {
-		if err := qClient.Upsert(ctx, ms.Collection, points); err != nil {
+	if len(batch) > 0 {
+		if err := vectorAdapter.BatchUpsert(ctx, ms.Collection, batch); err != nil {
 			log.Printf("❌ [%s] Erro no upsert final: %v", ms.Name, err)
 		} else {
-			log.Printf("✅ [%s] Batch final: %d entradas", ms.Name, len(points))
+			log.Printf("✅ [%s] Batch final: %d entradas", ms.Name, len(batch))
 		}
 	}
 
@@ -285,7 +296,7 @@ type parsedEntry struct {
 	content string
 }
 
-// parseNumberedEntries extrai entradas numeradas com título
+// parseNumberedEntries extrai entradas numeradas com titulo
 func parseNumberedEntries(content string) []parsedEntry {
 	var entries []parsedEntry
 
@@ -315,49 +326,10 @@ func parseNumberedEntries(content string) []parsedEntry {
 		}
 	}
 
-	// Última entrada
+	// Ultima entrada
 	if currentEntry != nil && len(currentEntry.content) >= 20 {
 		entries = append(entries, *currentEntry)
 	}
 
 	return entries
-}
-
-func createPoint(id uint64, vec []float32, payload map[string]interface{}) *qdrant.PointStruct {
-	point := &qdrant.PointStruct{
-		Id: &qdrant.PointId{
-			PointIdOptions: &qdrant.PointId_Num{Num: id},
-		},
-		Vectors: &qdrant.Vectors{
-			VectorsOptions: &qdrant.Vectors_Vector{Vector: &qdrant.Vector{Data: vec}},
-		},
-		Payload: make(map[string]*qdrant.Value),
-	}
-
-	for k, v := range payload {
-		point.Payload[k] = toQdrantValue(v)
-	}
-
-	return point
-}
-
-func toQdrantValue(v interface{}) *qdrant.Value {
-	switch val := v.(type) {
-	case string:
-		return &qdrant.Value{Kind: &qdrant.Value_StringValue{StringValue: val}}
-	case int:
-		return &qdrant.Value{Kind: &qdrant.Value_IntegerValue{IntegerValue: int64(val)}}
-	case int64:
-		return &qdrant.Value{Kind: &qdrant.Value_IntegerValue{IntegerValue: val}}
-	case float64:
-		return &qdrant.Value{Kind: &qdrant.Value_DoubleValue{DoubleValue: val}}
-	case []string:
-		list := &qdrant.ListValue{}
-		for _, s := range val {
-			list.Values = append(list.Values, &qdrant.Value{Kind: &qdrant.Value_StringValue{StringValue: s}})
-		}
-		return &qdrant.Value{Kind: &qdrant.Value_ListValue{ListValue: list}}
-	default:
-		return &qdrant.Value{Kind: &qdrant.Value_StringValue{StringValue: fmt.Sprintf("%v", val)}}
-	}
 }

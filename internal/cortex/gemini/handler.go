@@ -13,26 +13,25 @@ import (
 
 	"eva/internal/brainstem/config"
 	"eva/internal/brainstem/database"
-	"eva/internal/brainstem/infrastructure/graph"
-	"eva/internal/brainstem/infrastructure/vector"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	"eva/internal/brainstem/infrastructure/workerpool"
 )
 
 type Handler struct {
-	cfg         *config.Config
-	db          *database.DB
-	neo4j       *graph.Neo4jClient
-	qdrant      *vector.QdrantClient
-	toolsClient *ToolsClient // Cliente REST separado para Tools
+	cfg            *config.Config
+	db             *database.DB
+	graphAdapter   *nietzscheInfra.GraphAdapter   // NietzscheDB GraphAdapter (substitui Neo4j)
+	vectorAdapter  *nietzscheInfra.VectorAdapter  // NietzscheDB VectorAdapter (substitui Qdrant)
+	toolsClient    *ToolsClient                   // Cliente REST separado para Tools
 }
 
-func NewHandler(cfg *config.Config, db *database.DB, neo4j *graph.Neo4jClient, qdrant *vector.QdrantClient) *Handler {
+func NewHandler(cfg *config.Config, db *database.DB, graphAdapter *nietzscheInfra.GraphAdapter, vectorAdapter *nietzscheInfra.VectorAdapter) *Handler {
 	return &Handler{
-		cfg:         cfg,
-		db:          db,
-		neo4j:       neo4j,
-		qdrant:      qdrant,
-		toolsClient: NewToolsClient(cfg),
+		cfg:           cfg,
+		db:            db,
+		graphAdapter:  graphAdapter,
+		vectorAdapter: vectorAdapter,
+		toolsClient:   NewToolsClient(cfg),
 	}
 }
 

@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/pgvector/pgvector-go"
-	"github.com/qdrant/go-client/qdrant"
 )
 
 // ========================================
@@ -162,8 +161,8 @@ func (s *Service) SaveEpisodicMemory(idosoID int64, role, content string, eventD
 		log.Printf("✅ [POSTGRES] Memory saved: ID=%d, Speaker=%s", memoryID, role)
 	}
 
-	// 3. Upsert to Qdrant (Retry Logic)
-	if s.qdrantClient != nil {
+	// 3. Upsert to NietzscheDB vector store
+	if s.vectorAdapter != nil {
 		go func() {
 			metadata := types.MemoryMetadata{
 				Emotion:    "neutral",
@@ -171,34 +170,24 @@ func (s *Service) SaveEpisodicMemory(idosoID int64, role, content string, eventD
 				Topics:     extractKeywords(content),
 			}
 
+			payload := map[string]interface{}{
+				"idoso_id":   idosoID,
+				"role":       role,
+				"content":    content,
+				"created_at": time.Now().Format(time.RFC3339),
+				"emotion":    metadata.Emotion,
+				"topics":     metadata.Topics,
+			}
+
 			// Tentar 3 vezes
 			for attempt := 1; attempt <= 3; attempt++ {
-				points := []*qdrant.PointStruct{
-					{
-						Id: &qdrant.PointId{
-							PointIdOptions: &qdrant.PointId_Num{Num: uint64(memoryID)},
-						},
-						Vectors: &qdrant.Vectors{
-							VectorsOptions: &qdrant.Vectors_Vector{Vector: &qdrant.Vector{Data: embedding}},
-						},
-						Payload: map[string]*qdrant.Value{
-							"idoso_id":   {Kind: &qdrant.Value_IntegerValue{IntegerValue: idosoID}},
-							"role":       {Kind: &qdrant.Value_StringValue{StringValue: role}},
-							"content":    {Kind: &qdrant.Value_StringValue{StringValue: content}},
-							"created_at": {Kind: &qdrant.Value_StringValue{StringValue: time.Now().Format(time.RFC3339)}},
-							"emotion":    {Kind: &qdrant.Value_StringValue{StringValue: metadata.Emotion}},
-							"topics":     stringSliceToQdrantList(metadata.Topics),
-						},
-					},
-				}
-
-				if err := s.qdrantClient.Upsert(ctx, "memories", points); err != nil {
-					log.Printf("⚠️ [QDRANT] Upsert falhou (tentativa %d): %v", attempt, err)
+				if err := s.vectorAdapter.Upsert(ctx, "memories", fmt.Sprintf("%d", memoryID), embedding, payload); err != nil {
+					log.Printf("⚠️ [NIETZSCHE] Upsert falhou (tentativa %d): %v", attempt, err)
 					time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
 					continue
 				}
 
-				log.Printf("✅ [QDRANT] Memory %d indexed successfully", memoryID)
+				log.Printf("✅ [NIETZSCHE] Memory %d indexed successfully", memoryID)
 
 				// 4. Update Personality State (Async)
 				if role == "user" && s.personalityService != nil {
@@ -212,14 +201,14 @@ func (s *Service) SaveEpisodicMemory(idosoID int64, role, content string, eventD
 			}
 		}()
 	} else {
-		log.Printf("⚠️ [QDRANT] Cliente não disponível, pulando indexação vetorial")
+		log.Printf("⚠️ [NIETZSCHE] VectorAdapter não disponível, pulando indexação vetorial")
 	}
 
-	// 5. AUDIT FIX: Salvar no Neo4j (Graph Store)
+	// 5. Salvar no NietzscheDB Graph Store
 	if s.graphStore != nil {
 		go func() {
-			neo4jCtx, neo4jCancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer neo4jCancel()
+			graphCtx, graphCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer graphCancel()
 
 			graphMemory := &memory.Memory{
 				ID:         memoryID,
@@ -233,14 +222,14 @@ func (s *Service) SaveEpisodicMemory(idosoID int64, role, content string, eventD
 				Topics:     extractKeywords(content),
 			}
 
-			if err := s.graphStore.AddEpisodicMemory(neo4jCtx, graphMemory); err != nil {
-				log.Printf("❌ [NEO4J] Erro ao salvar no grafo: %v", err)
+			if err := s.graphStore.AddEpisodicMemory(graphCtx, graphMemory); err != nil {
+				log.Printf("❌ [NIETZSCHE] Erro ao salvar no grafo: %v", err)
 			} else {
-				log.Printf("✅ [NEO4J] Memory %d salva no grafo com sucesso", memoryID)
+				log.Printf("✅ [NIETZSCHE] Memory %d salva no grafo com sucesso", memoryID)
 			}
 		}()
 	} else {
-		log.Printf("❌ [NEO4J] GraphStore é NIL - memória NÃO será salva no Neo4j!")
+		log.Printf("❌ [NIETZSCHE] GraphStore é NIL - memória NÃO será salva no grafo!")
 	}
 
 	log.Printf("🧠 [MEMORY] Salvamento completo para idoso %d - ID: %d", idosoID, memoryID)
@@ -270,16 +259,3 @@ func extractKeywords(text string) []string {
 	return keywords
 }
 
-func stringSliceToQdrantList(slice []string) *qdrant.Value {
-	values := make([]*qdrant.Value, len(slice))
-	for i, s := range slice {
-		values[i] = &qdrant.Value{
-			Kind: &qdrant.Value_StringValue{StringValue: s},
-		}
-	}
-	return &qdrant.Value{
-		Kind: &qdrant.Value_ListValue{
-			ListValue: &qdrant.ListValue{Values: values},
-		},
-	}
-}

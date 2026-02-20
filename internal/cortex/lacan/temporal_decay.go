@@ -8,9 +8,10 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"sort"
 	"time"
 
-	"eva/internal/brainstem/infrastructure/graph"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 )
 
 // TemporalDecayService adiciona envelhecimento as conexoes do grafo de conhecimento
@@ -24,7 +25,7 @@ import (
 // - tau = 90 dias: memorias perdem ~63% do peso em 3 meses (moderado)
 // - tau = 365 dias: memorias perdem ~63% do peso em 1 ano (esquecimento lento)
 type TemporalDecayService struct {
-	client *graph.Neo4jClient
+	client *nietzscheInfra.GraphAdapter
 	tau    float64 // Constante de tempo em dias (default: 90)
 }
 
@@ -48,7 +49,7 @@ type DecayedRelation struct {
 }
 
 // NewTemporalDecayService cria servico com tau configuravel
-func NewTemporalDecayService(client *graph.Neo4jClient, tauDays float64) *TemporalDecayService {
+func NewTemporalDecayService(client *nietzscheInfra.GraphAdapter, tauDays float64) *TemporalDecayService {
 	if tauDays <= 0 {
 		tauDays = 90 // Default: 3 meses
 	}
@@ -65,61 +66,55 @@ func (td *TemporalDecayService) GetDecayedSignifiers(ctx context.Context, idosoI
 		return []DecayedSignifier{}, nil
 	}
 
-	// Cypher com decay temporal: peso = frequency * e^(-days_since_last / tau)
-	query := `
-		MATCH (s:Significante {idoso_id: $idosoId})
-		WHERE s.frequency >= 2
-		WITH s,
-		     s.frequency AS freq,
-		     duration.inDays(s.last_occurrence, datetime()).days AS days_since_last,
-		     duration.inDays(s.first_occurrence, datetime()).days AS days_since_first
-		WITH s, freq, days_since_last, days_since_first,
-		     freq * exp(-1.0 * days_since_last / $tau) AS decayed_weight
-		RETURN s.word AS word,
-		       freq AS raw_frequency,
-		       decayed_weight,
-		       days_since_first,
-		       days_since_last
-		ORDER BY decayed_weight DESC
-		LIMIT $limit
-	`
-
-	records, err := td.client.ExecuteRead(ctx, query, map[string]interface{}{
+	// Query all significantes for this patient with frequency >= 2
+	nql := `MATCH (s:Significante) WHERE s.idoso_id = $idosoId AND s.frequency >= 2 RETURN s`
+	result, err := td.client.ExecuteNQL(ctx, nql, map[string]interface{}{
 		"idosoId": idosoID,
-		"tau":     td.tau,
-		"limit":   topN,
-	})
+	}, "")
 	if err != nil {
 		return nil, fmt.Errorf("falha ao buscar significantes com decay: %w", err)
 	}
 
-	var result []DecayedSignifier
-	for _, record := range records {
-		word, _ := record.Get("word")
-		rawFreq, _ := record.Get("raw_frequency")
-		decayed, _ := record.Get("decayed_weight")
-		daysSinceFirst, _ := record.Get("days_since_first")
-		daysSinceLast, _ := record.Get("days_since_last")
+	now := time.Now()
+	var items []DecayedSignifier
 
-		ds := DecayedSignifier{
-			Word:         word.(string),
-			RawFrequency: int(rawFreq.(int64)),
-		}
+	for _, node := range result.Nodes {
+		ds := DecayedSignifier{}
 
-		if dw, ok := decayed.(float64); ok {
-			ds.DecayedWeight = dw
+		if w, ok := node.Content["word"].(string); ok {
+			ds.Word = w
 		}
-		if dsf, ok := daysSinceFirst.(int64); ok {
-			ds.DaysSinceFirst = int(dsf)
-		}
-		if dsl, ok := daysSinceLast.(int64); ok {
-			ds.DaysSinceLast = int(dsl)
+		if f, ok := node.Content["frequency"].(float64); ok {
+			ds.RawFrequency = int(f)
 		}
 
-		result = append(result, ds)
+		// Calculate days since last and first occurrence
+		if lastOcc, ok := node.Content["last_occurrence"].(float64); ok {
+			lastTime := time.Unix(int64(lastOcc), 0)
+			ds.DaysSinceLast = int(now.Sub(lastTime).Hours() / 24)
+		}
+		if firstOcc, ok := node.Content["first_occurrence"].(float64); ok {
+			firstTime := time.Unix(int64(firstOcc), 0)
+			ds.DaysSinceFirst = int(now.Sub(firstTime).Hours() / 24)
+		}
+
+		// Calculate decayed weight: frequency * e^(-days_since_last / tau)
+		ds.DecayedWeight = float64(ds.RawFrequency) * exponentialDecay(float64(ds.DaysSinceLast), td.tau)
+
+		items = append(items, ds)
 	}
 
-	return result, nil
+	// Sort by decayed weight DESC
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].DecayedWeight > items[j].DecayedWeight
+	})
+
+	// Limit to topN
+	if len(items) > topN {
+		items = items[:topN]
+	}
+
+	return items, nil
 }
 
 // GetDecayedRelations retorna relacoes com peso temporal
@@ -128,66 +123,80 @@ func (td *TemporalDecayService) GetDecayedRelations(ctx context.Context, idosoID
 		return []DecayedRelation{}, nil
 	}
 
-	query := `
-		MATCH (p:Person {id: $idosoId})-[r]->(target)
-		WHERE r.created_at IS NOT NULL
-		WITH target, r, type(r) AS rel_type,
-		     COALESCE(r.weight, 1.0) AS raw_weight,
-		     duration.inDays(r.created_at, datetime()).days AS age_days
-		WITH target, rel_type, raw_weight, age_days,
-		     raw_weight * exp(-1.0 * age_days / $tau) AS decayed_weight
-		RETURN target.id AS target_id,
-		       COALESCE(target.name, target.word, toString(target.id)) AS target_name,
-		       rel_type,
-		       raw_weight,
-		       decayed_weight,
-		       age_days
-		ORDER BY decayed_weight DESC
-		LIMIT $limit
-	`
-
-	records, err := td.client.ExecuteRead(ctx, query, map[string]interface{}{
+	// Find Person node first
+	nql := `MATCH (p:Person) WHERE p.id = $idosoId RETURN p`
+	personResult, err := td.client.ExecuteNQL(ctx, nql, map[string]interface{}{
 		"idosoId": idosoID,
-		"tau":     td.tau,
-		"limit":   topN,
-	})
+	}, "")
+	if err != nil || len(personResult.Nodes) == 0 {
+		return []DecayedRelation{}, err
+	}
+
+	personID := personResult.Nodes[0].ID
+
+	// BFS from person, depth 1 to get all directly connected nodes
+	connectedIDs, err := td.client.Bfs(ctx, personID, 1, "")
 	if err != nil {
 		return nil, fmt.Errorf("falha ao buscar relacoes com decay: %w", err)
 	}
 
-	var result []DecayedRelation
-	for _, record := range records {
-		targetID, _ := record.Get("target_id")
-		targetName, _ := record.Get("target_name")
-		relType, _ := record.Get("rel_type")
-		rawWeight, _ := record.Get("raw_weight")
-		decayedWeight, _ := record.Get("decayed_weight")
-		ageDays, _ := record.Get("age_days")
+	now := time.Now()
+	var items []DecayedRelation
+
+	for _, targetID := range connectedIDs {
+		if targetID == personID {
+			continue // skip self
+		}
+
+		targetNode, err := td.client.GetNode(ctx, targetID, "")
+		if err != nil {
+			continue
+		}
 
 		dr := DecayedRelation{
-			RelationType: relType.(string),
+			RelationType: targetNode.NodeType,
 		}
 
-		if id, ok := targetID.(int64); ok {
-			dr.TargetID = id
+		if id, ok := targetNode.Content["id"].(float64); ok {
+			dr.TargetID = int64(id)
 		}
-		if name, ok := targetName.(string); ok {
+		if name, ok := targetNode.Content["name"].(string); ok {
 			dr.TargetName = name
-		}
-		if rw, ok := rawWeight.(float64); ok {
-			dr.RawWeight = rw
-		}
-		if dw, ok := decayedWeight.(float64); ok {
-			dr.DecayedWeight = dw
-		}
-		if ad, ok := ageDays.(int64); ok {
-			dr.AgeInDays = int(ad)
+		} else if word, ok := targetNode.Content["word"].(string); ok {
+			dr.TargetName = word
+		} else {
+			dr.TargetName = targetID
 		}
 
-		result = append(result, dr)
+		// Get raw weight
+		dr.RawWeight = 1.0
+		if w, ok := targetNode.Content["weight"].(float64); ok {
+			dr.RawWeight = w
+		}
+
+		// Calculate age from created_at
+		if createdAt := targetNode.CreatedAt; createdAt > 0 {
+			created := time.Unix(createdAt, 0)
+			dr.AgeInDays = int(now.Sub(created).Hours() / 24)
+		}
+
+		// Calculate decayed weight
+		dr.DecayedWeight = dr.RawWeight * exponentialDecay(float64(dr.AgeInDays), td.tau)
+
+		items = append(items, dr)
 	}
 
-	return result, nil
+	// Sort by decayed weight DESC
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].DecayedWeight > items[j].DecayedWeight
+	})
+
+	// Limit to topN
+	if len(items) > topN {
+		items = items[:topN]
+	}
+
+	return items, nil
 }
 
 // PruneDecayedConnections remove conexoes com peso temporal abaixo de threshold
@@ -197,27 +206,59 @@ func (td *TemporalDecayService) PruneDecayedConnections(ctx context.Context, ido
 		return 0, nil
 	}
 
-	query := `
-		MATCH (p:Person {id: $idosoId})-[r]->(target)
-		WHERE r.created_at IS NOT NULL
-		  AND COALESCE(r.weight, 1.0) * exp(-1.0 * duration.inDays(r.created_at, datetime()).days / $tau) < $minWeight
-		WITH r, count(*) AS total
-		DELETE r
-		RETURN total
-	`
+	// Find Person node
+	nql := `MATCH (p:Person) WHERE p.id = $idosoId RETURN p`
+	personResult, err := td.client.ExecuteNQL(ctx, nql, map[string]interface{}{
+		"idosoId": idosoID,
+	}, "")
+	if err != nil || len(personResult.Nodes) == 0 {
+		return 0, err
+	}
 
-	result, err := td.client.ExecuteWrite(ctx, query, map[string]interface{}{
-		"idosoId":   idosoID,
-		"tau":       td.tau,
-		"minWeight": minWeight,
-	})
+	personID := personResult.Nodes[0].ID
+
+	// BFS to find connected nodes
+	connectedIDs, err := td.client.Bfs(ctx, personID, 1, "")
 	if err != nil {
 		return 0, fmt.Errorf("falha ao podar conexoes: %w", err)
 	}
 
-	log.Printf("[DECAY] Podadas conexoes com peso < %.4f para paciente %d", minWeight, idosoID)
-	_ = result
-	return 0, nil
+	now := time.Now()
+	var pruned int64
+
+	for _, targetID := range connectedIDs {
+		if targetID == personID {
+			continue
+		}
+
+		targetNode, err := td.client.GetNode(ctx, targetID, "")
+		if err != nil {
+			continue
+		}
+
+		rawWeight := 1.0
+		if w, ok := targetNode.Content["weight"].(float64); ok {
+			rawWeight = w
+		}
+
+		ageDays := 0
+		if createdAt := targetNode.CreatedAt; createdAt > 0 {
+			created := time.Unix(createdAt, 0)
+			ageDays = int(now.Sub(created).Hours() / 24)
+		}
+
+		decayedWeight := rawWeight * exponentialDecay(float64(ageDays), td.tau)
+
+		if decayedWeight < minWeight {
+			// Delete the node (and its edges will be cleaned up)
+			if err := td.client.DeleteNode(ctx, targetID, ""); err == nil {
+				pruned++
+			}
+		}
+	}
+
+	log.Printf("[DECAY] Podadas %d conexoes com peso < %.4f para paciente %d", pruned, minWeight, idosoID)
+	return pruned, nil
 }
 
 // RefreshSignifierDecay recalcula o decayed_weight de todos os significantes
@@ -227,22 +268,46 @@ func (td *TemporalDecayService) RefreshSignifierDecay(ctx context.Context, idoso
 		return nil
 	}
 
-	query := `
-		MATCH (s:Significante {idoso_id: $idosoId})
-		WHERE s.last_occurrence IS NOT NULL
-		WITH s,
-		     duration.inDays(s.last_occurrence, datetime()).days AS days_since
-		SET s.decayed_weight = s.frequency * exp(-1.0 * days_since / $tau),
-		    s.decay_tau = $tau,
-		    s.decay_updated_at = datetime()
-	`
-
-	_, err := td.client.ExecuteWrite(ctx, query, map[string]interface{}{
+	// Query all significantes for this patient
+	nql := `MATCH (s:Significante) WHERE s.idoso_id = $idosoId RETURN s`
+	result, err := td.client.ExecuteNQL(ctx, nql, map[string]interface{}{
 		"idosoId": idosoID,
-		"tau":     td.tau,
-	})
+	}, "")
 	if err != nil {
 		return fmt.Errorf("falha ao atualizar decay: %w", err)
+	}
+
+	now := time.Now()
+	for _, node := range result.Nodes {
+		frequency := 1.0
+		if f, ok := node.Content["frequency"].(float64); ok {
+			frequency = f
+		}
+
+		daysSince := 0.0
+		if lastOcc, ok := node.Content["last_occurrence"].(float64); ok {
+			lastTime := time.Unix(int64(lastOcc), 0)
+			daysSince = now.Sub(lastTime).Hours() / 24
+		}
+
+		decayedWeight := frequency * exponentialDecay(daysSince, td.tau)
+
+		// Update the node with decayed_weight
+		_, err := td.client.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+			NodeType: "Significante",
+			MatchKeys: map[string]interface{}{
+				"idoso_id": idosoID,
+				"word":     node.Content["word"],
+			},
+			OnMatchSet: map[string]interface{}{
+				"decayed_weight":   decayedWeight,
+				"decay_tau":        td.tau,
+				"decay_updated_at": nietzscheInfra.NowUnix(),
+			},
+		})
+		if err != nil {
+			log.Printf("[DECAY] Erro ao atualizar decay do significante %v: %v", node.Content["word"], err)
+		}
 	}
 
 	log.Printf("[DECAY] Decay atualizado para significantes do paciente %d (tau=%.0f dias)", idosoID, td.tau)

@@ -50,15 +50,15 @@ var (
 		Help: "Compression ratio (original_dim / krylov_dim)",
 	})
 
-	// Neo4j metrics
-	Neo4jConnections = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "eva_neo4j_connections",
-		Help: "Number of connections in Neo4j graph",
+	// NietzscheDB metrics
+	NietzscheConnections = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "eva_nietzsche_connections",
+		Help: "Number of edges in NietzscheDB graph",
 	})
 
-	Neo4jNodes = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "eva_neo4j_nodes",
-		Help: "Number of nodes in Neo4j graph",
+	NietzscheNodes = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "eva_nietzsche_nodes",
+		Help: "Number of nodes in NietzscheDB graph",
 	})
 
 	// Request metrics

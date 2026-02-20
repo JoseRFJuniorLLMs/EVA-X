@@ -64,7 +64,7 @@ func TestEVAMetrics_AllMetricsRegistered(t *testing.T) {
 	assert.NotNil(t, m.MemoryOperations, "MemoryOperations should be registered")
 	assert.NotNil(t, m.MemoryRetrievalLatency, "MemoryRetrievalLatency should be registered")
 	assert.NotNil(t, m.VectorSearchLatency, "VectorSearchLatency should be registered")
-	assert.NotNil(t, m.Neo4jQueryLatency, "Neo4jQueryLatency should be registered")
+	assert.NotNil(t, m.GraphQueryLatency, "GraphQueryLatency should be registered")
 
 	// System metrics
 	assert.NotNil(t, m.ActiveWebSocketConnections, "ActiveWebSocketConnections should be registered")
@@ -293,7 +293,7 @@ func TestMemoryMetrics(t *testing.T) {
 	// Record latencies
 	m.MemoryRetrievalLatency.Observe(0.05)
 	m.VectorSearchLatency.Observe(0.1)
-	m.Neo4jQueryLatency.Observe(0.08)
+	m.GraphQueryLatency.Observe(0.08)
 }
 
 func TestAPIMetrics(t *testing.T) {

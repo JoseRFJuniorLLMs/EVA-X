@@ -10,15 +10,12 @@ import (
 	"strings"
 	"time"
 
-	"eva/internal/brainstem/infrastructure/graph"
-
 	"github.com/rs/zerolog/log"
 )
 
 // PediatricRiskDetector detects self-harm risk in children's natural language
 type PediatricRiskDetector struct {
-	db    *sql.DB
-	neo4j *graph.Neo4jClient
+	db *sql.DB
 
 	// Metaphor patterns by risk level
 	metaphors map[string]float64
@@ -28,10 +25,9 @@ type PediatricRiskDetector struct {
 }
 
 // NewPediatricRiskDetector creates a new pediatric risk detector
-func NewPediatricRiskDetector(db *sql.DB, neo4j *graph.Neo4jClient) *PediatricRiskDetector {
+func NewPediatricRiskDetector(db *sql.DB) *PediatricRiskDetector {
 	return &PediatricRiskDetector{
-		db:    db,
-		neo4j: neo4j,
+		db:
 		metaphors: map[string]float64{
 			// Death metaphors
 			"virar estrela":        0.7,

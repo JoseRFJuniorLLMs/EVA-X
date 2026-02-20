@@ -142,29 +142,26 @@ func (e *FDPNEngine) calculateBaseActivation(keyword string) float64 {
 
 // primeKeywordWithScore prima um keyword com score específico
 func (e *FDPNEngine) primeKeywordWithScore(ctx context.Context, userID string, keyword string, score float64) (string, error) {
-	// Buscar nó no grafo que corresponde ao keyword
-	query := `
-		MATCH (n)
-		WHERE toLower(n.name) = toLower($keyword) OR toLower(n.content) CONTAINS toLower($keyword)
-		RETURN toString(id(n)) AS nodeID, n.name AS name
-		LIMIT 1
-	`
+	// Buscar nó no grafo que corresponde ao keyword via NQL
+	nql := `MATCH (n) WHERE n.name = $keyword OR n.content CONTAINS $keyword RETURN n LIMIT 1`
 
-	records, err := e.neo4j.ExecuteRead(ctx, query, map[string]interface{}{
+	result, err := e.graphAdapter.ExecuteNQL(ctx, nql, map[string]interface{}{
 		"keyword": keyword,
-	})
+	}, "")
 	if err != nil {
-		return "", fmt.Errorf("neo4j query failed: %w", err)
+		return "", fmt.Errorf("graph query failed: %w", err)
 	}
 
-	if len(records) == 0 {
+	if result == nil || len(result.Nodes) == 0 {
 		// Nó não encontrado, retornar vazio (não é erro)
 		return "", nil
 	}
 
-	// Extrair nodeID do primeiro record
-	// TODO: Implementar extração correta baseado no driver Neo4j usado
-	nodeID := fmt.Sprintf("node_%s", keyword)
+	// Extrair nodeID do primeiro resultado
+	nodeID := result.Nodes[0].ID
+	if nodeID == "" {
+		nodeID = fmt.Sprintf("node_%s", keyword)
+	}
 
 	// Ativar nó no cache com score
 	cacheKey := fmt.Sprintf("activated:%s:%s", userID, nodeID)

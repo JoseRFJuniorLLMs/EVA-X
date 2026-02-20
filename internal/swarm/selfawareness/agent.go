@@ -251,11 +251,11 @@ func (a *Agent) handleSystemStats(ctx context.Context, call swarm.ToolCall) (*sw
 
 	msg := fmt.Sprintf(`Meus sistemas:
 - PostgreSQL: %d tabelas, %d memorias episodicas
-- Qdrant: %d colecoes, %d pontos vetoriais
+- NietzscheDB: %d colecoes, %d nos vetoriais
 - Curriculum: %d pendentes, %d completados
 - Runtime: %d goroutines, %dMB RAM, uptime %s`,
 		stats.PostgresTables, stats.TotalMemories,
-		stats.QdrantCollections, stats.QdrantTotalPoints,
+		stats.NietzscheCollections, stats.NietzscheTotalNodes,
 		stats.CurriculumPending, stats.CurriculumDone,
 		stats.GoRoutines, stats.MemAllocMB, stats.Uptime)
 
@@ -346,8 +346,8 @@ func (a *Agent) handleIntrospect(ctx context.Context, call swarm.ToolCall) (*swa
 	msg.WriteString("Meu estado atual:\n")
 
 	if report.Stats != nil {
-		msg.WriteString(fmt.Sprintf("\nSistemas: %d tabelas PostgreSQL, %d colecoes Qdrant (%d pontos)\n",
-			report.Stats.PostgresTables, report.Stats.QdrantCollections, report.Stats.QdrantTotalPoints))
+		msg.WriteString(fmt.Sprintf("\nSistemas: %d tabelas PostgreSQL, %d colecoes NietzscheDB (%d nos)\n",
+			report.Stats.PostgresTables, report.Stats.NietzscheCollections, report.Stats.NietzscheTotalNodes))
 		msg.WriteString(fmt.Sprintf("Memorias: %d episodicas | Curriculum: %d pendentes, %d completados\n",
 			report.Stats.TotalMemories, report.Stats.CurriculumPending, report.Stats.CurriculumDone))
 		msg.WriteString(fmt.Sprintf("Runtime: %d goroutines, %dMB RAM, uptime %s\n",

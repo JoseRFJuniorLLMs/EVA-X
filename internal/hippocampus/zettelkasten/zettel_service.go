@@ -14,32 +14,32 @@ import (
 	"strings"
 	"time"
 
-	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 )
 
 // ============================================================================
-// ZETTELKASTEN SERVICE - Memória Externa Viva para Idosos
+// ZETTELKASTEN SERVICE - Memoria Externa Viva para Idosos
 // ============================================================================
 // Baseado em Niklas Luhmann's Zettelkasten + Obsidian/Roam concepts
-// Adaptado para contexto de idosos: memórias, pessoas, lugares, histórias
+// Adaptado para contexto de idosos: memorias, pessoas, lugares, historias
 
 // ZettelService gerencia o sistema de notas interconectadas
 type ZettelService struct {
-	db        *sql.DB
-	neo4j     neo4j.DriverWithContext
-	extractor *EntityExtractor
+	db           *sql.DB
+	graphAdapter *nietzscheInfra.GraphAdapter
+	extractor    *EntityExtractor
 }
 
-// Zettel representa uma nota/átomo de conhecimento
+// Zettel representa uma nota/atomo de conhecimento
 type Zettel struct {
-	ID            string            `json:"id"`             // Hash único baseado no conteúdo
+	ID            string            `json:"id"`             // Hash unico baseado no conteudo
 	IdosoID       int64             `json:"idoso_id"`
-	Title         string            `json:"title"`          // Título curto
-	Content       string            `json:"content"`        // Conteúdo principal
+	Title         string            `json:"title"`          // Titulo curto
+	Content       string            `json:"content"`        // Conteudo principal
 	ZettelType    ZettelType        `json:"zettel_type"`    // Tipo do zettel
 	Source        ZettelSource      `json:"source"`         // De onde veio
-	Entities      []Entity          `json:"entities"`       // Pessoas, lugares, datas extraídas
-	Tags          []string          `json:"tags"`           // Tags manuais ou automáticas
+	Entities      []Entity          `json:"entities"`       // Pessoas, lugares, datas extraidas
+	Tags          []string          `json:"tags"`           // Tags manuais ou automaticas
 	LinkedZettels []string          `json:"linked_zettels"` // IDs de zettels relacionados
 	Metadata      map[string]string `json:"metadata"`       // Metadados extras
 	CreatedAt     time.Time         `json:"created_at"`
@@ -52,74 +52,74 @@ type Zettel struct {
 type ZettelType string
 
 const (
-	ZETTEL_MEMORY       ZettelType = "memory"       // Memória/lembrança
-	ZETTEL_PERSON       ZettelType = "person"       // Pessoa importante
-	ZETTEL_PLACE        ZettelType = "place"        // Lugar significativo
-	ZETTEL_EVENT        ZettelType = "event"        // Evento/acontecimento
-	ZETTEL_RECIPE       ZettelType = "recipe"       // Receita de família
-	ZETTEL_WISDOM       ZettelType = "wisdom"       // Sabedoria/conselho
-	ZETTEL_STORY        ZettelType = "story"        // História completa
-	ZETTEL_HEALTH       ZettelType = "health"       // Info de saúde
-	ZETTEL_PREFERENCE   ZettelType = "preference"   // Preferência pessoal
-	ZETTEL_DAILY        ZettelType = "daily"        // Nota diária (automática)
-	ZETTEL_FAMILY_NOTE  ZettelType = "family_note"  // Nota da família
+	ZETTEL_MEMORY      ZettelType = "memory"      // Memoria/lembranca
+	ZETTEL_PERSON      ZettelType = "person"       // Pessoa importante
+	ZETTEL_PLACE       ZettelType = "place"        // Lugar significativo
+	ZETTEL_EVENT       ZettelType = "event"        // Evento/acontecimento
+	ZETTEL_RECIPE      ZettelType = "recipe"       // Receita de familia
+	ZETTEL_WISDOM      ZettelType = "wisdom"       // Sabedoria/conselho
+	ZETTEL_STORY       ZettelType = "story"        // Historia completa
+	ZETTEL_HEALTH      ZettelType = "health"       // Info de saude
+	ZETTEL_PREFERENCE  ZettelType = "preference"   // Preferencia pessoal
+	ZETTEL_DAILY       ZettelType = "daily"        // Nota diaria (automatica)
+	ZETTEL_FAMILY_NOTE ZettelType = "family_note"  // Nota da familia
 )
 
 // ZettelSource origem do zettel
 type ZettelSource struct {
 	Type      string    `json:"type"`       // "conversation", "family_input", "import", "system"
-	SessionID string    `json:"session_id"` // ID da sessão de conversa
+	SessionID string    `json:"session_id"` // ID da sessao de conversa
 	Author    string    `json:"author"`     // Quem criou (idoso, familiar, sistema)
 	Timestamp time.Time `json:"timestamp"`
 }
 
-// Entity entidade extraída (pessoa, lugar, data)
+// Entity entidade extraida (pessoa, lugar, data)
 type Entity struct {
 	Type  string `json:"type"`  // "person", "place", "date", "event"
 	Value string `json:"value"` // Nome/valor
-	Role  string `json:"role"`  // Papel na história (ex: "avô", "cidade natal")
+	Role  string `json:"role"`  // Papel na historia (ex: "avo", "cidade natal")
 }
 
-// ZettelLink representa uma conexão entre zettels
+// ZettelLink representa uma conexao entre zettels
 type ZettelLink struct {
-	FromID       string    `json:"from_id"`
-	ToID         string    `json:"to_id"`
-	LinkType     string    `json:"link_type"`     // "mentions", "related_to", "part_of", "sequel_to"
-	Strength     float64   `json:"strength"`      // 0-1, força da conexão
-	Context      string    `json:"context"`       // Contexto da conexão
-	CreatedAt    time.Time `json:"created_at"`
-	Bidirectional bool     `json:"bidirectional"` // Se é link bidirecional
+	FromID        string    `json:"from_id"`
+	ToID          string    `json:"to_id"`
+	LinkType      string    `json:"link_type"`     // "mentions", "related_to", "part_of", "sequel_to"
+	Strength      float64   `json:"strength"`      // 0-1, forca da conexao
+	Context       string    `json:"context"`       // Contexto da conexao
+	CreatedAt     time.Time `json:"created_at"`
+	Bidirectional bool      `json:"bidirectional"` // Se e link bidirecional
 }
 
-// NewZettelService cria novo serviço
-func NewZettelService(db *sql.DB, neo4jDriver neo4j.DriverWithContext) *ZettelService {
+// NewZettelService cria novo servico
+func NewZettelService(db *sql.DB, graphAdapter *nietzscheInfra.GraphAdapter) *ZettelService {
 	svc := &ZettelService{
-		db:        db,
-		neo4j:     neo4jDriver,
-		extractor: NewEntityExtractor(),
+		db:           db,
+		graphAdapter: graphAdapter,
+		extractor:    NewEntityExtractor(),
 	}
 
-	// Criar tabelas se não existirem
+	// Criar tabelas se nao existirem
 	svc.ensureTables()
 
 	return svc
 }
 
 // ============================================================================
-// CRIAÇÃO DE ZETTELS
+// CRIACAO DE ZETTELS
 // ============================================================================
 
 // CreateFromConversation cria zettel(s) a partir de uma conversa
 func (zs *ZettelService) CreateFromConversation(ctx context.Context, idosoID int64, text string, sessionID string) ([]*Zettel, error) {
-	log.Printf("📝 [ZETTEL] Processando conversa para idoso %d", idosoID)
+	log.Printf("[ZETTEL] Processando conversa para idoso %d", idosoID)
 
 	// 1. Extrair entidades do texto
 	entities := zs.extractor.Extract(text)
 
-	// 2. Classificar o tipo de conteúdo
+	// 2. Classificar o tipo de conteudo
 	zettelType := zs.classifyContent(text)
 
-	// 3. Gerar título automático
+	// 3. Gerar titulo automatico
 	title := zs.generateTitle(text, zettelType)
 
 	// 4. Criar zettel principal
@@ -146,26 +146,26 @@ func (zs *ZettelService) CreateFromConversation(ctx context.Context, idosoID int
 		return nil, fmt.Errorf("erro ao salvar zettel: %w", err)
 	}
 
-	// 6. Salvar no Neo4j (grafo)
+	// 6. Salvar no grafo
 	if err := zs.saveToGraph(ctx, zettel); err != nil {
-		log.Printf("⚠️ [ZETTEL] Erro ao salvar no grafo: %v", err)
+		log.Printf("[ZETTEL] Erro ao salvar no grafo: %v", err)
 	}
 
 	// 7. Encontrar e criar links com zettels existentes
 	links := zs.findAndCreateLinks(ctx, zettel)
-	log.Printf("🔗 [ZETTEL] %d links criados para zettel %s", len(links), zettel.ID)
+	log.Printf("[ZETTEL] %d links criados para zettel %s", len(links), zettel.ID)
 
-	// 8. Criar zettels secundários para entidades importantes
+	// 8. Criar zettels secundarios para entidades importantes
 	secondaryZettels := zs.createEntityZettels(ctx, idosoID, entities, zettel.ID)
 
 	result := []*Zettel{zettel}
 	result = append(result, secondaryZettels...)
 
-	log.Printf("✅ [ZETTEL] Criados %d zettels a partir da conversa", len(result))
+	log.Printf("[ZETTEL] Criados %d zettels a partir da conversa", len(result))
 	return result, nil
 }
 
-// CreateManual cria zettel manualmente (família pode adicionar)
+// CreateManual cria zettel manualmente (familia pode adicionar)
 func (zs *ZettelService) CreateManual(ctx context.Context, idosoID int64, title, content string, zettelType ZettelType, author string, tags []string) (*Zettel, error) {
 	entities := zs.extractor.Extract(content)
 
@@ -196,7 +196,7 @@ func (zs *ZettelService) CreateManual(ctx context.Context, idosoID int64, title,
 	return zettel, nil
 }
 
-// CreateDailyNote cria nota diária automática (resumo do dia)
+// CreateDailyNote cria nota diaria automatica (resumo do dia)
 func (zs *ZettelService) CreateDailyNote(ctx context.Context, idosoID int64, date time.Time) (*Zettel, error) {
 	// Buscar todas as conversas do dia
 	conversations, err := zs.getDayConversations(ctx, idosoID, date)
@@ -207,7 +207,7 @@ func (zs *ZettelService) CreateDailyNote(ctx context.Context, idosoID int64, dat
 	// Gerar resumo
 	summary := zs.generateDailySummary(conversations)
 
-	title := fmt.Sprintf("Diário - %s", date.Format("02/01/2006"))
+	title := fmt.Sprintf("Diario - %s", date.Format("02/01/2006"))
 
 	zettel := &Zettel{
 		ID:         zs.generateID(idosoID, title+date.String()),
@@ -220,7 +220,7 @@ func (zs *ZettelService) CreateDailyNote(ctx context.Context, idosoID int64, dat
 			Author:    "eva",
 			Timestamp: time.Now(),
 		},
-		Tags:      []string{"diário", date.Format("2006-01"), date.Weekday().String()},
+		Tags:      []string{"diario", date.Format("2006-01"), date.Weekday().String()},
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
@@ -232,7 +232,7 @@ func (zs *ZettelService) CreateDailyNote(ctx context.Context, idosoID int64, dat
 }
 
 // ============================================================================
-// BUSCA E RECUPERAÇÃO
+// BUSCA E RECUPERACAO
 // ============================================================================
 
 // Search busca zettels por texto, tags ou entidades
@@ -268,14 +268,14 @@ func (zs *ZettelService) Search(ctx context.Context, idosoID int64, query string
 	return zs.scanZettels(rows)
 }
 
-// GetRelated busca zettels relacionados a um zettel específico
+// GetRelated busca zettels relacionados a um zettel especifico
 func (zs *ZettelService) GetRelated(ctx context.Context, zettelID string, depth int) ([]*Zettel, error) {
 	if depth == 0 {
 		depth = 2
 	}
 
-	// Usar Neo4j para busca em grafo
-	if zs.neo4j != nil {
+	// Usar NietzscheDB para busca em grafo via BFS
+	if zs.graphAdapter != nil {
 		return zs.getRelatedFromGraph(ctx, zettelID, depth)
 	}
 
@@ -398,16 +398,16 @@ func (zs *ZettelService) GetContextForConversation(ctx context.Context, idosoID 
 }
 
 // ============================================================================
-// GRAPH MAP (Visualização tipo Obsidian)
+// GRAPH MAP (Visualizacao tipo Obsidian)
 // ============================================================================
 
-// GraphNode nó do grafo para visualização
+// GraphNode no do grafo para visualizacao
 type GraphNode struct {
-	ID       string     `json:"id"`
-	Label    string     `json:"label"`
-	Type     ZettelType `json:"type"`
-	Size     int        `json:"size"` // Baseado em access_count
-	Color    string     `json:"color"`
+	ID    string     `json:"id"`
+	Label string     `json:"label"`
+	Type  ZettelType `json:"type"`
+	Size  int        `json:"size"` // Baseado em access_count
+	Color string     `json:"color"`
 }
 
 // GraphEdge aresta do grafo
@@ -424,20 +424,20 @@ type GraphData struct {
 	Edges []GraphEdge `json:"edges"`
 }
 
-// GetGraphMap retorna dados para visualização do grafo de conhecimento
+// GetGraphMap retorna dados para visualizacao do grafo de conhecimento
 func (zs *ZettelService) GetGraphMap(ctx context.Context, idosoID int64, centerZettelID string, depth int) (*GraphData, error) {
 	if depth == 0 {
 		depth = 3
 	}
 
-	graph := &GraphData{
+	graphData := &GraphData{
 		Nodes: []GraphNode{},
 		Edges: []GraphEdge{},
 	}
 
-	// Se tiver Neo4j, usar
-	if zs.neo4j != nil {
-		return zs.getGraphFromNeo4j(ctx, idosoID, centerZettelID, depth)
+	// Se tiver graphAdapter, usar NietzscheDB
+	if zs.graphAdapter != nil {
+		return zs.getGraphFromNietzsche(ctx, idosoID, centerZettelID, depth)
 	}
 
 	// Fallback: construir do PostgreSQL
@@ -446,7 +446,7 @@ func (zs *ZettelService) GetGraphMap(ctx context.Context, idosoID int64, centerZ
 		return nil, err
 	}
 
-	// Criar nós
+	// Criar nos
 	for _, z := range zettels {
 		node := GraphNode{
 			ID:    z.ID,
@@ -455,7 +455,7 @@ func (zs *ZettelService) GetGraphMap(ctx context.Context, idosoID int64, centerZ
 			Size:  z.AccessCount + 1,
 			Color: zs.getColorForType(z.ZettelType),
 		}
-		graph.Nodes = append(graph.Nodes, node)
+		graphData.Nodes = append(graphData.Nodes, node)
 	}
 
 	// Criar arestas baseado em links
@@ -467,10 +467,10 @@ func (zs *ZettelService) GetGraphMap(ctx context.Context, idosoID int64, centerZ
 			Strength: link.Strength,
 			Label:    link.LinkType,
 		}
-		graph.Edges = append(graph.Edges, edge)
+		graphData.Edges = append(graphData.Edges, edge)
 	}
 
-	return graph, nil
+	return graphData, nil
 }
 
 // ============================================================================
@@ -486,7 +486,7 @@ func (zs *ZettelService) generateID(idosoID int64, content string) string {
 func (zs *ZettelService) classifyContent(text string) ZettelType {
 	textLower := strings.ToLower(text)
 
-	// Detectar tipo baseado em padrões
+	// Detectar tipo baseado em padroes
 	if strings.Contains(textLower, "receita") || strings.Contains(textLower, "ingrediente") {
 		return ZETTEL_RECIPE
 	}
@@ -496,12 +496,12 @@ func (zs *ZettelService) classifyContent(text string) ZettelType {
 	if strings.Contains(textLower, "quando eu era") || strings.Contains(textLower, "lembro quando") {
 		return ZETTEL_MEMORY
 	}
-	if strings.Contains(textLower, "meu pai") || strings.Contains(textLower, "minha mãe") ||
+	if strings.Contains(textLower, "meu pai") || strings.Contains(textLower, "minha mae") ||
 		strings.Contains(textLower, "meu filho") || strings.Contains(textLower, "minha esposa") {
 		return ZETTEL_PERSON
 	}
 	if strings.Contains(textLower, "cidade") || strings.Contains(textLower, "casa") ||
-		strings.Contains(textLower, "fazenda") || strings.Contains(textLower, "sítio") {
+		strings.Contains(textLower, "fazenda") || strings.Contains(textLower, "sitio") {
 		return ZETTEL_PLACE
 	}
 
@@ -518,7 +518,7 @@ func (zs *ZettelService) generateTitle(text string, zettelType ZettelType) strin
 		return text[:endIdx]
 	}
 
-	// Se não tem pontuação, pegar primeiras palavras
+	// Se nao tem pontuacao, pegar primeiras palavras
 	words := strings.Fields(text)
 	if len(words) > 8 {
 		return strings.Join(words[:8], " ") + "..."
@@ -539,16 +539,16 @@ func (zs *ZettelService) extractTags(text string, entities []Entity) []string {
 		}
 	}
 
-	// Tags baseadas em padrões
+	// Tags baseadas em padroes
 	textLower := strings.ToLower(text)
 
 	tagPatterns := map[string][]string{
-		"família":   {"família", "filho", "filha", "neto", "esposa", "marido"},
-		"infância":  {"criança", "infância", "escola", "brincadeira"},
-		"trabalho":  {"trabalho", "emprego", "profissão", "carreira"},
-		"saúde":     {"médico", "remédio", "hospital", "doença"},
-		"religião":  {"deus", "igreja", "oração", "fé"},
-		"culinária": {"receita", "comida", "cozinha", "ingrediente"},
+		"familia":   {"familia", "filho", "filha", "neto", "esposa", "marido"},
+		"infancia":  {"crianca", "infancia", "escola", "brincadeira"},
+		"trabalho":  {"trabalho", "emprego", "profissao", "carreira"},
+		"saude":     {"medico", "remedio", "hospital", "doenca"},
+		"religiao":  {"deus", "igreja", "oracao", "fe"},
+		"culinaria": {"receita", "comida", "cozinha", "ingrediente"},
 	}
 
 	for tag, patterns := range tagPatterns {
@@ -569,8 +569,8 @@ func (zs *ZettelService) extractKeywords(text string) []string {
 		"o": true, "a": true, "os": true, "as": true,
 		"um": true, "uma": true, "de": true, "da": true,
 		"do": true, "em": true, "no": true, "na": true,
-		"que": true, "e": true, "é": true, "para": true,
-		"com": true, "não": true, "foi": true, "era": true,
+		"que": true, "e": true, "para": true,
+		"com": true, "foi": true, "era": true,
 		"eu": true, "ele": true, "ela": true, "isso": true,
 		"esse": true, "essa": true, "muito": true, "mais": true,
 	}
@@ -605,17 +605,17 @@ func (zs *ZettelService) getColorForType(t ZettelType) string {
 		ZETTEL_HEALTH:      "#E91E63", // Rosa
 		ZETTEL_PREFERENCE:  "#607D8B", // Cinza
 		ZETTEL_DAILY:       "#8BC34A", // Verde claro
-		ZETTEL_FAMILY_NOTE: "#3F51B5", // Índigo
+		ZETTEL_FAMILY_NOTE: "#3F51B5", // Indigo
 	}
 
 	if color, ok := colors[t]; ok {
 		return color
 	}
-	return "#9E9E9E" // Cinza padrão
+	return "#9E9E9E" // Cinza padrao
 }
 
 // ============================================================================
-// PERSISTÊNCIA
+// PERSISTENCIA
 // ============================================================================
 
 func (zs *ZettelService) ensureTables() {
@@ -661,7 +661,7 @@ func (zs *ZettelService) ensureTables() {
 
 	_, err := zs.db.Exec(query)
 	if err != nil {
-		log.Printf("⚠️ [ZETTEL] Erro ao criar tabelas: %v", err)
+		log.Printf("[ZETTEL] Erro ao criar tabelas: %v", err)
 	}
 }
 
@@ -691,50 +691,66 @@ func (zs *ZettelService) saveZettel(ctx context.Context, z *Zettel) error {
 	return err
 }
 
+// saveToGraph saves a zettel and its entities to NietzscheDB graph
+// Replaces Neo4j session.Run() with MergeNode/MergeEdge
 func (zs *ZettelService) saveToGraph(ctx context.Context, z *Zettel) error {
-	if zs.neo4j == nil {
+	if zs.graphAdapter == nil {
 		return nil
 	}
 
-	session := zs.neo4j.NewSession(ctx, neo4j.SessionConfig{})
-	defer session.Close(ctx)
-
-	// Criar nó do zettel
-	_, err := session.Run(ctx, `
-		MERGE (z:Zettel {id: $id})
-		SET z.idoso_id = $idoso_id,
-		    z.title = $title,
-		    z.type = $type,
-		    z.created_at = datetime($created_at)
-	`, map[string]interface{}{
-		"id":         z.ID,
-		"idoso_id":   z.IdosoID,
-		"title":      z.Title,
-		"type":       string(z.ZettelType),
-		"created_at": z.CreatedAt.Format(time.RFC3339),
+	// 1. MERGE Zettel node
+	zettelResult, err := zs.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+		NodeType: "Zettel",
+		MatchKeys: map[string]interface{}{
+			"id": z.ID,
+		},
+		OnCreateSet: map[string]interface{}{
+			"idoso_id":   z.IdosoID,
+			"title":      z.Title,
+			"type":       string(z.ZettelType),
+			"created_at": nietzscheInfra.NowUnix(),
+		},
+		OnMatchSet: map[string]interface{}{
+			"idoso_id":   z.IdosoID,
+			"title":      z.Title,
+			"type":       string(z.ZettelType),
+			"created_at": nietzscheInfra.NowUnix(),
+		},
 	})
-
 	if err != nil {
 		return err
 	}
 
-	// Criar nós e relações para entidades
+	// 2. Create entity nodes and MENTIONS edges
 	for _, e := range z.Entities {
-		_, err = session.Run(ctx, `
-			MERGE (e:Entity {type: $type, value: $value, idoso_id: $idoso_id})
-			WITH e
-			MATCH (z:Zettel {id: $zettel_id})
-			MERGE (z)-[:MENTIONS {role: $role}]->(e)
-		`, map[string]interface{}{
-			"type":      e.Type,
-			"value":     e.Value,
-			"idoso_id":  z.IdosoID,
-			"zettel_id": z.ID,
-			"role":      e.Role,
+		// MERGE Entity node
+		entityResult, err := zs.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+			NodeType: "Entity",
+			MatchKeys: map[string]interface{}{
+				"type":     e.Type,
+				"value":    e.Value,
+				"idoso_id": z.IdosoID,
+			},
 		})
+		if err != nil {
+			continue
+		}
+
+		// MERGE MENTIONS edge from Zettel to Entity
+		_, err = zs.graphAdapter.MergeEdge(ctx, nietzscheInfra.MergeEdgeOpts{
+			FromNodeID: zettelResult.NodeID,
+			ToNodeID:   entityResult.NodeID,
+			EdgeType:   "MENTIONS",
+			OnCreateSet: map[string]interface{}{
+				"role": e.Role,
+			},
+		})
+		if err != nil {
+			log.Printf("[ZETTEL] Aviso: falha ao criar edge MENTIONS: %v", err)
+		}
 	}
 
-	return err
+	return nil
 }
 
 func (zs *ZettelService) findAndCreateLinks(ctx context.Context, z *Zettel) []ZettelLink {
@@ -760,12 +776,12 @@ func (zs *ZettelService) findAndCreateLinks(ctx context.Context, z *Zettel) []Ze
 			var entitiesJSON []byte
 			if rows.Scan(&relatedID, &entitiesJSON) == nil {
 				link := ZettelLink{
-					FromID:       z.ID,
-					ToID:         relatedID,
-					LinkType:     "shares_entity",
-					Strength:     0.7,
-					Context:      fmt.Sprintf("Compartilham: %s (%s)", entity.Value, entity.Type),
-					CreatedAt:    time.Now(),
+					FromID:        z.ID,
+					ToID:          relatedID,
+					LinkType:      "shares_entity",
+					Strength:      0.7,
+					Context:       fmt.Sprintf("Compartilham: %s (%s)", entity.Value, entity.Type),
+					CreatedAt:     time.Now(),
 					Bidirectional: true,
 				}
 				zs.saveLink(ctx, link)
@@ -790,12 +806,12 @@ func (zs *ZettelService) findAndCreateLinks(ctx context.Context, z *Zettel) []Ze
 				var relatedID string
 				if rows.Scan(&relatedID) == nil {
 					link := ZettelLink{
-						FromID:       z.ID,
-						ToID:         relatedID,
-						LinkType:     "related_topic",
-						Strength:     0.5,
-						Context:      "Tags em comum",
-						CreatedAt:    time.Now(),
+						FromID:        z.ID,
+						ToID:          relatedID,
+						LinkType:      "related_topic",
+						Strength:      0.5,
+						Context:       "Tags em comum",
+						CreatedAt:     time.Now(),
 						Bidirectional: true,
 					}
 					zs.saveLink(ctx, link)
@@ -821,7 +837,7 @@ func (zs *ZettelService) saveLink(ctx context.Context, link ZettelLink) error {
 		link.FromID, link.ToID, link.LinkType, link.Strength, link.Context, link.Bidirectional,
 	)
 
-	// Se bidirecional, criar link reverso também
+	// Se bidirecional, criar link reverso tambem
 	if link.Bidirectional && err == nil {
 		zs.db.ExecContext(ctx, query,
 			link.ToID, link.FromID, link.LinkType, link.Strength, link.Context, link.Bidirectional,
@@ -839,7 +855,7 @@ func (zs *ZettelService) createEntityZettels(ctx context.Context, idosoID int64,
 			continue
 		}
 
-		// Verificar se já existe zettel para esta entidade
+		// Verificar se ja existe zettel para esta entidade
 		var exists bool
 		checkQuery := `
 			SELECT EXISTS(
@@ -868,8 +884,8 @@ func (zs *ZettelService) createEntityZettels(ctx context.Context, idosoID int64,
 					Author:    "eva",
 					Timestamp: time.Now(),
 				},
-				Entities: []Entity{e},
-				Tags:     []string{e.Type},
+				Entities:  []Entity{e},
+				Tags:      []string{e.Type},
 				CreatedAt: time.Now(),
 				UpdatedAt: time.Now(),
 			}
@@ -879,12 +895,12 @@ func (zs *ZettelService) createEntityZettels(ctx context.Context, idosoID int64,
 
 				// Criar link com zettel pai
 				link := ZettelLink{
-					FromID:       parentID,
-					ToID:         zettel.ID,
-					LinkType:     "mentions",
-					Strength:     0.8,
-					Context:      fmt.Sprintf("Menciona %s", e.Value),
-					CreatedAt:    time.Now(),
+					FromID:        parentID,
+					ToID:          zettel.ID,
+					LinkType:      "mentions",
+					Strength:      0.8,
+					Context:       fmt.Sprintf("Menciona %s", e.Value),
+					CreatedAt:     time.Now(),
 					Bidirectional: true,
 				}
 				zs.saveLink(ctx, link)
@@ -1035,30 +1051,50 @@ func (zs *ZettelService) getRelatedFromSQL(ctx context.Context, zettelID string)
 	return zs.scanZettels(rows)
 }
 
+// getRelatedFromGraph uses BFS from NietzscheDB instead of Neo4j variable-length path query
 func (zs *ZettelService) getRelatedFromGraph(ctx context.Context, zettelID string, depth int) ([]*Zettel, error) {
-	session := zs.neo4j.NewSession(ctx, neo4j.SessionConfig{})
-	defer session.Close(ctx)
-
-	result, err := session.Run(ctx, `
-		MATCH (z:Zettel {id: $id})-[*1..`+fmt.Sprintf("%d", depth)+`]-(related:Zettel)
-		WHERE related.id <> $id
-		RETURN DISTINCT related.id as id
-		LIMIT 20
-	`, map[string]interface{}{"id": zettelID})
-
+	// Find the zettel node by its zettel ID
+	zettelResult, err := zs.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+		NodeType: "Zettel",
+		MatchKeys: map[string]interface{}{
+			"id": zettelID,
+		},
+	})
 	if err != nil {
 		return nil, err
 	}
 
+	// BFS from zettel node to the specified depth
+	neighborIDs, err := zs.graphAdapter.Bfs(ctx, zettelResult.NodeID, uint32(depth), "")
+	if err != nil {
+		return nil, err
+	}
+
+	// Collect unique zettel IDs (filter to only Zettel nodes)
 	var ids []string
-	for result.Next(ctx) {
-		if id, ok := result.Record().Get("id"); ok {
-			ids = append(ids, id.(string))
+	for _, nID := range neighborIDs {
+		if nID == zettelResult.NodeID {
+			continue
+		}
+		node, err := zs.graphAdapter.GetNode(ctx, nID, "")
+		if err != nil {
+			continue
+		}
+		// Only include Zettel nodes
+		if node.NodeType == "Zettel" {
+			if id, ok := node.Content["id"].(string); ok && id != zettelID {
+				ids = append(ids, id)
+			}
 		}
 	}
 
 	if len(ids) == 0 {
 		return []*Zettel{}, nil
+	}
+
+	// Limit to 20
+	if len(ids) > 20 {
+		ids = ids[:20]
 	}
 
 	// Buscar zettels do PostgreSQL pelos IDs
@@ -1078,89 +1114,128 @@ func (zs *ZettelService) getRelatedFromGraph(ctx context.Context, zettelID strin
 	return zs.scanZettels(rows)
 }
 
-func (zs *ZettelService) getGraphFromNeo4j(ctx context.Context, idosoID int64, centerID string, depth int) (*GraphData, error) {
-	session := zs.neo4j.NewSession(ctx, neo4j.SessionConfig{})
-	defer session.Close(ctx)
-
-	graph := &GraphData{
+// getGraphFromNietzsche builds the graph data from NietzscheDB
+// Replaces getGraphFromNeo4j
+func (zs *ZettelService) getGraphFromNietzsche(ctx context.Context, idosoID int64, centerID string, depth int) (*GraphData, error) {
+	graphData := &GraphData{
 		Nodes: []GraphNode{},
 		Edges: []GraphEdge{},
 	}
 
-	// Query para nós
-	var nodeQuery string
-	params := map[string]interface{}{"idoso_id": idosoID}
-
 	if centerID != "" {
-		nodeQuery = `
-			MATCH (center:Zettel {id: $center_id})
-			MATCH (z:Zettel)-[*0..` + fmt.Sprintf("%d", depth) + `]-(center)
-			WHERE z.idoso_id = $idoso_id
-			RETURN DISTINCT z.id as id, z.title as title, z.type as type
-		`
-		params["center_id"] = centerID
-	} else {
-		nodeQuery = `
-			MATCH (z:Zettel {idoso_id: $idoso_id})
-			RETURN z.id as id, z.title as title, z.type as type
-			LIMIT 100
-		`
-	}
-
-	nodeResult, err := session.Run(ctx, nodeQuery, params)
-	if err != nil {
-		return nil, err
-	}
-
-	nodeIDs := make(map[string]bool)
-	for nodeResult.Next(ctx) {
-		record := nodeResult.Record()
-		id, _ := record.Get("id")
-		title, _ := record.Get("title")
-		nodeType, _ := record.Get("type")
-
-		idStr := id.(string)
-		nodeIDs[idStr] = true
-
-		node := GraphNode{
-			ID:    idStr,
-			Label: title.(string),
-			Type:  ZettelType(nodeType.(string)),
-			Size:  5,
-			Color: zs.getColorForType(ZettelType(nodeType.(string))),
+		// Find center zettel node
+		centerResult, err := zs.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+			NodeType: "Zettel",
+			MatchKeys: map[string]interface{}{
+				"id": centerID,
+			},
+		})
+		if err != nil {
+			return nil, err
 		}
-		graph.Nodes = append(graph.Nodes, node)
-	}
 
-	// Query para arestas
-	edgeQuery := `
-		MATCH (z1:Zettel {idoso_id: $idoso_id})-[r]->(z2:Zettel)
-		RETURN z1.id as from, z2.id as to, type(r) as rel_type
-	`
+		// BFS from center to depth
+		neighborIDs, err := zs.graphAdapter.Bfs(ctx, centerResult.NodeID, uint32(depth), "")
+		if err != nil {
+			return nil, err
+		}
 
-	edgeResult, err := session.Run(ctx, edgeQuery, params)
-	if err == nil {
-		for edgeResult.Next(ctx) {
-			record := edgeResult.Record()
-			from, _ := record.Get("from")
-			to, _ := record.Get("to")
-			relType, _ := record.Get("rel_type")
+		// Include center node
+		allIDs := append([]string{centerResult.NodeID}, neighborIDs...)
+		nodeIDSet := make(map[string]bool)
 
-			fromStr := from.(string)
-			toStr := to.(string)
-
-			// Só incluir edges entre nós que existem
-			if nodeIDs[fromStr] && nodeIDs[toStr] {
-				edge := GraphEdge{
-					From:     fromStr,
-					To:       toStr,
-					Strength: 0.5,
-					Label:    relType.(string),
-				}
-				graph.Edges = append(graph.Edges, edge)
+		for _, nID := range allIDs {
+			node, err := zs.graphAdapter.GetNode(ctx, nID, "")
+			if err != nil {
+				continue
 			}
+
+			// Only include Zettel nodes belonging to this idoso
+			if node.NodeType != "Zettel" {
+				continue
+			}
+			nodeIdosoID := toFloat64Zettel(node.Content["idoso_id"])
+			if int64(nodeIdosoID) != idosoID {
+				continue
+			}
+
+			zettelID, _ := node.Content["id"].(string)
+			title, _ := node.Content["title"].(string)
+			zettelType, _ := node.Content["type"].(string)
+
+			nodeIDSet[nID] = true
+			graphData.Nodes = append(graphData.Nodes, GraphNode{
+				ID:    zettelID,
+				Label: title,
+				Type:  ZettelType(zettelType),
+				Size:  5,
+				Color: zs.getColorForType(ZettelType(zettelType)),
+			})
+		}
+	} else {
+		// No center: query all zettels for this idoso via NQL
+		nql := `MATCH (z:Zettel) RETURN z LIMIT 100`
+		result, err := zs.graphAdapter.ExecuteNQL(ctx, nql, nil, "")
+		if err != nil {
+			return nil, err
+		}
+
+		for _, node := range result.Nodes {
+			nodeIdosoID := toFloat64Zettel(node.Content["idoso_id"])
+			if int64(nodeIdosoID) != idosoID {
+				continue
+			}
+
+			zettelID, _ := node.Content["id"].(string)
+			title, _ := node.Content["title"].(string)
+			zettelType, _ := node.Content["type"].(string)
+
+			graphData.Nodes = append(graphData.Nodes, GraphNode{
+				ID:    zettelID,
+				Label: title,
+				Type:  ZettelType(zettelType),
+				Size:  5,
+				Color: zs.getColorForType(ZettelType(zettelType)),
+			})
 		}
 	}
 
-	return graph, nil
+	// Get edges from PostgreSQL zettel_links (more reliable for known links)
+	links, _ := zs.getAllLinks(ctx, idosoID)
+	nodeSet := make(map[string]bool)
+	for _, n := range graphData.Nodes {
+		nodeSet[n.ID] = true
+	}
+
+	for _, link := range links {
+		if nodeSet[link.FromID] && nodeSet[link.ToID] {
+			graphData.Edges = append(graphData.Edges, GraphEdge{
+				From:     link.FromID,
+				To:       link.ToID,
+				Strength: link.Strength,
+				Label:    link.LinkType,
+			})
+		}
+	}
+
+	return graphData, nil
+}
+
+// Helper type conversion
+func toFloat64Zettel(v interface{}) float64 {
+	if v == nil {
+		return 0
+	}
+	switch val := v.(type) {
+	case float64:
+		return val
+	case float32:
+		return float64(val)
+	case int:
+		return float64(val)
+	case int64:
+		return float64(val)
+	default:
+		return 0
+	}
 }

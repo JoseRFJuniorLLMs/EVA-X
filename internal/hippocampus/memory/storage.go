@@ -4,13 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"eva/internal/brainstem/infrastructure/vector"
 	"fmt"
 	"log"
 	"strings"
 	"time"
 
-	pb "github.com/qdrant/go-client/qdrant"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 )
 
 // =============================================================================
@@ -43,18 +42,18 @@ type Memory struct {
 
 // MemoryStore gerencia o armazenamento de memórias
 type MemoryStore struct {
-	db         *sql.DB
-	graphStore *GraphStore          // Para salvar relações no Neo4j
-	qdrant     *vector.QdrantClient // Para salvar vetores no Qdrant
+	db             *sql.DB
+	graphStore     *GraphStore                    // Para salvar relações no Neo4j
+	vectorAdapter  *nietzscheInfra.VectorAdapter  // Para salvar vetores no NietzscheDB
 }
 
 // NewMemoryStore cria um novo gerenciador de memórias
 // graphStore é opcional - se nil, apenas Postgres será usado
-func NewMemoryStore(db *sql.DB, graphStore *GraphStore, qdrant *vector.QdrantClient) *MemoryStore {
+func NewMemoryStore(db *sql.DB, graphStore *GraphStore, vectorAdapter *nietzscheInfra.VectorAdapter) *MemoryStore {
 	return &MemoryStore{
-		db:         db,
-		graphStore: graphStore,
-		qdrant:     qdrant,
+		db:            db,
+		graphStore:    graphStore,
+		vectorAdapter: vectorAdapter,
 	}
 }
 
@@ -103,9 +102,8 @@ func (m *MemoryStore) Store(ctx context.Context, memory *Memory) error {
 		}
 	}
 
-	// 3. ✅ NOVO: Salvar vetor no Qdrant (Substituindo pgvector)
-	if m.qdrant != nil && len(memory.Embedding) > 0 {
-		// Converter map[string]interface{} para payload do Qdrant
+	// 3. Salvar vetor no NietzscheDB
+	if m.vectorAdapter != nil && len(memory.Embedding) > 0 {
 		payload := map[string]interface{}{
 			"id":              memory.ID,
 			"idoso_id":        memory.IdosoID,
@@ -113,7 +111,7 @@ func (m *MemoryStore) Store(ctx context.Context, memory *Memory) error {
 			"speaker":         memory.Speaker,
 			"emotion":         memory.Emotion,
 			"importance":      memory.Importance,
-			"topics":          memory.Topics, // Qdrant aceita arrays
+			"topics":          memory.Topics,
 			"timestamp":       memory.Timestamp.Format(time.RFC3339),
 			"event_date":      memory.EventDate.Format(time.RFC3339),
 			"is_atomic":       memory.IsAtomic,
@@ -121,51 +119,14 @@ func (m *MemoryStore) Store(ctx context.Context, memory *Memory) error {
 			"call_history_id": memory.CallHistoryID,
 		}
 
-		// Converter payload para formato Qdrant (protobuf)
-		qPayload := make(map[string]*pb.Value)
-		for k, v := range payload {
-			switch val := v.(type) {
-			case string:
-				qPayload[k] = &pb.Value{Kind: &pb.Value_StringValue{StringValue: val}}
-			case int:
-				qPayload[k] = &pb.Value{Kind: &pb.Value_IntegerValue{IntegerValue: int64(val)}}
-			case int64:
-				qPayload[k] = &pb.Value{Kind: &pb.Value_IntegerValue{IntegerValue: val}}
-			case float64:
-				qPayload[k] = &pb.Value{Kind: &pb.Value_DoubleValue{DoubleValue: val}}
-			case bool:
-				qPayload[k] = &pb.Value{Kind: &pb.Value_BoolValue{BoolValue: val}}
-			case []string:
-				list := make([]*pb.Value, len(val))
-				for i, s := range val {
-					list[i] = &pb.Value{Kind: &pb.Value_StringValue{StringValue: s}}
-				}
-				qPayload[k] = &pb.Value{Kind: &pb.Value_ListValue{ListValue: &pb.ListValue{Values: list}}}
-			}
-		}
-
-		// Construir PointStruct
-		point := &pb.PointStruct{
-			Id: &pb.PointId{
-				PointIdOptions: &pb.PointId_Num{Num: uint64(memory.ID)},
-			},
-			Vectors: &pb.Vectors{
-				VectorsOptions: &pb.Vectors_Vector{
-					Vector: &pb.Vector{Data: memory.Embedding},
-				},
-			},
-			Payload: qPayload,
-		}
-
-		// Upsert no Qdrant
-		err := m.qdrant.Upsert(ctx, "memories", []*pb.PointStruct{point})
+		err := m.vectorAdapter.Upsert(ctx, "memories", fmt.Sprintf("%d", memory.ID), memory.Embedding, payload)
 		if err != nil {
-			log.Printf("❌ [QDRANT] Falha ao salvar vetor para memória %d: %v", memory.ID, err)
+			log.Printf("❌ [VECTOR] Falha ao salvar vetor para memória %d: %v", memory.ID, err)
 		} else {
-			log.Printf("✅ [QDRANT] Vetor salvo com sucesso: %d", memory.ID)
+			log.Printf("✅ [VECTOR] Vetor salvo com sucesso: %d", memory.ID)
 		}
 	} else {
-		log.Printf("⚠️ [NEO4J] GraphStore não disponível - relações NÃO salvas (apenas Postgres)")
+		log.Printf("⚠️ [VECTOR] VectorAdapter não disponível ou embedding vazio - vetor NÃO salvo (apenas Postgres)")
 	}
 
 	return nil

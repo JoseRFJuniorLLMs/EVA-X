@@ -5,18 +5,20 @@ package memory
 
 import (
 	"context"
-	"eva/internal/brainstem/infrastructure/graph"
 	"fmt"
+	"strings"
+
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 )
 
 // PrimingEngine substitui RetrievalService no modelo FZPN
 type PrimingEngine struct {
-	client *graph.Neo4jClient
+	graph *nietzscheInfra.GraphAdapter
 }
 
 // NewPrimingEngine cria novo motor de priming
-func NewPrimingEngine(client *graph.Neo4jClient) *PrimingEngine {
-	return &PrimingEngine{client: client}
+func NewPrimingEngine(graph *nietzscheInfra.GraphAdapter) *PrimingEngine {
+	return &PrimingEngine{graph: graph}
 }
 
 // Prime realiza a busca "Fractal" puxando nós conectados
@@ -24,36 +26,30 @@ func (p *PrimingEngine) Prime(ctx context.Context, idosoID int64, queryText stri
 	// 1. Busca por palavras-chave (Significantes/Topicos) na query
 	// (Simplificação: busca textual exata ou contains)
 
-	cypher := `
-		MATCH (p:Person {id: $idosoId})-[:EXPERIENCED]->(e:Event)
-		WHERE e.content CONTAINS $text OR e.speaker = 'user'
-		
-		// Encontrar nós conectados (Significantes, Tópicos)
-		OPTIONAL MATCH (e)-[:RELATED_TO|EVOCA]->(related)
-		
-		// Calcular "peso" baseado nas conexões (Simula ativação neural)
-		WITH e, related, count(related) as weight
-		ORDER BY weight DESC, e.timestamp DESC
-		LIMIT 5
-		
-		RETURN e.content as content
-	`
-
-	params := map[string]interface{}{
-		"idosoId": idosoID,
-		"text":    queryText,
-	}
-
-	records, err := p.client.ExecuteRead(ctx, cypher, params)
+	// Start BFS from the Person node, traversing EXPERIENCED edges (depth 2 covers RELATED_TO/EVOCA)
+	startNodeID := fmt.Sprintf("Person:%d", idosoID)
+	nodeIDs, err := p.graph.BfsWithEdgeType(ctx, startNodeID, "EXPERIENCED", 2, "")
 	if err != nil {
 		return nil, fmt.Errorf("priming search failed: %w", err)
 	}
 
+	// Fetch each node and filter by content match or speaker
 	var results []string
-	for _, record := range records {
-		content, _ := record.Get("content")
-		if str, ok := content.(string); ok {
-			results = append(results, str)
+	for _, nodeID := range nodeIDs {
+		node, err := p.graph.GetNode(ctx, nodeID, "")
+		if err != nil || !node.Found {
+			continue
+		}
+		content, hasContent := node.Content["content"].(string)
+		if !hasContent {
+			continue
+		}
+		speaker, _ := node.Content["speaker"].(string)
+		if strings.Contains(content, queryText) || speaker == "user" {
+			results = append(results, content)
+		}
+		if len(results) >= 5 {
+			break
 		}
 	}
 
