@@ -35,17 +35,25 @@ func (ga *GraphAdapter) SetCollection(collection string) {
 
 // MergeNodeOpts mirrors the options for a Neo4j MERGE on a node.
 type MergeNodeOpts struct {
-	Collection string
-	NodeType   string
-	MatchKeys  map[string]interface{}
+	Collection  string
+	NodeType    string
+	MatchKeys   map[string]interface{}
 	OnCreateSet map[string]interface{}
 	OnMatchSet  map[string]interface{}
+	// BLOCKER 2 fix: expose Poincaré coords and energy so nodes are placed
+	// in hyperbolic space, not permanently at the ball origin.
+	Coords []float64 // Poincaré ball embedding; nil → server assigns
+	Energy float32   // node energy; 0 → server default (1.0)
 }
 
 // MergeNodeResult is the result of a MergeNode operation.
 type MergeNodeResult struct {
 	Created bool
 	NodeID  string
+	// BLOCKER 3 fix: expose the full NodeResult (Embedding, Energy, Depth,
+	// HausdorffLocal, CreatedAt, NodeType) instead of only Content.
+	Node    nietzsche.NodeResult
+	// Content is a convenience alias for Node.Content; kept for backward compat.
 	Content map[string]interface{}
 }
 
@@ -59,11 +67,13 @@ func (ga *GraphAdapter) MergeNode(ctx context.Context, opts MergeNodeOpts) (*Mer
 	}
 
 	result, err := ga.client.MergeNode(ctx, nietzsche.MergeNodeOpts{
-		Collection: col,
-		NodeType:   opts.NodeType,
-		MatchKeys:  opts.MatchKeys,
+		Collection:  col,
+		NodeType:    opts.NodeType,
+		MatchKeys:   opts.MatchKeys,
 		OnCreateSet: opts.OnCreateSet,
 		OnMatchSet:  opts.OnMatchSet,
+		Coords:      opts.Coords, // BLOCKER 2 fix: forward Poincaré coords
+		Energy:      opts.Energy, // BLOCKER 2 fix: forward energy
 	})
 	if err != nil {
 		log.Error().Err(err).
@@ -80,9 +90,13 @@ func (ga *GraphAdapter) MergeNode(ctx context.Context, opts MergeNodeOpts) (*Mer
 		Str("node_id", result.NodeID).
 		Msg("merge node completed")
 
+	// BLOCKER 3 fix: expose the full NodeResult so callers can access
+	// Embedding, Energy, Depth, NodeType, CreatedAt, HausdorffLocal.
+	// Content is kept as a convenience shortcut for Node.Content.
 	return &MergeNodeResult{
 		Created: result.Created,
 		NodeID:  result.NodeID,
+		Node:    result.Node,
 		Content: result.Node.Content,
 	}, nil
 }
@@ -171,6 +185,11 @@ func (ga *GraphAdapter) Bfs(ctx context.Context, startID string, maxDepth uint32
 
 // BfsWithEdgeType performs BFS filtered by edge type.
 // Replaces: MATCH (a)-[:TYPE*1..N]-(b)
+//
+// BLOCKER 1 fix: the SDK's TraversalOpts has no EdgeType field so BFS is
+// always type-agnostic. We implement the filter client-side with an iterative
+// NQL MATCH per frontier level — one query per frontier node per depth step.
+// Both current callers use maxDepth=1 so the cost is a single NQL call.
 func (ga *GraphAdapter) BfsWithEdgeType(ctx context.Context, startID string,
 	edgeType string, maxDepth uint32, collection string) ([]string, error) {
 
@@ -179,9 +198,43 @@ func (ga *GraphAdapter) BfsWithEdgeType(ctx context.Context, startID string,
 		col = ga.collection
 	}
 
-	return ga.client.Bfs(ctx, startID, nietzsche.TraversalOpts{
-		MaxDepth: maxDepth,
-	}, col)
+	visited := map[string]bool{startID: true}
+	frontier := []string{startID}
+	var result []string
+
+	for depth := uint32(0); depth < maxDepth && len(frontier) > 0; depth++ {
+		var nextFrontier []string
+		for _, nodeID := range frontier {
+			// NQL: find direct neighbors connected via the specific edge type.
+			// edgeType is an internal constant, not user input — fmt.Sprintf is safe.
+			nql := fmt.Sprintf(`MATCH (a)-[r:%s]-(b) WHERE a.id = $nodeID RETURN b`, edgeType)
+			qr, err := ga.client.Query(ctx, nql, map[string]interface{}{"nodeID": nodeID}, col)
+			if err != nil {
+				continue
+			}
+			// Collect from result.Nodes (RETURN b → single-node projection)
+			for _, n := range qr.Nodes {
+				if n.ID != "" && !visited[n.ID] {
+					visited[n.ID] = true
+					nextFrontier = append(nextFrontier, n.ID)
+					result = append(result, n.ID)
+				}
+			}
+			// Also handle NodePairs in case the executor uses pairs for MATCH queries
+			for _, pair := range qr.NodePairs {
+				for _, id := range []string{pair.From.ID, pair.To.ID} {
+					if id != "" && id != nodeID && !visited[id] {
+						visited[id] = true
+						nextFrontier = append(nextFrontier, id)
+						result = append(result, id)
+					}
+				}
+			}
+		}
+		frontier = nextFrontier
+	}
+
+	return result, nil
 }
 
 // ── Node CRUD (replaces Neo4j CREATE/SET/DELETE) ─────────────────────────────

@@ -91,8 +91,11 @@ func (h *HebbianRealTime) UpdateWeights(ctx context.Context, patientID int64, no
 
 // updatePairWeight atualiza peso de uma aresta entre dois nos
 func (h *HebbianRealTime) updatePairWeight(ctx context.Context, nodeA, nodeB string) error {
-	// 1. Buscar aresta existente via NQL
-	nql := `MATCH (a)-[r:ASSOCIADO_COM|CO_ACTIVATED]-(b) WHERE a.id = $nodeA AND b.id = $nodeB RETURN r LIMIT 1`
+	// 1. Buscar aresta existente via NQL.
+	// BLOCKER 4 fix: NQL "RETURN r" populates NodePairs (node data), NOT edge
+	// properties. Edge properties must be projected explicitly as scalar columns
+	// so the executor places them in QueryResult.ScalarRows.
+	nql := `MATCH (a)-[r:ASSOCIADO_COM|CO_ACTIVATED]-(b) WHERE a.id = $nodeA AND b.id = $nodeB RETURN r.fast_weight, r.weight, r.last_activated LIMIT 1`
 	result, err := h.graphAdapter.ExecuteNQL(ctx, nql, map[string]interface{}{
 		"nodeA": nodeA,
 		"nodeB": nodeB,
@@ -105,21 +108,21 @@ func (h *HebbianRealTime) updatePairWeight(ctx context.Context, nodeA, nodeB str
 	var lastActivated time.Time
 	var relExists bool
 
-	if len(result.NodePairs) > 0 {
+	if len(result.ScalarRows) > 0 {
 		relExists = true
-		edgeContent := result.NodePairs[0].To.Content
+		row := result.ScalarRows[0]
 		currentWeight = 0.5
-		if v, ok := edgeContent["fast_weight"]; ok {
+		if v, ok := row["r.fast_weight"]; ok && v != nil {
 			if f, ok := v.(float64); ok {
 				currentWeight = f
 			}
-		} else if v, ok := edgeContent["weight"]; ok {
+		} else if v, ok := row["r.weight"]; ok && v != nil {
 			if f, ok := v.(float64); ok {
 				currentWeight = f
 			}
 		}
-		lastActivated = time.Now() // default
-		if v, ok := edgeContent["last_activated"]; ok {
+		lastActivated = time.Now()
+		if v, ok := row["r.last_activated"]; ok && v != nil {
 			if f, ok := v.(float64); ok {
 				lastActivated = time.Unix(int64(f), 0)
 			}
@@ -235,8 +238,10 @@ func (h *HebbianRealTime) BoostMemories(ctx context.Context, memoryIDs []string,
 
 	boosted := 0
 	for _, memID := range memoryIDs {
-		// Find edges connected to this memory node
-		nql := `MATCH (m)-[r]-(other) WHERE m.id = $memID RETURN r, other`
+		// Find edges connected to this memory node.
+		// BLOCKER 4 fix: project edge properties as scalars so the executor
+		// puts them in ScalarRows, not in NodePairs (which contains node data only).
+		nql := `MATCH (m)-[r]-(other) WHERE m.id = $memID RETURN other.id, r.fast_weight, r.weight`
 		result, err := h.graphAdapter.ExecuteNQL(ctx, nql, map[string]interface{}{
 			"memID": memID,
 		}, "")
@@ -244,13 +249,17 @@ func (h *HebbianRealTime) BoostMemories(ctx context.Context, memoryIDs []string,
 			continue
 		}
 
-		for _, pair := range result.NodePairs {
+		for _, row := range result.ScalarRows {
+			otherID, _ := row["other.id"].(string)
+			if otherID == "" {
+				continue
+			}
 			currentWeight := 0.5
-			if v, ok := pair.To.Content["fast_weight"]; ok {
-				if f, ok := v.(float64); ok {
+			if v, ok := row["r.fast_weight"]; ok && v != nil {
+				if f, ok := v.(float64); ok && f > 0 {
 					currentWeight = f
 				}
-			} else if v, ok := pair.To.Content["weight"]; ok {
+			} else if v, ok := row["r.weight"]; ok && v != nil {
 				if f, ok := v.(float64); ok {
 					currentWeight = f
 				}
@@ -262,12 +271,12 @@ func (h *HebbianRealTime) BoostMemories(ctx context.Context, memoryIDs []string,
 			}
 
 			_, err := h.graphAdapter.MergeEdge(ctx, nietzscheInfra.MergeEdgeOpts{
-				FromNodeID: pair.From.ID,
-				ToNodeID:   pair.To.ID,
+				FromNodeID: memID,
+				ToNodeID:   otherID,
 				EdgeType:   "Association",
 				OnMatchSet: map[string]interface{}{
-					"fast_weight":              newWeight,
-					"feedback_boost_at":        nietzscheInfra.NowUnix(),
+					"fast_weight":                    newWeight,
+					"feedback_boost_at":              nietzscheInfra.NowUnix(),
 					"feedback_boost_count_increment": 1,
 				},
 			})
@@ -295,8 +304,9 @@ func (h *HebbianRealTime) DecayMemories(ctx context.Context, memoryIDs []string,
 
 	decayed := 0
 	for _, memID := range memoryIDs {
-		// Find edges connected to this memory node
-		nql := `MATCH (m)-[r]-(other) WHERE m.id = $memID RETURN r, other`
+		// Find edges connected to this memory node.
+		// BLOCKER 4 fix: project edge properties as scalars → ScalarRows.
+		nql := `MATCH (m)-[r]-(other) WHERE m.id = $memID RETURN other.id, r.fast_weight, r.weight`
 		result, err := h.graphAdapter.ExecuteNQL(ctx, nql, map[string]interface{}{
 			"memID": memID,
 		}, "")
@@ -304,13 +314,17 @@ func (h *HebbianRealTime) DecayMemories(ctx context.Context, memoryIDs []string,
 			continue
 		}
 
-		for _, pair := range result.NodePairs {
+		for _, row := range result.ScalarRows {
+			otherID, _ := row["other.id"].(string)
+			if otherID == "" {
+				continue
+			}
 			currentWeight := 0.5
-			if v, ok := pair.To.Content["fast_weight"]; ok {
-				if f, ok := v.(float64); ok {
+			if v, ok := row["r.fast_weight"]; ok && v != nil {
+				if f, ok := v.(float64); ok && f > 0 {
 					currentWeight = f
 				}
-			} else if v, ok := pair.To.Content["weight"]; ok {
+			} else if v, ok := row["r.weight"]; ok && v != nil {
 				if f, ok := v.(float64); ok {
 					currentWeight = f
 				}
@@ -323,12 +337,12 @@ func (h *HebbianRealTime) DecayMemories(ctx context.Context, memoryIDs []string,
 			}
 
 			_, err := h.graphAdapter.MergeEdge(ctx, nietzscheInfra.MergeEdgeOpts{
-				FromNodeID: pair.From.ID,
-				ToNodeID:   pair.To.ID,
+				FromNodeID: memID,
+				ToNodeID:   otherID,
 				EdgeType:   "Association",
 				OnMatchSet: map[string]interface{}{
-					"fast_weight":              newWeight,
-					"feedback_decay_at":        nietzscheInfra.NowUnix(),
+					"fast_weight":                    newWeight,
+					"feedback_decay_at":              nietzscheInfra.NowUnix(),
 					"feedback_decay_count_increment": 1,
 				},
 			})
@@ -369,7 +383,8 @@ func (h *HebbianRealTime) GetStatistics(ctx context.Context, patientID int64) (*
 	first := true
 
 	for _, nid := range neighborIDs {
-		nql := `MATCH (n)-[r:ASSOCIADO_COM|CO_ACTIVATED]-(m) WHERE n.id = $nodeID AND r.hebbian_rt_updated_at IS NOT NULL RETURN r`
+		// BLOCKER 4 fix: project edge properties as scalars → ScalarRows.
+		nql := `MATCH (n)-[r:ASSOCIADO_COM|CO_ACTIVATED]-(m) WHERE n.id = $nodeID AND r.hebbian_rt_updated_at IS NOT NULL RETURN r.fast_weight, r.co_activation_count`
 		result, err := h.graphAdapter.ExecuteNQL(ctx, nql, map[string]interface{}{
 			"nodeID": nid,
 		}, "")
@@ -377,9 +392,9 @@ func (h *HebbianRealTime) GetStatistics(ctx context.Context, patientID int64) (*
 			continue
 		}
 
-		for _, pair := range result.NodePairs {
+		for _, row := range result.ScalarRows {
 			fw := 0.5
-			if v, ok := pair.To.Content["fast_weight"]; ok {
+			if v, ok := row["r.fast_weight"]; ok && v != nil {
 				if f, ok := v.(float64); ok {
 					fw = f
 				}
@@ -394,7 +409,7 @@ func (h *HebbianRealTime) GetStatistics(ctx context.Context, patientID int64) (*
 			}
 			first = false
 
-			if v, ok := pair.To.Content["co_activation_count"]; ok {
+			if v, ok := row["r.co_activation_count"]; ok && v != nil {
 				switch c := v.(type) {
 				case float64:
 					totalCoActivations += int(c)
