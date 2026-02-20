@@ -47,6 +47,7 @@ import (
 	"eva/internal/motor/telegram"
 	"eva/internal/motor/webhooks"
 	"eva/internal/brainstem/oauth"
+	gmailpkg "eva/internal/motor/gmail"
 	"eva/internal/integration"
 	internalmemory "eva/internal/memory"
 	"eva/internal/memory/krylov"
@@ -157,6 +158,7 @@ type SignalingServer struct {
 	globalWorkspace    *consciousness.GlobalWorkspace
 	situationMod       *situation.SituationalModulator
 	ramEngine          *ram.RAMEngine
+	gmailWatcher       *gmailpkg.Watcher
 }
 
 func main() {
@@ -308,6 +310,7 @@ func main() {
 		cfg.GoogleOAuthClientID,
 		cfg.GoogleOAuthClientSecret,
 		cfg.GoogleOAuthRedirectURL,
+		cfg.OAuthStateSecret,
 	)
 	toolsHandler.SetOAuthService(oauthSvc)
 
@@ -562,6 +565,18 @@ func main() {
 		ramEngine:          ramEng,
 	}
 
+	// Gmail Watcher (polls for new emails every 2 min, notifies via WebSocket)
+	server.gmailWatcher = gmailpkg.NewWatcher(
+		2*time.Minute,
+		func(idosoID int64) (string, error) {
+			return toolsHandler.GetGoogleAccessToken(idosoID)
+		},
+		func(idosoID int64, msgType string, payload interface{}) {
+			toolsHandler.NotifyBrowser(idosoID, msgType, payload)
+		},
+	)
+	log.Info().Msg("Gmail Watcher configurado (poll cada 2 min)")
+
 	// 9. Router & Servidor HTTP
 	router := mux.NewRouter()
 
@@ -605,6 +620,15 @@ func main() {
 	v1.HandleFunc("/idosos/by-cpf/{cpf}", server.handleGetIdosoByCpf).Methods("GET")
 	v1.HandleFunc("/idosos/{id}", server.handleGetIdoso).Methods("GET")
 	v1.HandleFunc("/idosos/sync-token-by-cpf", server.handleSyncTokenByCpf).Methods("PATCH")
+
+	// OAuth routes (Google account linking via CPF + HMAC state)
+	oauthHandler := oauth.NewHandler(oauthSvc, db, cfg.FrontendBaseURL)
+	v1.HandleFunc("/oauth/authorize", oauthHandler.HandleAuthorize).Methods("GET")
+	v1.HandleFunc("/oauth/callback", oauthHandler.HandleCallback).Methods("GET")
+	v1.HandleFunc("/oauth/token-exchange", oauthHandler.HandleTokenExchange).Methods("POST")
+	v1.HandleFunc("/idosos/by-cpf/{cpf}/google-status", oauthHandler.HandleGoogleStatus).Methods("GET")
+	v1.HandleFunc("/idosos/by-cpf/{cpf}/google-disconnect", oauthHandler.HandleGoogleDisconnect).Methods("POST")
+	log.Info().Msg("OAuth Google routes registered: /api/v1/oauth/*")
 
 	// MCP Server — Model Context Protocol
 	mcpServer := mcp.NewServer(db.Conn)

@@ -824,6 +824,45 @@ func GetDefaultTools() []interface{} {
 				map[string]interface{}{"name": "delete_skill", "description": "Remover skill", "parameters": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"skill_name": map[string]interface{}{"type": "string", "description": "Nome"}}, "required": []string{"skill_name"}}},
 			},
 		},
+		// ============================================================================
+		// UI CONTROL (controlar a interface do browser do usuario)
+		// ============================================================================
+		map[string]interface{}{
+			"function_declarations": []interface{}{
+				map[string]interface{}{
+					"name":        "control_ui",
+					"description": "Controlar a interface do aplicativo no browser do usuario. Use para navegar entre paginas, trocar modo de sessao, abrir URLs, mostrar notificacoes, ativar tela cheia ou rolar ate um elemento.",
+					"parameters": map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"action": map[string]interface{}{
+								"type":        "string",
+								"description": "Acao a executar na UI",
+								"enum":        []string{"navigate", "switch_mode", "open_url", "show_notification", "fullscreen", "scroll_to"},
+							},
+							"target": map[string]interface{}{
+								"type":        "string",
+								"description": "Pagina ou elemento alvo (ex: /dashboard, /detection, /patients, /map, /gallery, #element_id)",
+							},
+							"mode": map[string]interface{}{
+								"type":        "string",
+								"description": "Modo de sessao para switch_mode",
+								"enum":        []string{"voice", "screen", "camera"},
+							},
+							"url": map[string]interface{}{
+								"type":        "string",
+								"description": "URL para open_url (abre em nova aba)",
+							},
+							"message": map[string]interface{}{
+								"type":        "string",
+								"description": "Texto da notificacao para show_notification",
+							},
+						},
+						"required": []string{"action"},
+					},
+				},
+			},
+		},
 	}
 }
 

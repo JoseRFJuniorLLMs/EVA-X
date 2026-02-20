@@ -130,6 +130,11 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 	if clientCPF != "" && lacan.IsCreatorCPF(clientCPF) && s.db != nil {
 		log.Info().Str("session", sessionID).Msg("[BROWSER] === MODO CRIADOR ATIVADO ===")
 
+		// Setar idosoID do criador para que tools funcionem (gate requer idosoID > 0)
+		if idoso, err := s.db.GetIdosoByCPF(clientCPF); err == nil {
+			idosoID = idoso.ID
+		}
+
 		creatorSvc := personality.NewCreatorProfileService(s.db.Conn)
 		profile, err := creatorSvc.LoadCreatorProfile(ctx)
 		if err != nil {
@@ -372,6 +377,12 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 			writeMu.Unlock()
 		})
 		defer s.toolsHandler.UnregisterBrowserListener(idosoID)
+
+		// Gmail Watcher: poll for new emails during this session
+		if s.gmailWatcher != nil {
+			s.gmailWatcher.StartWatching(idosoID)
+			defer s.gmailWatcher.StopWatching(idosoID)
+		}
 	}
 	var geminiMu sync.RWMutex   // protege geminiRef
 	geminiRef := initialClient  // client Gemini ativo
@@ -484,25 +495,37 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 										continue
 									}
 
-									// Envia resultado como texto para o Gemini processar
-									toolMsg := fmt.Sprintf("[TOOL_RESULT:%s] %v", tc.Name, result["message"])
-									geminiMu.RLock()
-									c := geminiRef
-									geminiMu.RUnlock()
-									if c != nil {
-										c.SendText(toolMsg)
+									// Envia ao browser: ui_action para control_ui, tool_event para o resto
+								if isUI, _ := result["ui_action"].(bool); isUI {
+									uiPayload := map[string]interface{}{
+										"type":    "ui_action",
+										"action":  result["action"],
+										"target":  result["target"],
+										"mode":    result["mode"],
+										"url":     result["url"],
+										"message": result["message_ui"],
 									}
-									// Envia tool_event ao browser para renderizacao rica
 									writeMu.Lock()
-									conn.WriteJSON(browserMessage{
-										Type:     "tool_event",
-										Tool:     tc.Name,
-										ToolData: result,
-										Status:   "success",
-									})
+									conn.WriteJSON(uiPayload)
 									writeMu.Unlock()
+									log.Info().Str("action", fmt.Sprint(result["action"])).Msg("[UI] ui_action enviado ao browser")
+								} else {
+									toolEventPayload := map[string]interface{}{
+										"type":      "tool_event",
+										"tool":      tc.Name,
+										"tool_data": result,
+										"status":    "success",
+									}
+									writeMu.Lock()
+									conn.WriteJSON(toolEventPayload)
+									writeMu.Unlock()
+									log.Info().Str("tool", tc.Name).Msg("[TOOLS] tool_event enviado ao browser")
+								}
 
-									log.Info().Str("tool", tc.Name).Msg("[TOOLS] Resultado enviado ao Gemini e browser")
+								// NOTA: NAO enviar SendText ao Gemini native-audio.
+								// O modelo gemini-2.5-flash-native-audio-preview nao suporta client_content
+								// (texto) durante sessao de audio — retorna close 1008 "policy violation".
+								log.Info().Str("tool", tc.Name).Msg("[TOOLS] Tool executada (resultado via WebSocket)")
 								}
 							}(text, idosoID)
 						}

@@ -65,6 +65,8 @@ type Config struct {
 	GoogleOAuthClientID     string
 	GoogleOAuthClientSecret string
 	GoogleOAuthRedirectURL  string
+	OAuthStateSecret        string // HMAC secret for signing OAuth state parameter
+	FrontendBaseURL         string // Base URL for frontend redirects after OAuth callback
 
 	// WhatsApp (Meta Graph API)
 	WhatsAppAccessToken   string
@@ -189,6 +191,8 @@ func Load() (*Config, error) {
 		GoogleOAuthClientID:     os.Getenv("GOOGLE_OAUTH_CLIENT_ID"),
 		GoogleOAuthClientSecret: os.Getenv("GOOGLE_OAUTH_CLIENT_SECRET"),
 		GoogleOAuthRedirectURL:  getEnvWithDefault("GOOGLE_OAUTH_REDIRECT_URL", "https://eva-mind.com/oauth/callback"),
+		OAuthStateSecret:        getEnvWithDefault("OAUTH_STATE_SECRET", "eva-oauth-state-secret-2026"),
+		FrontendBaseURL:         getEnvWithDefault("FRONTEND_BASE_URL", "http://localhost:3000"),
 
 		// WhatsApp (Meta Graph API)
 		WhatsAppAccessToken:   os.Getenv("WHATSAPP_ACCESS_TOKEN"),
