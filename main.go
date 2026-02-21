@@ -328,9 +328,10 @@ func main() {
 		log.Info().Msg("💬 WhatsApp Meta API configurado")
 	}
 
-	// ✅ Telegram Bot
+	// ✅ Telegram Bot (envio + recepção de mensagens)
+	var telegramSvc *telegram.Service
 	if cfg.TelegramBotToken != "" {
-		telegramSvc := telegram.NewService(cfg.TelegramBotToken)
+		telegramSvc = telegram.NewService(cfg.TelegramBotToken)
 		toolsHandler.SetTelegramService(telegramSvc)
 		log.Info().Msg("📱 Telegram Bot configurado")
 	}
@@ -731,6 +732,38 @@ func main() {
 		memSched.Start(ctx)
 	}()
 	log.Info().Msg("Memory Scheduler iniciado (REM 3AM + Krylov 6h)")
+
+	// Telegram Bot Polling (recebe mensagens e responde via Gemini)
+	if telegramSvc != nil {
+		chatHandler := telegram.NewChatHandler(
+			func(prompt string) (string, error) {
+				return gemini.AnalyzeText(cfg, prompt)
+			},
+			"eva_malaria_bot",
+		)
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Error().Interface("panic", r).Msg("CRITICO: Telegram Polling panic")
+				}
+			}()
+			telegramSvc.StartPolling(ctx, chatHandler.HandleMessage)
+		}()
+		// Limpeza periodica de historico de chat
+		go func() {
+			ticker := time.NewTicker(30 * time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					chatHandler.CleanupOldHistory()
+				}
+			}
+		}()
+		log.Info().Msg("📱 Telegram Bot polling iniciado (Gemini 2.5 Flash)")
+	}
 
 	// 8. Start Server
 	srv := &http.Server{
