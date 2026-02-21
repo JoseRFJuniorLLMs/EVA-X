@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"log"
 	"regexp"
 
@@ -124,10 +123,8 @@ func (h *Handler) executeToolAndInjectBack(ctx context.Context, session interfac
 
 	resultJSON, _ := json.Marshal(result)
 
-	// Injection: Envia o resultado como texto de sistema para o modelo saber o que aconteceu
-	// O modelo (SafeSession) deve ter um método SendText
-	if s, ok := session.(interface{ SendText(string) error }); ok {
-		feedbackMsg := fmt.Sprintf("[SISTEMA: Ferramenta '%s' executada. Resultado: %s]", name, string(resultJSON))
-		s.SendText(feedbackMsg)
-	}
+	// NOTA: NAO chamar SendText aqui — gemini native-audio (gemini-2.5-flash-native-audio-preview)
+	// rejeita client_content com close 1008 "policy violation".
+	// O resultado da tool e enviado ao frontend via WebSocket (tool_event) pelo browser_voice_handler.
+	log.Printf("✅ Tool '%s' resultado: %s (nao injetado no Gemini native-audio)", name, string(resultJSON))
 }
