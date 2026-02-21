@@ -646,27 +646,6 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 		}
 	}()
 
-	// --- Ping keepalive: mantém conexão viva contra NAT/firewall timeout ---
-	pingTicker := time.NewTicker(30 * time.Second)
-	defer pingTicker.Stop()
-
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-pingTicker.C:
-				writeMu.Lock()
-				err := conn.WriteMessage(gws.PingMessage, nil)
-				writeMu.Unlock()
-				if err != nil {
-					sigChan <- browserSignal{kind: bsigFatal, gen: 0, err: err}
-					return
-				}
-			}
-		}
-	}()
-
 	// --- Loop principal: processa sinais e reconecta quando necessario ---
 	reconnectCount := 0
 	var finalErr error
