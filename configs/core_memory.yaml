@@ -4,12 +4,10 @@
 core_memory:
   enabled: true
 
-  # Neo4j Database separado para Core Memory
-  neo4j:
-    uri: "bolt://localhost:7688"  # Porta diferente do banco de pacientes
-    username: "neo4j"
-    password: "${CORE_MEMORY_NEO4J_PASSWORD}"  # Variável de ambiente
-    database: "eva_core_memory"
+  # NietzscheDB collection para Core Memory
+  nietzsche:
+    grpc_addr: "${NIETZSCHE_GRPC_ADDR}"
+    collection: "eva_core"
 
   # Configurações de personalidade inicial
   personality:

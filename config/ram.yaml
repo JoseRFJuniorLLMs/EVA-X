@@ -128,8 +128,8 @@ feedback_examples:
 # Integration points
 integration:
   gemini_api: true                   # Gemini para geração
-  qdrant_search: true                # Qdrant para retrieval
-  neo4j_validation: true             # Neo4j para histórico
+  nietzsche_search: true             # NietzscheDB para retrieval
+  nietzsche_validation: true         # NietzscheDB para histórico
   hebbian_feedback: true             # Hebbian para aprendizado
   api_endpoints: true                # Expor API REST
 

@@ -5,6 +5,7 @@ package database
 
 import (
 	"database/sql"
+	"eva/pkg/crypto"
 	"fmt"
 	"log"
 	"time"
@@ -127,6 +128,11 @@ func (db *DB) GetIdoso(id int64) (*Idoso, error) {
 		return nil, fmt.Errorf("failed to query: %w", err)
 	}
 
+	// LGPD Art. 46: decrypt sensitive fields
+	idoso.Nome = crypto.Decrypt(idoso.Nome)
+	idoso.CPF = crypto.Decrypt(idoso.CPF)
+	idoso.Telefone = crypto.Decrypt(idoso.Telefone)
+
 	return &idoso, nil
 }
 
@@ -151,17 +157,20 @@ func (db *DB) UpdateAgendamentoStatus(id int64, status string) error {
 }
 
 func (db *DB) GetIdosoByCPF(cpf string) (*Idoso, error) {
-	// ✅ Query otimizada: apenas campos necessários para validação
+	// LGPD Art. 46: lookup via cpf_hash (SHA-256), fallback to plaintext for migration
+	cpfHash := crypto.HashCPF(cpf)
+
 	query := `
-		SELECT 
-			id, cpf, ativo
-		FROM idosos 
-		WHERE regexp_replace(cpf, '\D', '', 'g') = regexp_replace($1, '\D', '', 'g')
-			AND ativo = true
+		SELECT id, cpf, ativo
+		FROM idosos
+		WHERE (cpf_hash = $1
+		   OR regexp_replace(cpf, '\D', '', 'g') = regexp_replace($2, '\D', '', 'g'))
+		  AND ativo = true
+		LIMIT 1
 	`
 
 	var idoso Idoso
-	err := db.Conn.QueryRow(query, cpf).Scan(
+	err := db.Conn.QueryRow(query, cpfHash, cpf).Scan(
 		&idoso.ID,
 		&idoso.CPF,
 		&idoso.Ativo,
@@ -169,15 +178,17 @@ func (db *DB) GetIdosoByCPF(cpf string) (*Idoso, error) {
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("idoso não encontrado ou inativo com CPF: %s", cpf)
+			return nil, fmt.Errorf("idoso nao encontrado ou inativo")
 		}
 		return nil, fmt.Errorf("erro ao consultar CPF: %w", err)
 	}
+
+	idoso.CPF = crypto.Decrypt(idoso.CPF)
 
 	maskedCPF := "***"
 	if len(cpf) >= 3 {
 		maskedCPF = "***" + cpf[len(cpf)-3:]
 	}
-	log.Printf("🔍 [POSTGRES] CPF consultado: %s -> ID: %d", maskedCPF, idoso.ID)
+	log.Printf("[POSTGRES] CPF consultado: %s -> ID: %d", maskedCPF, idoso.ID)
 	return &idoso, nil
 }

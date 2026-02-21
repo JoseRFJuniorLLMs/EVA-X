@@ -5,6 +5,7 @@ package database
 
 import (
 	"database/sql"
+	"eva/pkg/crypto"
 	"fmt"
 	"time"
 )
@@ -18,7 +19,8 @@ func (db *DB) SaveGoogleTokens(idosoID int64, refreshToken, accessToken string, 
 		    google_token_expiry = $3
 		WHERE id = $4
 	`
-	_, err := db.Conn.Exec(query, refreshToken, accessToken, expiry, idosoID)
+	// LGPD Art. 46: encrypt tokens at rest
+	_, err := db.Conn.Exec(query, crypto.Encrypt(refreshToken), crypto.Encrypt(accessToken), expiry, idosoID)
 	if err != nil {
 		return fmt.Errorf("failed to save google tokens: %w", err)
 	}
@@ -41,10 +43,10 @@ func (db *DB) GetGoogleTokens(idosoID int64) (refreshToken, accessToken string, 
 	}
 
 	if rt.Valid {
-		refreshToken = rt.String
+		refreshToken = crypto.Decrypt(rt.String)
 	}
 	if at.Valid {
-		accessToken = at.String
+		accessToken = crypto.Decrypt(at.String)
 	}
 	if exp.Valid {
 		expiry = exp.Time
@@ -56,7 +58,8 @@ func (db *DB) GetGoogleTokens(idosoID int64) (refreshToken, accessToken string, 
 // SaveGoogleEmail stores the Google email for an idoso
 func (db *DB) SaveGoogleEmail(idosoID int64, email string) error {
 	query := `UPDATE idosos SET google_email = $1 WHERE id = $2`
-	_, err := db.Conn.Exec(query, email, idosoID)
+	// LGPD Art. 46: encrypt email at rest
+	_, err := db.Conn.Exec(query, crypto.Encrypt(email), idosoID)
 	if err != nil {
 		return fmt.Errorf("failed to save google email: %w", err)
 	}
@@ -71,18 +74,20 @@ type GoogleStatus struct {
 
 // GetGoogleStatusByCPF returns Google account connection status for a CPF
 func (db *DB) GetGoogleStatusByCPF(cpf string) (*GoogleStatus, error) {
+	cpfHash := crypto.HashCPF(cpf)
 	query := `
 		SELECT COALESCE(google_email, '') AS email,
 		       CASE WHEN google_refresh_token IS NOT NULL AND google_refresh_token != '' THEN true ELSE false END AS connected
 		FROM idosos
-		WHERE cpf = $1
+		WHERE cpf_hash = $1 OR cpf = $2
 		LIMIT 1
 	`
 	var status GoogleStatus
-	err := db.Conn.QueryRow(query, cpf).Scan(&status.Email, &status.Connected)
+	err := db.Conn.QueryRow(query, cpfHash, cpf).Scan(&status.Email, &status.Connected)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get google status: %w", err)
 	}
+	status.Email = crypto.Decrypt(status.Email)
 	return &status, nil
 }
 

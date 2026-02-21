@@ -73,6 +73,7 @@ import (
 	"eva/internal/telemetry"
 	"eva/internal/tools"
 	"eva/internal/voice"
+	"eva/pkg/crypto"
 
 	"github.com/gorilla/mux"
 	"github.com/rs/zerolog/log"
@@ -168,6 +169,13 @@ func main() {
 		log.Fatal().Err(err).Msg("Falha ao carregar configurações")
 	}
 	logger := telemetry.NewLogger(cfg.Environment)
+
+	// 1.1 LGPD Art. 46: initialize field-level encryption
+	if err := crypto.Init(); err != nil {
+		log.Warn().Err(err).Msg("Crypto init — encryption disabled, sensitive data stored in plaintext")
+	} else {
+		log.Info().Msg("LGPD Art. 46: AES-256-GCM field encryption enabled")
+	}
 
 	// 2. Infraestrutura (DBs)
 	db, err := database.NewDB(cfg.DatabaseURL)
