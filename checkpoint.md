@@ -5,20 +5,20 @@
 ---
 
 ## O QUE E O PROJETO
-Backend Go principal do ecossistema EVA - sistema de voz IA em tempo real para idosos. O projeto MAIS complexo do ecossistema: 100K+ LOC em Go, com sistemas de memoria super-humanos, personalidade Enneagram/Lacan, 150+ tools, 12 agentes de swarm, e integracao com Neo4j, Qdrant, Redis, PostgreSQL.
+Backend Go principal do ecossistema EVA - sistema de voz IA em tempo real para idosos. O projeto MAIS complexo do ecossistema: 100K+ LOC em Go, com sistemas de memoria super-humanos, personalidade Enneagram/Lacan, 150+ tools, 12 agentes de swarm, e integracao com NietzscheDB, PostgreSQL.
 
-**Tech Stack:** Go 1.23+, Gorilla Mux/WebSocket, Gemini SDK, PostgreSQL+pgvector, Neo4j (2 instancias), Qdrant, Redis, Firebase, Twilio, Prometheus, gRPC
+**Tech Stack:** Go 1.24+, Gorilla Mux/WebSocket, Gemini SDK, PostgreSQL+pgvector, NietzscheDB (unified graph-vector), Firebase, Twilio, Prometheus, gRPC
 
 ---
 
 ## O QUE FUNCIONA EM PRODUCAO
 - `/ws/browser` - Voz bidirecional mobile (PCM 16kHz/24kHz) com Gemini Native Audio
-- `/ws/eva` - Chat texto web (Malaria-Angolar) com memoria meta-cognitiva Neo4j
+- `/ws/eva` - Chat texto web (Malaria-Angolar) com memoria meta-cognitiva NietzscheDB
 - `/api/chat` - REST stateless para malaria
 - Video WebRTC (signaling WebSocket + REST)
 - Scheduler background (medicamentos, alertas)
 - Escalation Service (Push -> Email -> SMS)
-- MemoryStore (PG + Neo4j + Qdrant) com graceful degradation
+- MemoryStore (PG + NietzscheDB) com graceful degradation
 - 12 subsistemas de memoria super-humana
 - Personality Service (Big Five + Enneagram)
 - 150+ tools via toolsHandler
@@ -35,7 +35,7 @@ Backend Go principal do ecossistema EVA - sistema de voz IA em tempo real para i
 - Research Engine (pesquisa clinica longitudinal com anonimizacao LGPD)
 - Emergency Swarm com notificacoes REAIS (Push + Email + SMS)
 - Multi-LLM Service (Claude, GPT, DeepSeek como LLMs secundarios)
-- CoreMemoryEngine (identidade pessoal da EVA, Neo4j :7688)
+- CoreMemoryEngine (identidade pessoal da EVA, NietzscheDB collection eva_core)
 - Global Workspace (Baars' Cognitive Theory of Consciousness)
 
 ---
@@ -58,7 +58,7 @@ Backend Go principal do ecossistema EVA - sistema de voz IA em tempo real para i
 3. **Tipo agendamento errado** — CORRIGIDO: 'medicamento' → 'lembrete_medicamento' em unified_retrieval.go, aceita ambos formatos
 4. **Coluna errada** — CORRIGIDO: medicamento_confirmado → medicamento_tomado em actions.go:221
 5. **ORDER BY em coluna NULL** — CORRIGIDO: updated_at → atualizado_em em unified_retrieval.go
-6. **Dados clinicos SEM criptografia** — PENDENTE (requer refactor maior, LGPD Art. 46)
+6. **Dados clinicos SEM criptografia** — CORRIGIDO: pkg/crypto/fieldcrypt.go (AES-256-GCM), encrypt/decrypt em queries.go + oauth_queries.go, migration 046, ENCRYPTION_KEY no .env
 7. **Emergencias so fazem log** — CORRIGIDO: AlertFamily real via dependency injection (push + email + SMS), wired em main.go com actions.AlertFamilyWithSeverity
 8. **Race condition** — CORRIGIDO: per-connection write mutex (writeMu sync.Mutex) em video_websocket_handler.go
 9. **dados_tarefa formato incompativel** — CORRIGIDO: fallback para formato legacy (description/medicamento keys) em unified_retrieval.go
@@ -67,10 +67,9 @@ Backend Go principal do ecossistema EVA - sistema de voz IA em tempo real para i
 ---
 
 ## BUGS PENDENTES
-1. **Dados clinicos SEM criptografia** — violacao LGPD Art. 46 (requer crypto at-rest para PG + Neo4j)
-2. **Situational Modulator sem deps** — instanciado com (nil, nil), precisa dos servicos reais
-3. **RAM Engine sem FeedbackLoop** — FeedbackLoop nil (precisa adapters HebbianRealTime + Database)
-4. **RAM Engine sem GraphStore** — HistoricalValidator sem validacao temporal (precisa adapter Neo4j)
+1. **Situational Modulator sem deps** — instanciado com (nil, nil), precisa dos servicos reais
+2. **RAM Engine sem FeedbackLoop** — FeedbackLoop nil (precisa adapters HebbianRealTime + Database)
+3. **RAM Engine sem GraphStore** — HistoricalValidator sem validacao temporal (precisa adapter NietzscheDB)
 ---
 
 ## AUDIT FIXES (2026-02-20)
@@ -108,14 +107,12 @@ Backend Go principal do ecossistema EVA - sistema de voz IA em tempo real para i
 ---
 
 ## DEPENDENCIAS PRINCIPAIS
-gorilla/mux 1.8.1, gorilla/websocket 1.5.3, google/generative-ai-go 0.20.1, lib/pq 1.10.9, neo4j-go-driver/v5 5.28.4, qdrant/go-client 1.15.2, redis/go-redis/v9 9.17.2, firebase.google.com/go/v4 4.15.2, twilio-go 1.29.0, gonum.org/v1/gonum (Krylov linear algebra)
+gorilla/mux 1.8.1, gorilla/websocket 1.5.3, google/generative-ai-go 0.20.1, lib/pq 1.10.9, nietzsche-sdk (local), firebase.google.com/go/v4 4.15.2, twilio-go 1.29.0, gonum.org/v1/gonum (Krylov linear algebra)
 
 ---
 
 ## INFRAESTRUTURA NECESSARIA
 - PostgreSQL 16 + pgvector
-- Neo4j (porta 7687 - pacientes) + Neo4j (porta 7688 - memoria EVA)
-- Qdrant (porta 6334 gRPC)
-- Redis (porta 6379)
+- NietzscheDB (porta 50051 gRPC, porta 8082 dashboard)
 - Firebase serviceAccountKey.json
 - Krylov HTTP Bridge (porta 50052)
