@@ -638,7 +638,9 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 					if s.evaMemory != nil {
 						go s.evaMemory.StoreTurn(ctx, sessionID, "user", msg.Text)
 					}
-					client.SendText(msg.Text)
+					// NAO chamar SendText — gemini native-audio rejeita client_content
+				// com close 1008 "policy violation". Texto salvo em memoria apenas.
+				log.Info().Str("session", sessionID).Str("text", msg.Text).Msg("[BROWSER] Texto recebido (nao enviado ao Gemini native-audio)")
 				}
 			case "config":
 				log.Info().Str("session", sessionID).Msg("Browser sent config update")
