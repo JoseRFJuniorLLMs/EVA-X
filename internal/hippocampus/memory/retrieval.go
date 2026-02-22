@@ -70,46 +70,38 @@ func (r *RetrievalService) Retrieve(ctx context.Context, idosoID int64, query st
 	}
 
 	var allResults []*SearchResult
-	var memoryIDs []int64
-	resultsMap := make(map[int64]float64)
+	resultsMap := make(map[int64]bool)
 	var topSemanticIDs []int64
 
-	// 3. Coletar IDs dos resultados
+	// 3. Construir Memory diretamente do payload NietzscheDB (sem PG!)
+	//    O payload já contém todos os campos (salvo no Store() step 3).
 	for i, qr := range qResults {
-		// Extrair ID do payload
-		p := qr.Payload
-		var memID int64
-
-		if idVal, ok := p["id"]; ok {
-			switch v := idVal.(type) {
-			case int64:
-				memID = v
-			case float64:
-				memID = int64(v)
-			case int:
-				memID = int64(v)
-			default:
-				continue
-			}
-		} else {
+		mem := memoryFromPayload(qr.Payload)
+		if mem == nil || mem.ID == 0 {
 			continue
 		}
 
-		memoryIDs = append(memoryIDs, memID)
-		resultsMap[memID] = qr.Score
+		allResults = append(allResults, &SearchResult{
+			Memory:     mem,
+			Similarity: qr.Score,
+		})
+		resultsMap[mem.ID] = true
 
 		// Guardar os top 3 para expansão recursiva
 		if i < 3 {
-			topSemanticIDs = append(topSemanticIDs, memID)
+			topSemanticIDs = append(topSemanticIDs, mem.ID)
 		}
 	}
 
+	log.Printf("✅ [MEMORY] %d resultados hidratados direto do NietzscheDB (sem PG)", len(allResults))
+
 	// 4. BUSCA RECURSIVA VIA GRAFO (Neo4j A1/A5)
+	//    Estes IDs NÃO têm payload — hidratamos do PG apenas eles.
+	var graphOnlyIDs []int64
 	if r.graphStore != nil && len(topSemanticIDs) > 0 {
 		log.Printf("🕸️ [MEMORY] Iniciando Busca Recursiva para %d sementes", len(topSemanticIDs))
 
 		for _, seedID := range topSemanticIDs {
-			// Buscar relacionados (depth 2 hops = ~4 relations)
 			relatedIDs, err := r.graphStore.GetRelatedMemoriesRecursive(ctx, seedID, 5)
 			if err != nil {
 				log.Printf("⚠️ [MEMORY] Erro busca recursiva: %v", err)
@@ -117,65 +109,61 @@ func (r *RetrievalService) Retrieve(ctx context.Context, idosoID int64, query st
 			}
 
 			for _, relatedID := range relatedIDs {
-				if _, exists := resultsMap[relatedID]; !exists {
-					memoryIDs = append(memoryIDs, relatedID)
-					resultsMap[relatedID] = 0.85 // Score "Associação Forte"
+				if !resultsMap[relatedID] {
+					graphOnlyIDs = append(graphOnlyIDs, relatedID)
+					resultsMap[relatedID] = true
 				}
 			}
 		}
 	}
 
-	if len(memoryIDs) == 0 {
+	// 5. HIDRATAR APENAS graph-recursive IDs do Postgres (minoria)
+	if len(graphOnlyIDs) > 0 {
+		queryIDs := make([]string, len(graphOnlyIDs))
+		args := make([]interface{}, len(graphOnlyIDs))
+		for i, id := range graphOnlyIDs {
+			queryIDs[i] = fmt.Sprintf("$%d", i+1)
+			args[i] = id
+		}
+
+		sqlQuery := fmt.Sprintf(`
+			SELECT id, idoso_id, timestamp, speaker, content, emotion,
+			       importance, topics, session_id, event_date, is_atomic
+			FROM episodic_memories
+			WHERE id IN (%s)
+		`, strings.Join(queryIDs, ","))
+
+		rows, err := r.db.QueryContext(ctx, sqlQuery, args...)
+		if err != nil {
+			log.Printf("⚠️ [MEMORY] PG hydration fallback failed: %v", err)
+		} else {
+			defer rows.Close()
+			for rows.Next() {
+				mem := &Memory{}
+				var topics string
+				err := rows.Scan(
+					&mem.ID, &mem.IdosoID, &mem.Timestamp, &mem.Speaker, &mem.Content,
+					&mem.Emotion, &mem.Importance, &topics, &mem.SessionID,
+					&mem.EventDate, &mem.IsAtomic,
+				)
+				if err != nil {
+					continue
+				}
+				mem.Topics = parsePostgresArray(topics)
+				allResults = append(allResults, &SearchResult{
+					Memory:     mem,
+					Similarity: 0.85, // Score "Associação Forte"
+				})
+			}
+		}
+		log.Printf("✅ [MEMORY] %d resultados graph-recursive hidratados do PG", len(graphOnlyIDs))
+	}
+
+	if len(allResults) == 0 {
 		return []*SearchResult{}, nil
 	}
 
-	// 5. HIDRATAR COM DADOS DO POSTGRES
-	queryIDs := make([]string, len(memoryIDs))
-	args := make([]interface{}, len(memoryIDs))
-	for i, id := range memoryIDs {
-		queryIDs[i] = fmt.Sprintf("$%d", i+1)
-		args[i] = id
-	}
-
-	sqlQuery := fmt.Sprintf(`
-		SELECT id, idoso_id, timestamp, speaker, content, emotion, 
-		       importance, topics, session_id, event_date, is_atomic
-		FROM episodic_memories
-		WHERE id IN (%s)
-	`, strings.Join(queryIDs, ","))
-
-	rows, err := r.db.QueryContext(ctx, sqlQuery, args...)
-	if err != nil {
-		return nil, fmt.Errorf("erro ao hidratar memórias do postgres: %w", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		mem := &Memory{}
-		var topics string
-
-		err := rows.Scan(
-			&mem.ID, &mem.IdosoID, &mem.Timestamp, &mem.Speaker, &mem.Content,
-			&mem.Emotion, &mem.Importance, &topics, &mem.SessionID,
-			&mem.EventDate, &mem.IsAtomic,
-		)
-		if err != nil {
-			log.Printf("⚠️ [MEMORY] Erro scan hidratação: %v", err)
-			continue
-		}
-
-		mem.Topics = parsePostgresArray(topics)
-
-		// Recuperar score de similaridade do map
-		similarity := resultsMap[mem.ID]
-
-		allResults = append(allResults, &SearchResult{
-			Memory:     mem,
-			Similarity: similarity,
-		})
-	}
-
-	// Reordenar baseado no score (Qdrant/Recursivo)
+	// Reordenar baseado no score
 	sort.Slice(allResults, func(i, j int) bool {
 		return allResults[i].Similarity > allResults[j].Similarity
 	})
@@ -183,11 +171,42 @@ func (r *RetrievalService) Retrieve(ctx context.Context, idosoID int64, query st
 	return allResults, nil
 }
 
-// RetrieveRecent busca memórias recentes (últimos N dias) sem usar embedding
-// Útil para contexto temporal imediato
+// RetrieveRecent busca memórias recentes (últimos N dias) sem usar embedding.
+// Tenta NietzscheDB NQL primeiro, fallback para Postgres.
 func (r *RetrievalService) RetrieveRecent(ctx context.Context, idosoID int64, days int, limit int) ([]*Memory, error) {
+	log.Printf("🔍 [MEMORY] Busca Recente: Idoso=%d, Dias=%d, Limit=%d", idosoID, days, limit)
+
+	// 1. Tentar NietzscheDB NQL
+	if r.vectorAdapter != nil {
+		cutoffMs := time.Now().AddDate(0, 0, -days).UnixMilli()
+		nql := `MATCH (n) WHERE n.idoso_id = $idoso_id RETURN n ORDER BY n.importance DESC, n.timestamp DESC LIMIT $limit`
+		params := map[string]interface{}{
+			"idoso_id": idosoID,
+			"limit":    limit,
+		}
+		payloads, err := r.vectorAdapter.ExecuteNQL(ctx, nql, params, "memories")
+		if err == nil && len(payloads) > 0 {
+			var memories []*Memory
+			for _, p := range payloads {
+				mem := memoryFromPayload(p)
+				if mem == nil || mem.ID == 0 {
+					continue
+				}
+				// Filter by time window (NQL WHERE may not support time arithmetic)
+				if mem.Timestamp.UnixMilli() >= cutoffMs {
+					memories = append(memories, mem)
+				}
+			}
+			if len(memories) > 0 {
+				log.Printf("✅ [MEMORY] RetrieveRecent: %d memórias do NietzscheDB", len(memories))
+				return memories, nil
+			}
+		}
+	}
+
+	// 2. Fallback para Postgres
 	query := `
-		SELECT id, idoso_id, timestamp, speaker, content, emotion, 
+		SELECT id, idoso_id, timestamp, speaker, content, emotion,
 		       importance, topics, session_id
 		FROM episodic_memories
 		WHERE idoso_id = $1
@@ -202,30 +221,18 @@ func (r *RetrievalService) RetrieveRecent(ctx context.Context, idosoID int64, da
 	}
 	defer rows.Close()
 
-	log.Printf("🔍 [MEMORY] Busca Recente: Idoso=%d, Dias=%d, Limit=%d", idosoID, days, limit)
-
 	var memories []*Memory
-
 	for rows.Next() {
 		memory := &Memory{}
 		var topics string
-
 		err := rows.Scan(
-			&memory.ID,
-			&memory.IdosoID,
-			&memory.Timestamp,
-			&memory.Speaker,
-			&memory.Content,
-			&memory.Emotion,
-			&memory.Importance,
-			&topics,
+			&memory.ID, &memory.IdosoID, &memory.Timestamp, &memory.Speaker,
+			&memory.Content, &memory.Emotion, &memory.Importance, &topics,
 			&memory.SessionID,
 		)
-
 		if err != nil {
 			return nil, err
 		}
-
 		memory.Topics = parsePostgresArray(topics)
 		memories = append(memories, memory)
 	}

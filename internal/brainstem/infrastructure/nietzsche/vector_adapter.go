@@ -126,16 +126,41 @@ func (va *VectorAdapter) Upsert(ctx context.Context, collection string,
 	return nil
 }
 
-// BatchUpsert inserts multiple vectors sequentially.
-// Replaces QdrantClient.Upsert() for batch operations.
+// BatchUpsert inserts multiple vectors via a single BatchInsertNodes RPC.
+// Falls back to sequential upserts if the batch call fails.
 func (va *VectorAdapter) BatchUpsert(ctx context.Context, collection string,
 	items []BatchVectorItem) error {
 
-	for _, item := range items {
-		if err := va.Upsert(ctx, collection, item.ID, item.Vector, item.Payload); err != nil {
-			return err
+	log := logger.Nietzsche()
+
+	// Build batch of InsertNodeOpts
+	opts := make([]nietzsche.InsertNodeOpts, len(items))
+	for i, item := range items {
+		nodeType := "Semantic"
+		if nt, ok := item.Payload["node_type"].(string); ok {
+			nodeType = nt
+		}
+		opts[i] = nietzsche.InsertNodeOpts{
+			ID:       item.ID,
+			Coords:   float32ToFloat64(item.Vector),
+			Content:  item.Payload,
+			NodeType: nodeType,
 		}
 	}
+
+	_, err := va.client.BatchInsertNodes(ctx, opts, collection)
+	if err != nil {
+		// Fallback to sequential upserts (handles duplicates via merge)
+		log.Warn().Err(err).Int("count", len(items)).Msg("batch insert failed, falling back to sequential upsert")
+		for _, item := range items {
+			if err := va.Upsert(ctx, collection, item.ID, item.Vector, item.Payload); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	log.Debug().Str("collection", collection).Int("count", len(items)).Msg("batch insert completed")
 	return nil
 }
 
@@ -150,6 +175,118 @@ type BatchVectorItem struct {
 // Replaces QdrantClient.Delete().
 func (va *VectorAdapter) Delete(ctx context.Context, collection string, id string) error {
 	return va.client.Delete(ctx, collection, id)
+}
+
+// ── Full-Text & Hybrid Search ───────────────────────────────────────────────
+
+// FullTextSearch performs a BM25 inverted-index search over node content.
+func (va *VectorAdapter) FullTextSearch(ctx context.Context, collection, query string, limit int) ([]VectorSearchResult, error) {
+	log := logger.Nietzsche()
+
+	results, err := va.client.FullTextSearch(ctx, query, collection, uint32(limit))
+	if err != nil {
+		log.Error().Err(err).Str("collection", collection).Msg("full-text search failed")
+		return nil, fmt.Errorf("fts %s: %w", collection, err)
+	}
+
+	out := make([]VectorSearchResult, len(results))
+	for i, r := range results {
+		out[i] = VectorSearchResult{ID: r.NodeID, Score: r.Score}
+	}
+
+	log.Debug().Str("collection", collection).Int("results", len(out)).Msg("full-text search completed")
+	return out, nil
+}
+
+// HybridSearch combines BM25 text search with vector KNN search.
+func (va *VectorAdapter) HybridSearch(ctx context.Context, collection string,
+	textQuery string, vector []float32, k int) ([]VectorSearchResult, error) {
+
+	log := logger.Nietzsche()
+
+	vec64 := float32ToFloat64(vector)
+	results, err := va.client.HybridSearch(ctx, textQuery, vec64, uint32(k), 0.5, 0.5, collection)
+	if err != nil {
+		log.Error().Err(err).Str("collection", collection).Msg("hybrid search failed")
+		return nil, fmt.Errorf("hybrid search %s: %w", collection, err)
+	}
+
+	out := make([]VectorSearchResult, len(results))
+	for i, r := range results {
+		out[i] = VectorSearchResult{ID: r.ID, Score: r.Distance}
+	}
+
+	log.Debug().Str("collection", collection).Int("results", len(out)).Msg("hybrid search completed")
+	return out, nil
+}
+
+// GetNodeByID retrieves a node's full content by ID from a collection.
+// Used to hydrate Memory objects without going through PostgreSQL.
+func (va *VectorAdapter) GetNodeByID(ctx context.Context, collection, id string) (map[string]interface{}, bool, error) {
+	result, err := va.client.GetNode(ctx, id, collection)
+	if err != nil {
+		return nil, false, err
+	}
+	return result.Content, result.Found, nil
+}
+
+// ExecuteNQL runs a NQL query against a collection.
+// Returns the raw QueryResult from NietzscheDB.
+func (va *VectorAdapter) ExecuteNQL(ctx context.Context, nql string, params map[string]interface{}, collection string) ([]map[string]interface{}, error) {
+	result, err := va.client.Query(ctx, nql, params, collection)
+	if err != nil {
+		return nil, err
+	}
+	var out []map[string]interface{}
+	for _, node := range result.Nodes {
+		out = append(out, node.Content)
+	}
+	return out, nil
+}
+
+// MergeNode performs an upsert (INSERT ... ON CONFLICT DO UPDATE) using NietzscheDB.
+// matchKeys define the conflict columns, onMatchSet defines the SET clause.
+func (va *VectorAdapter) MergeNode(ctx context.Context, collection, nodeType string,
+	matchKeys map[string]interface{}, onMatchSet map[string]interface{}) (string, bool, error) {
+
+	log := logger.Nietzsche()
+
+	result, err := va.client.MergeNode(ctx, nietzsche.MergeNodeOpts{
+		Collection: collection,
+		NodeType:   nodeType,
+		MatchKeys:  matchKeys,
+		OnMatchSet: onMatchSet,
+	})
+	if err != nil {
+		log.Error().Err(err).Str("collection", collection).Msg("merge node failed")
+		return "", false, fmt.Errorf("merge node %s: %w", collection, err)
+	}
+
+	log.Debug().Str("collection", collection).Str("id", result.NodeID).
+		Bool("created", result.Created).Msg("merge node completed")
+	return result.NodeID, result.Created, nil
+}
+
+// InsertNodeContent inserts a node without embedding vector.
+// Used for non-semantic data (habits, logs, etc.) that don't need KNN search.
+func (va *VectorAdapter) InsertNodeContent(ctx context.Context, collection, id string,
+	content map[string]interface{}, nodeType string) error {
+
+	log := logger.Nietzsche()
+
+	_, err := va.client.InsertNode(ctx, nietzsche.InsertNodeOpts{
+		Collection: collection,
+		ID:         id,
+		Content:    content,
+		NodeType:   nodeType,
+	})
+	if err != nil {
+		log.Error().Err(err).Str("collection", collection).Str("id", id).Msg("insert node content failed")
+		return fmt.Errorf("insert node %s/%s: %w", collection, id, err)
+	}
+
+	log.Debug().Str("collection", collection).Str("id", id).Msg("insert node content completed")
+	return nil
 }
 
 // float32ToFloat64 converts a float32 slice to float64 (lossless).

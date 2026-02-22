@@ -11,6 +11,8 @@ import (
 	"log"
 	"strings"
 	"time"
+
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 )
 
 // ============================================================================
@@ -20,8 +22,14 @@ import (
 
 // HabitTracker gerencia o rastreamento de hábitos
 type HabitTracker struct {
-	db         *sql.DB
-	notifyFunc func(idosoID int64, msgType string, payload interface{})
+	db            *sql.DB
+	vectorAdapter *nietzscheInfra.VectorAdapter
+	notifyFunc    func(idosoID int64, msgType string, payload interface{})
+}
+
+// SetVectorAdapter injects NietzscheDB adapter for PG elimination (optional).
+func (h *HabitTracker) SetVectorAdapter(va *nietzscheInfra.VectorAdapter) {
+	h.vectorAdapter = va
 }
 
 // Habit representa um hábito sendo rastreado
@@ -431,7 +439,26 @@ func (h *HabitTracker) getOrCreateHabit(ctx context.Context, idosoID int64, name
 	// Criar hábito padrão
 	description := h.getDefaultDescription(name)
 	category := h.getDefaultCategory(name)
+	now := time.Now()
 
+	// NietzscheDB first: MergeNode on "habits" collection
+	if h.vectorAdapter != nil {
+		_, _, mergeErr := h.vectorAdapter.MergeNode(ctx, "habits", "Habit",
+			map[string]interface{}{"name": name},
+			map[string]interface{}{
+				"name":           name,
+				"description":    description,
+				"category":       category,
+				"target_per_day": 1,
+				"active":         true,
+				"created_at":     now.Format(time.RFC3339),
+			})
+		if mergeErr != nil {
+			log.Printf("⚠️ [HABITS] NietzscheDB merge failed: %v", mergeErr)
+		}
+	}
+
+	// PG write (dual-write for backward compat)
 	query := `
 		INSERT INTO habits (name, description, category, target_per_day, active, created_at)
 		VALUES ($1, $2, $3, 1, true, NOW())
@@ -634,6 +661,21 @@ func (h *HabitTracker) ensureDefaultHabits() {
 	}
 
 	for _, d := range defaults {
+		// NietzscheDB first: MergeNode (idempotent)
+		if h.vectorAdapter != nil {
+			h.vectorAdapter.MergeNode(ctx, "habits", "Habit",
+				map[string]interface{}{"name": d.name},
+				map[string]interface{}{
+					"name":           d.name,
+					"description":    d.description,
+					"category":       d.category,
+					"target_per_day": d.target,
+					"active":         true,
+					"created_at":     time.Now().Format(time.RFC3339),
+				})
+		}
+
+		// PG dual-write
 		query := `
 			INSERT INTO habits (name, description, category, target_per_day, active, created_at)
 			VALUES ($1, $2, $3, $4, true, NOW())

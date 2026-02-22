@@ -132,10 +132,24 @@ func (m *MemoryStore) Store(ctx context.Context, memory *Memory) error {
 	return nil
 }
 
-// GetByID recupera uma memória por ID
+// GetByID recupera uma memória por ID.
+// Tenta NietzscheDB primeiro (mais rápido, sem round-trip PG), fallback para Postgres.
 func (m *MemoryStore) GetByID(ctx context.Context, id int64) (*Memory, error) {
+	// 1. Tentar NietzscheDB primeiro
+	if m.vectorAdapter != nil {
+		payload, found, err := m.vectorAdapter.GetNodeByID(ctx, "memories", fmt.Sprintf("%d", id))
+		if err == nil && found && payload != nil {
+			mem := memoryFromPayload(payload)
+			if mem != nil && mem.ID > 0 {
+				log.Printf("✅ [STORAGE] GetByID %d servido do NietzscheDB", id)
+				return mem, nil
+			}
+		}
+	}
+
+	// 2. Fallback para Postgres
 	query := `
-		SELECT id, idoso_id, timestamp, speaker, content, emotion, 
+		SELECT id, idoso_id, timestamp, speaker, content, emotion,
 		       importance, topics, session_id, call_history_id, event_date, is_atomic
 		FROM episodic_memories
 		WHERE id = $1
@@ -161,16 +175,38 @@ func (m *MemoryStore) GetByID(ctx context.Context, id int64) (*Memory, error) {
 		return nil, err
 	}
 
-	// Parse topics array
 	memory.Topics = parsePostgresArray(topics)
-
 	return memory, nil
 }
 
-// GetRecent retorna as N memórias mais recentes de um idoso
+// GetRecent retorna as N memórias mais recentes de um idoso.
+// Tenta NietzscheDB NQL primeiro, fallback para Postgres.
 func (m *MemoryStore) GetRecent(ctx context.Context, idosoID int64, limit int) ([]*Memory, error) {
+	// 1. Tentar NietzscheDB NQL
+	if m.vectorAdapter != nil {
+		nql := `MATCH (n) WHERE n.idoso_id = $idoso_id RETURN n ORDER BY n.timestamp DESC LIMIT $limit`
+		params := map[string]interface{}{
+			"idoso_id": idosoID,
+			"limit":    limit,
+		}
+		payloads, err := m.vectorAdapter.ExecuteNQL(ctx, nql, params, "memories")
+		if err == nil && len(payloads) > 0 {
+			var memories []*Memory
+			for _, p := range payloads {
+				if mem := memoryFromPayload(p); mem != nil && mem.ID > 0 {
+					memories = append(memories, mem)
+				}
+			}
+			if len(memories) > 0 {
+				log.Printf("✅ [STORAGE] GetRecent idoso=%d: %d memórias do NietzscheDB", idosoID, len(memories))
+				return memories, nil
+			}
+		}
+	}
+
+	// 2. Fallback para Postgres
 	query := `
-		SELECT id, idoso_id, timestamp, speaker, content, emotion, 
+		SELECT id, idoso_id, timestamp, speaker, content, emotion,
 		       importance, topics, session_id, call_history_id, event_date, is_atomic
 		FROM episodic_memories
 		WHERE idoso_id = $1
@@ -389,6 +425,102 @@ func (m *MemoryStore) scanMemories(rows *sql.Rows) ([]*Memory, error) {
 	}
 
 	return memories, rows.Err()
+}
+
+// memoryFromPayload constructs a Memory from a NietzscheDB node content payload.
+// This eliminates the need to hydrate from PostgreSQL for data that's already
+// stored in NietzscheDB (see Store() step 3 — vector + payload save).
+func memoryFromPayload(payload map[string]interface{}) *Memory {
+	if payload == nil {
+		return nil
+	}
+	mem := &Memory{}
+
+	// ID (stored as int64 or float64 from JSON)
+	if v, ok := payload["id"]; ok {
+		switch id := v.(type) {
+		case float64:
+			mem.ID = int64(id)
+		case int64:
+			mem.ID = id
+		}
+	}
+
+	// IdosoID
+	if v, ok := payload["idoso_id"]; ok {
+		switch id := v.(type) {
+		case float64:
+			mem.IdosoID = int64(id)
+		case int64:
+			mem.IdosoID = id
+		}
+	}
+
+	// String fields
+	if v, ok := payload["content"].(string); ok {
+		mem.Content = v
+	}
+	if v, ok := payload["speaker"].(string); ok {
+		mem.Speaker = v
+	}
+	if v, ok := payload["emotion"].(string); ok {
+		mem.Emotion = v
+	}
+	if v, ok := payload["session_id"].(string); ok {
+		mem.SessionID = v
+	}
+
+	// Importance
+	if v, ok := payload["importance"].(float64); ok {
+		mem.Importance = v
+	}
+
+	// IsAtomic
+	if v, ok := payload["is_atomic"].(bool); ok {
+		mem.IsAtomic = v
+	}
+
+	// Topics ([]interface{} from JSON deserialize)
+	if v, ok := payload["topics"]; ok {
+		switch topics := v.(type) {
+		case []interface{}:
+			for _, t := range topics {
+				if s, ok := t.(string); ok {
+					mem.Topics = append(mem.Topics, s)
+				}
+			}
+		case []string:
+			mem.Topics = topics
+		}
+	}
+	if mem.Topics == nil {
+		mem.Topics = []string{}
+	}
+
+	// Timestamps (RFC3339 strings)
+	if v, ok := payload["timestamp"].(string); ok {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			mem.Timestamp = t
+		}
+	}
+	if v, ok := payload["event_date"].(string); ok {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			mem.EventDate = t
+		}
+	}
+
+	// CallHistoryID (*int64, nullable)
+	if v, ok := payload["call_history_id"]; ok && v != nil {
+		switch id := v.(type) {
+		case float64:
+			cid := int64(id)
+			mem.CallHistoryID = &cid
+		case int64:
+			mem.CallHistoryID = &id
+		}
+	}
+
+	return mem
 }
 
 // Helpers para conversão de tipos PostgreSQL

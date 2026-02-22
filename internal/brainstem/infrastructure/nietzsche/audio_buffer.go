@@ -8,13 +8,26 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"eva/internal/brainstem/logger"
 )
 
-// AudioBuffer replaces Redis RPush/LRange for audio streaming.
-// Audio sessions are short-lived (~5 min), so in-memory with TTL is sufficient.
+// ── AudioBuffer — persisted in NietzscheDB Lists, in-memory fallback ────────
+
+const (
+	audioSessionTTL    = 1 * time.Hour
+	audioListName      = "audio_chunks"
+	audioCollection    = "eva_core"
+	cacheCollection    = "eva_core"
+)
+
+// AudioBuffer stores audio chunks per session using NietzscheDB ListRPush/ListLRange.
+// Falls back to in-memory storage if NietzscheDB is unavailable.
 type AudioBuffer struct {
+	client *Client // nil → in-memory-only mode
+
 	mu       sync.Mutex
-	sessions map[string]*audioSession
+	sessions map[string]*audioSession // in-memory fallback
 }
 
 type audioSession struct {
@@ -22,19 +35,36 @@ type audioSession struct {
 	createdAt time.Time
 }
 
-const audioSessionTTL = 1 * time.Hour
-
-// NewAudioBuffer creates an in-memory audio buffer (replaces Redis).
-func NewAudioBuffer() *AudioBuffer {
+// NewAudioBuffer creates an audio buffer backed by NietzscheDB.
+// If client is nil, operates in in-memory-only mode (legacy behavior).
+func NewAudioBuffer(client *Client) *AudioBuffer {
 	ab := &AudioBuffer{
+		client:   client,
 		sessions: make(map[string]*audioSession),
 	}
 	go ab.cleanupLoop()
 	return ab
 }
 
-// AppendAudioChunk adds an audio chunk to the session buffer.
-func (ab *AudioBuffer) AppendAudioChunk(_ context.Context, sessionID string, data []byte) error {
+// AppendAudioChunk appends an audio chunk to the session.
+// Uses NietzscheDB ListRPush if available, falls back to in-memory.
+func (ab *AudioBuffer) AppendAudioChunk(ctx context.Context, sessionID string, data []byte) error {
+	// Copy data to avoid holding references to caller's buffer
+	chunk := make([]byte, len(data))
+	copy(chunk, data)
+
+	// Try NietzscheDB first
+	if ab.client != nil {
+		_, err := ab.client.ListRPush(ctx, sessionID, audioListName, chunk, audioCollection)
+		if err == nil {
+			return nil
+		}
+		// Fallback to in-memory on error
+		log := logger.Nietzsche()
+		log.Debug().Err(err).Str("session", sessionID).Msg("[AudioBuffer] ListRPush failed, using in-memory fallback")
+	}
+
+	// In-memory fallback
 	ab.mu.Lock()
 	defer ab.mu.Unlock()
 
@@ -43,16 +73,32 @@ func (ab *AudioBuffer) AppendAudioChunk(_ context.Context, sessionID string, dat
 		sess = &audioSession{createdAt: time.Now()}
 		ab.sessions[sessionID] = sess
 	}
-
-	// Copy data to avoid holding references to caller's buffer
-	chunk := make([]byte, len(data))
-	copy(chunk, data)
 	sess.chunks = append(sess.chunks, chunk)
 	return nil
 }
 
 // GetFullAudio retrieves all audio chunks for a session, optionally clearing them.
-func (ab *AudioBuffer) GetFullAudio(_ context.Context, sessionID string, clear bool) ([]byte, error) {
+// Tries NietzscheDB first, falls back to in-memory.
+func (ab *AudioBuffer) GetFullAudio(ctx context.Context, sessionID string, clear bool) ([]byte, error) {
+	// Try NietzscheDB first
+	if ab.client != nil {
+		values, err := ab.client.ListLRange(ctx, sessionID, audioListName, 0, -1, audioCollection)
+		if err == nil && len(values) > 0 {
+			totalSize := 0
+			for _, v := range values {
+				totalSize += len(v)
+			}
+			fullAudio := make([]byte, 0, totalSize)
+			for _, v := range values {
+				fullAudio = append(fullAudio, v...)
+			}
+			// Note: clear is not supported via NietzscheDB Lists (no LDel RPC).
+			// Chunks naturally expire with the session node.
+			return fullAudio, nil
+		}
+	}
+
+	// In-memory fallback
 	ab.mu.Lock()
 	defer ab.mu.Unlock()
 
@@ -78,7 +124,7 @@ func (ab *AudioBuffer) GetFullAudio(_ context.Context, sessionID string, clear b
 	return fullAudio, nil
 }
 
-// cleanupLoop removes expired sessions every 5 minutes.
+// cleanupLoop removes expired in-memory sessions every 5 minutes.
 func (ab *AudioBuffer) cleanupLoop() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
@@ -100,17 +146,22 @@ func (ab *AudioBuffer) Close() error {
 	return nil
 }
 
-// SessionCount returns the number of active audio sessions (for metrics).
+// SessionCount returns the number of active in-memory audio sessions (for metrics).
 func (ab *AudioBuffer) SessionCount() int {
 	ab.mu.Lock()
 	defer ab.mu.Unlock()
 	return len(ab.sessions)
 }
 
-// CacheStore replaces Redis Set/Get with TTL for generic caching.
+// ── CacheStore — persisted in NietzscheDB Cache, in-memory fallback ─────────
+
+// CacheStore provides TTL-based caching using NietzscheDB CacheSet/CacheGet.
+// Falls back to in-memory if NietzscheDB is unavailable.
 type CacheStore struct {
+	client *Client // nil → in-memory-only mode
+
 	mu    sync.RWMutex
-	items map[string]*cacheItem
+	items map[string]*cacheItem // in-memory fallback
 }
 
 type cacheItem struct {
@@ -118,29 +169,58 @@ type cacheItem struct {
 	expiresAt time.Time
 }
 
-// NewCacheStore creates an in-memory cache with TTL (replaces Redis cache).
-func NewCacheStore() *CacheStore {
+// NewCacheStore creates a cache store backed by NietzscheDB.
+// If client is nil, operates in in-memory-only mode (legacy behavior).
+func NewCacheStore(client *Client) *CacheStore {
 	cs := &CacheStore{
-		items: make(map[string]*cacheItem),
+		client: client,
+		items:  make(map[string]*cacheItem),
 	}
 	go cs.cleanupLoop()
 	return cs
 }
 
 // Set stores a value with expiration.
-func (cs *CacheStore) Set(_ context.Context, key string, value interface{}, expiration time.Duration) error {
+// Uses NietzscheDB CacheSet if available, falls back to in-memory.
+func (cs *CacheStore) Set(ctx context.Context, key string, value interface{}, expiration time.Duration) error {
+	strVal := fmt.Sprintf("%v", value)
+
+	// Try NietzscheDB first
+	if cs.client != nil {
+		ttlSecs := uint64(expiration.Seconds())
+		if ttlSecs == 0 {
+			ttlSecs = 3600 // default 1h
+		}
+		err := cs.client.CacheSet(ctx, cacheCollection, key, []byte(strVal), ttlSecs)
+		if err == nil {
+			return nil
+		}
+		log := logger.Nietzsche()
+		log.Debug().Err(err).Str("key", key).Msg("[CacheStore] CacheSet failed, using in-memory fallback")
+	}
+
+	// In-memory fallback
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
-
 	cs.items[key] = &cacheItem{
-		value:     fmt.Sprintf("%v", value),
+		value:     strVal,
 		expiresAt: time.Now().Add(expiration),
 	}
 	return nil
 }
 
-// Get retrieves a value. Returns ("", ErrCacheMiss) if not found or expired.
-func (cs *CacheStore) Get(_ context.Context, key string) (string, error) {
+// Get retrieves a value. Returns ("", error) if not found or expired.
+// Tries NietzscheDB first, falls back to in-memory.
+func (cs *CacheStore) Get(ctx context.Context, key string) (string, error) {
+	// Try NietzscheDB first
+	if cs.client != nil {
+		val, found, err := cs.client.CacheGet(ctx, cacheCollection, key)
+		if err == nil && found {
+			return string(val), nil
+		}
+	}
+
+	// In-memory fallback
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 

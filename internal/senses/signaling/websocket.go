@@ -360,7 +360,7 @@ func NewSignalingServer(
 	// ============================================================================
 
 	// ✅ Cognitive Load Orchestrator (Gerencia carga cognitiva, detecta ruminação)
-	server.cacheStore = nietzscheInfra.NewCacheStore()
+	server.cacheStore = nietzscheInfra.NewCacheStore(nietzscheClient)
 	server.cognitiveOrchestrator = cognitive.NewCognitiveLoadOrchestrator(db, server.cacheStore)
 	log.Println("🧠 Signaling: CognitiveLoadOrchestrator initialized (Carga Cognitiva + Ruminação)")
 
@@ -403,7 +403,7 @@ func NewSignalingServer(
 	}
 
 	// ✅ NOVO: Inicializar AudioBuffer + AudioAnalysis (substitui Redis)
-	server.audioBuffer = nietzscheInfra.NewAudioBuffer()
+	server.audioBuffer = nietzscheInfra.NewAudioBuffer(nietzscheClient)
 	server.audioAnalysis = knowledge.NewAudioAnalysisService(cfg, server.audioBuffer, ctxService)
 	log.Printf("✅ NietzscheDB AudioBuffer + Audio Analysis inicializado")
 

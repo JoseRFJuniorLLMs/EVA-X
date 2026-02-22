@@ -11,12 +11,20 @@ import (
 	"log"
 	"math"
 	"time"
+
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 )
 
 // ContinuousLearningService implements EVA's self-improvement capabilities
 // Based on eva-memoria2.md - EVA learns and adapts from every interaction
 type ContinuousLearningService struct {
-	db *sql.DB
+	db            *sql.DB
+	vectorAdapter *nietzscheInfra.VectorAdapter
+}
+
+// SetVectorAdapter injects NietzscheDB adapter for PG elimination (optional).
+func (s *ContinuousLearningService) SetVectorAdapter(va *nietzscheInfra.VectorAdapter) {
+	s.vectorAdapter = va
 }
 
 // NewContinuousLearningService creates the learning service
@@ -289,23 +297,51 @@ type TopicInterest struct {
 
 // LearnTopicInterest updates topic interest based on interaction
 func (s *ContinuousLearningService) LearnTopicInterest(ctx context.Context, idosoID int64, topic string, engagement float64) error {
-	if s.db == nil {
+	if s.db == nil && s.vectorAdapter == nil {
 		log.Printf("🎯 [LEARNING] Topic interest: patient %d, topic '%s', engagement %.2f", idosoID, topic, engagement)
 		return nil
 	}
 
-	query := `
-		INSERT INTO learning_topic_interests (idoso_id, topic, interest_level, engagement_avg, mention_count)
-		VALUES ($1, $2, $3, $3, 1)
-		ON CONFLICT (idoso_id, topic) DO UPDATE SET
-			interest_level = (learning_topic_interests.interest_level * 0.8) + ($3 * 0.2),
-			engagement_avg = (learning_topic_interests.engagement_avg * learning_topic_interests.mention_count + $3) / (learning_topic_interests.mention_count + 1),
-			mention_count = learning_topic_interests.mention_count + 1,
-			last_mentioned = NOW(),
-			updated_at = NOW()
-	`
-	_, err := s.db.ExecContext(ctx, query, idosoID, topic, engagement)
-	return err
+	now := time.Now().Format(time.RFC3339)
+
+	// NietzscheDB first: MergeNode on "learning" collection
+	if s.vectorAdapter != nil {
+		_, _, err := s.vectorAdapter.MergeNode(ctx, "learning", "TopicInterest",
+			map[string]interface{}{
+				"idoso_id": idosoID,
+				"topic":    topic,
+			},
+			map[string]interface{}{
+				"idoso_id":       idosoID,
+				"topic":          topic,
+				"interest_level": engagement,
+				"engagement_avg": engagement,
+				"mention_count":  1,
+				"last_mentioned": now,
+				"updated_at":     now,
+			})
+		if err != nil {
+			log.Printf("⚠️ [LEARNING] NietzscheDB merge topic interest failed: %v", err)
+		}
+	}
+
+	// PG dual-write (has weighted average logic in SQL)
+	if s.db != nil {
+		query := `
+			INSERT INTO learning_topic_interests (idoso_id, topic, interest_level, engagement_avg, mention_count)
+			VALUES ($1, $2, $3, $3, 1)
+			ON CONFLICT (idoso_id, topic) DO UPDATE SET
+				interest_level = (learning_topic_interests.interest_level * 0.8) + ($3 * 0.2),
+				engagement_avg = (learning_topic_interests.engagement_avg * learning_topic_interests.mention_count + $3) / (learning_topic_interests.mention_count + 1),
+				mention_count = learning_topic_interests.mention_count + 1,
+				last_mentioned = NOW(),
+				updated_at = NOW()
+		`
+		_, err := s.db.ExecContext(ctx, query, idosoID, topic, engagement)
+		return err
+	}
+
+	return nil
 }
 
 // GetTopInterests returns top interests for a patient
@@ -429,23 +465,51 @@ type PersonaEffectiveness struct {
 }
 
 // RecordPersonaUsage records persona usage and effectiveness
-func (s *ContinuousLearningService) RecordPersonaUsage(ctx context.Context, idosoID int64, personaID, context string, feedback float64) error {
-	if s.db == nil {
+func (s *ContinuousLearningService) RecordPersonaUsage(ctx context.Context, idosoID int64, personaID, contextMatch string, feedback float64) error {
+	if s.db == nil && s.vectorAdapter == nil {
 		log.Printf("🎭 [LEARNING] Persona '%s' for patient %d: feedback %.2f", personaID, idosoID, feedback)
 		return nil
 	}
 
-	query := `
-		INSERT INTO learning_persona_effectiveness
-		(idoso_id, persona_id, context_match, effectiveness_score, usage_count)
-		VALUES ($1, $2, $3, $4, 1)
-		ON CONFLICT (idoso_id, persona_id, context_match) DO UPDATE SET
-			effectiveness_score = (learning_persona_effectiveness.effectiveness_score * learning_persona_effectiveness.usage_count + $4) / (learning_persona_effectiveness.usage_count + 1),
-			usage_count = learning_persona_effectiveness.usage_count + 1,
-			updated_at = NOW()
-	`
-	_, err := s.db.ExecContext(ctx, query, idosoID, personaID, context, feedback)
-	return err
+	now := time.Now().Format(time.RFC3339)
+
+	// NietzscheDB first: MergeNode on "learning" collection
+	if s.vectorAdapter != nil {
+		_, _, err := s.vectorAdapter.MergeNode(ctx, "learning", "PersonaEffectiveness",
+			map[string]interface{}{
+				"idoso_id":      idosoID,
+				"persona_id":    personaID,
+				"context_match": contextMatch,
+			},
+			map[string]interface{}{
+				"idoso_id":            idosoID,
+				"persona_id":          personaID,
+				"context_match":       contextMatch,
+				"effectiveness_score": feedback,
+				"usage_count":         1,
+				"updated_at":          now,
+			})
+		if err != nil {
+			log.Printf("⚠️ [LEARNING] NietzscheDB merge persona effectiveness failed: %v", err)
+		}
+	}
+
+	// PG dual-write (has weighted average logic in SQL)
+	if s.db != nil {
+		query := `
+			INSERT INTO learning_persona_effectiveness
+			(idoso_id, persona_id, context_match, effectiveness_score, usage_count)
+			VALUES ($1, $2, $3, $4, 1)
+			ON CONFLICT (idoso_id, persona_id, context_match) DO UPDATE SET
+				effectiveness_score = (learning_persona_effectiveness.effectiveness_score * learning_persona_effectiveness.usage_count + $4) / (learning_persona_effectiveness.usage_count + 1),
+				usage_count = learning_persona_effectiveness.usage_count + 1,
+				updated_at = NOW()
+		`
+		_, err := s.db.ExecContext(ctx, query, idosoID, personaID, contextMatch, feedback)
+		return err
+	}
+
+	return nil
 }
 
 // GetBestPersona returns the most effective persona for a context

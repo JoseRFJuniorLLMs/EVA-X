@@ -12,13 +12,16 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 )
 
 // DeepMemoryService handles the deep memory extensions
 // Based on: Schacter (Persistence), Van der Kolk (Body), Casey (Place, Commemoration)
 type DeepMemoryService struct {
-	db *sql.DB
-	weaver *NarrativeWeaver
+	db            *sql.DB
+	vectorAdapter *nietzscheInfra.VectorAdapter
+	weaver        *NarrativeWeaver
 
 	// Detection patterns
 	avoidancePatterns   []*regexp.Regexp
@@ -26,6 +29,11 @@ type DeepMemoryService struct {
 	bodySymptomPatterns []*regexp.Regexp
 	placePatterns       []*regexp.Regexp
 	sensoryPatterns     []*regexp.Regexp
+}
+
+// SetVectorAdapter injects NietzscheDB adapter for PG elimination (optional).
+func (s *DeepMemoryService) SetVectorAdapter(va *nietzscheInfra.VectorAdapter) {
+	s.vectorAdapter = va
 }
 
 // NewDeepMemoryService creates a new deep memory service
@@ -121,7 +129,28 @@ type PersistentMemory struct {
 func (s *DeepMemoryService) DetectAvoidance(ctx context.Context, idosoID int64, text string, currentTopic string, timestamp time.Time) error {
 	for _, pattern := range s.avoidancePatterns {
 		if pattern.MatchString(text) {
-			// Record avoidance attempt
+			ts := timestamp.Format(time.RFC3339)
+
+			// NietzscheDB first: MergeNode on "deep_memory" collection
+			if s.vectorAdapter != nil {
+				_, _, mergeErr := s.vectorAdapter.MergeNode(ctx, "deep_memory", "PersistentMemory",
+					map[string]interface{}{
+						"idoso_id":         idosoID,
+						"persistent_topic": currentTopic,
+					},
+					map[string]interface{}{
+						"idoso_id":           idosoID,
+						"persistent_topic":   currentTopic,
+						"avoidance_attempts": 1,
+						"first_detected":     ts,
+						"last_occurrence":    ts,
+					})
+				if mergeErr != nil {
+					log.Printf("⚠️ [PERSISTENCE] NietzscheDB merge failed: %v", mergeErr)
+				}
+			}
+
+			// PG dual-write
 			query := `
 				INSERT INTO patient_persistent_memories
 				(idoso_id, persistent_topic, avoidance_attempts, first_detected, last_occurrence)
@@ -283,7 +312,32 @@ func (s *DeepMemoryService) DetectBodySymptom(ctx context.Context, idosoID int64
 				location = match[1]
 			}
 
-			// Insert or update body memory
+			topicsJSON, _ := json.Marshal(precedingTopics)
+			ts := timestamp.Format(time.RFC3339)
+
+			// NietzscheDB first: MergeNode on "deep_memory" collection
+			if s.vectorAdapter != nil {
+				_, _, mergeErr := s.vectorAdapter.MergeNode(ctx, "deep_memory", "BodyMemory",
+					map[string]interface{}{
+						"idoso_id":         idosoID,
+						"physical_symptom": symptom,
+						"body_location":    location,
+					},
+					map[string]interface{}{
+						"idoso_id":          idosoID,
+						"physical_symptom":  symptom,
+						"body_location":     location,
+						"occurrence_count":  1,
+						"first_reported":    ts,
+						"last_reported":     ts,
+						"correlated_topics": string(topicsJSON),
+					})
+				if mergeErr != nil {
+					log.Printf("⚠️ [BODY] NietzscheDB merge failed: %v", mergeErr)
+				}
+			}
+
+			// PG dual-write
 			query := `
 				INSERT INTO patient_body_memories
 				(idoso_id, physical_symptom, body_location, occurrence_count,
@@ -294,7 +348,6 @@ func (s *DeepMemoryService) DetectBodySymptom(ctx context.Context, idosoID int64
 					last_reported = $4,
 					updated_at = NOW()
 			`
-			topicsJSON, _ := json.Marshal(precedingTopics)
 			if _, err := s.db.ExecContext(ctx, query, idosoID, symptom, location, timestamp, string(topicsJSON)); err != nil {
 				log.Printf("Error inserting body memory: %v", err)
 				continue
