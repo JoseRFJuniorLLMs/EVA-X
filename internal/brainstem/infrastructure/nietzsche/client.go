@@ -353,6 +353,219 @@ func (c *Client) Reconstruct(ctx context.Context, nodeID string, quality string)
 	return c.sdk.Reconstruct(ctx, nodeID, quality)
 }
 
+// ── Graph Algorithms ────────────────────────────────────────────────────────
+
+// RunPageRank computes PageRank scores for all nodes in a collection.
+func (c *Client) RunPageRank(ctx context.Context, collection string, damping float64, maxIterations uint32) (nietzsche.AlgoScoreResult, error) {
+	return c.sdk.RunPageRank(ctx, collection, damping, maxIterations)
+}
+
+// RunLouvain detects communities using the Louvain algorithm.
+func (c *Client) RunLouvain(ctx context.Context, collection string, maxIterations uint32, resolution float64) (nietzsche.AlgoCommunityResult, error) {
+	return c.sdk.RunLouvain(ctx, collection, maxIterations, resolution)
+}
+
+// RunLabelProp detects communities using label propagation.
+func (c *Client) RunLabelProp(ctx context.Context, collection string, maxIterations uint32) (nietzsche.AlgoCommunityResult, error) {
+	return c.sdk.RunLabelProp(ctx, collection, maxIterations)
+}
+
+// RunBetweenness computes betweenness centrality (bridge nodes).
+func (c *Client) RunBetweenness(ctx context.Context, collection string, sampleSize uint32) (nietzsche.AlgoScoreResult, error) {
+	return c.sdk.RunBetweenness(ctx, collection, sampleSize)
+}
+
+// RunCloseness computes closeness centrality (hub proximity).
+func (c *Client) RunCloseness(ctx context.Context, collection string) (nietzsche.AlgoScoreResult, error) {
+	return c.sdk.RunCloseness(ctx, collection)
+}
+
+// RunDegreeCentrality computes degree centrality. direction: "in", "out", or "both".
+func (c *Client) RunDegreeCentrality(ctx context.Context, collection, direction string) (nietzsche.AlgoScoreResult, error) {
+	return c.sdk.RunDegreeCentrality(ctx, collection, direction)
+}
+
+// RunWCC finds weakly connected components.
+func (c *Client) RunWCC(ctx context.Context, collection string) (nietzsche.AlgoCommunityResult, error) {
+	return c.sdk.RunWCC(ctx, collection)
+}
+
+// RunSCC finds strongly connected components.
+func (c *Client) RunSCC(ctx context.Context, collection string) (nietzsche.AlgoCommunityResult, error) {
+	return c.sdk.RunSCC(ctx, collection)
+}
+
+// RunAStar computes A* shortest path between two nodes.
+func (c *Client) RunAStar(ctx context.Context, collection, startID, goalID string) (nietzsche.AStarResult, error) {
+	return c.sdk.RunAStar(ctx, collection, startID, goalID)
+}
+
+// RunTriangleCount counts the number of triangles in the graph.
+func (c *Client) RunTriangleCount(ctx context.Context, collection string) (nietzsche.TriangleResult, error) {
+	return c.sdk.RunTriangleCount(ctx, collection)
+}
+
+// RunJaccardSimilarity computes pairwise Jaccard similarity.
+func (c *Client) RunJaccardSimilarity(ctx context.Context, collection string, topK uint32, threshold float64) (nietzsche.SimilarityResult, error) {
+	return c.sdk.RunJaccardSimilarity(ctx, collection, topK, threshold)
+}
+
+// ── Multi-Manifold ──────────────────────────────────────────────────────────
+
+// Synthesis computes Riemannian midpoint synthesis between two nodes.
+func (c *Client) Synthesis(ctx context.Context, nodeIDA, nodeIDB, collection string) (*nietzsche.SynthesisResult, error) {
+	return c.sdk.Synthesis(ctx, nodeIDA, nodeIDB, collection)
+}
+
+// SynthesisMulti computes Riemannian synthesis across multiple nodes.
+func (c *Client) SynthesisMulti(ctx context.Context, nodeIDs []string, collection string) (*nietzsche.SynthesisResult, error) {
+	return c.sdk.SynthesisMulti(ctx, nodeIDs, collection)
+}
+
+// CausalNeighbors returns Minkowski causal neighbors. direction: "future", "past", or "both".
+func (c *Client) CausalNeighbors(ctx context.Context, nodeID, direction, collection string) ([]nietzsche.CausalEdge, error) {
+	return c.sdk.CausalNeighbors(ctx, nodeID, direction, collection)
+}
+
+// CausalChain traces a Minkowski causal chain from a node. direction: "future" or "past".
+func (c *Client) CausalChain(ctx context.Context, nodeID string, maxDepth uint32, direction, collection string) (*nietzsche.CausalChainResult, error) {
+	return c.sdk.CausalChain(ctx, nodeID, maxDepth, direction, collection)
+}
+
+// KleinPath computes a Klein-model geodesic path between two nodes.
+func (c *Client) KleinPath(ctx context.Context, startNodeID, goalNodeID, collection string) (*nietzsche.KleinPathResult, error) {
+	return c.sdk.KleinPath(ctx, startNodeID, goalNodeID, collection)
+}
+
+// IsOnShortestPath checks if nodeC lies on the shortest path between nodeA and nodeB.
+func (c *Client) IsOnShortestPath(ctx context.Context, nodeIDA, nodeIDB, nodeIDC, collection string) (*nietzsche.ShortestPathCheckResult, error) {
+	return c.sdk.IsOnShortestPath(ctx, nodeIDA, nodeIDB, nodeIDC, collection)
+}
+
+// ── Batch Operations ────────────────────────────────────────────────────────
+
+// BatchInsertNodes inserts multiple nodes in a single RPC call.
+func (c *Client) BatchInsertNodes(ctx context.Context, nodes []nietzsche.InsertNodeOpts, collection string) ([]string, error) {
+	return c.sdk.BatchInsertNodes(ctx, nodes, collection)
+}
+
+// BatchInsertEdges inserts multiple edges in a single RPC call.
+func (c *Client) BatchInsertEdges(ctx context.Context, edges []nietzsche.InsertEdgeOpts, collection string) ([]string, error) {
+	return c.sdk.BatchInsertEdges(ctx, edges, collection)
+}
+
+// ── Full-Text & Hybrid Search ───────────────────────────────────────────────
+
+// FullTextSearch performs a BM25 inverted-index search over node content.
+func (c *Client) FullTextSearch(ctx context.Context, query, collection string, limit uint32) ([]nietzsche.FtsResult, error) {
+	return c.sdk.FullTextSearch(ctx, query, collection, limit)
+}
+
+// HybridSearch combines full-text BM25 and vector KNN search.
+func (c *Client) HybridSearch(ctx context.Context, textQuery string, queryCoords []float64,
+	k uint32, textWeight, vectorWeight float64, collection string) ([]nietzsche.KnnResult, error) {
+	return c.sdk.HybridSearch(ctx, textQuery, queryCoords, k, textWeight, vectorWeight, collection)
+}
+
+// ── Backup / Restore ────────────────────────────────────────────────────────
+
+// CreateBackup creates a RocksDB checkpoint backup.
+func (c *Client) CreateBackup(ctx context.Context, label string) (nietzsche.BackupInfo, error) {
+	return c.sdk.CreateBackup(ctx, label)
+}
+
+// ListBackups returns all available backups.
+func (c *Client) ListBackups(ctx context.Context) ([]nietzsche.BackupInfo, error) {
+	return c.sdk.ListBackups(ctx)
+}
+
+// RestoreBackup restores from a backup path.
+func (c *Client) RestoreBackup(ctx context.Context, backupPath, targetPath string) error {
+	return c.sdk.RestoreBackup(ctx, backupPath, targetPath)
+}
+
+// ── CDC (Change Data Capture) ───────────────────────────────────────────────
+
+// SubscribeCDC subscribes to change events from a collection.
+func (c *Client) SubscribeCDC(ctx context.Context, collection string, fromLSN uint64) (*nietzsche.CDCSubscription, error) {
+	return c.sdk.SubscribeCDC(ctx, collection, fromLSN)
+}
+
+// ── Cache (collection-scoped key-value) ─────────────────────────────────────
+
+// CacheSet stores a value under key with optional TTL.
+func (c *Client) CacheSet(ctx context.Context, collection, key string, value []byte, ttlSecs uint64) error {
+	return c.sdk.CacheSet(ctx, collection, key, value, ttlSecs)
+}
+
+// CacheGet retrieves a cached value. Returns (value, found, error).
+func (c *Client) CacheGet(ctx context.Context, collection, key string) ([]byte, bool, error) {
+	return c.sdk.CacheGet(ctx, collection, key)
+}
+
+// CacheDel removes a cached value.
+func (c *Client) CacheDel(ctx context.Context, collection, key string) error {
+	return c.sdk.CacheDel(ctx, collection, key)
+}
+
+// ── Lists (node-scoped ordered sequences) ───────────────────────────────────
+
+// ListRPush appends a value to a node's named list. Returns new list length.
+func (c *Client) ListRPush(ctx context.Context, nodeID, listName string, value []byte, collection string) (uint64, error) {
+	return c.sdk.ListRPush(ctx, nodeID, listName, value, collection)
+}
+
+// ListLRange returns a range of values from a node's named list.
+func (c *Client) ListLRange(ctx context.Context, nodeID, listName string, start uint64, stop int64, collection string) ([][]byte, error) {
+	return c.sdk.ListLRange(ctx, nodeID, listName, start, stop, collection)
+}
+
+// ListLen returns the length of a node's named list.
+func (c *Client) ListLen(ctx context.Context, nodeID, listName, collection string) (uint64, error) {
+	return c.sdk.ListLen(ctx, nodeID, listName, collection)
+}
+
+// ── Schema / Index ──────────────────────────────────────────────────────────
+
+// SetSchema registers a validation schema for a node type.
+func (c *Client) SetSchema(ctx context.Context, nodeType string, requiredFields []string, fieldTypes []nietzsche.SchemaFieldType, collection string) error {
+	return c.sdk.SetSchema(ctx, nodeType, requiredFields, fieldTypes, collection)
+}
+
+// GetSchema retrieves the validation schema for a node type.
+func (c *Client) GetSchema(ctx context.Context, nodeType, collection string) (*nietzsche.SchemaResult, error) {
+	return c.sdk.GetSchema(ctx, nodeType, collection)
+}
+
+// CreateIndex creates a secondary index on a metadata field.
+func (c *Client) CreateIndex(ctx context.Context, collection, field string) error {
+	return c.sdk.CreateIndex(ctx, collection, field)
+}
+
+// DropIndex removes a secondary index.
+func (c *Client) DropIndex(ctx context.Context, collection, field string) error {
+	return c.sdk.DropIndex(ctx, collection, field)
+}
+
+// ListIndexes returns all indexed fields in a collection.
+func (c *Client) ListIndexes(ctx context.Context, collection string) ([]string, error) {
+	return c.sdk.ListIndexes(ctx, collection)
+}
+
+// ── Collection Management ───────────────────────────────────────────────────
+
+// DropCollection permanently removes a collection and all its data.
+func (c *Client) DropCollection(ctx context.Context, name string) error {
+	return c.sdk.DropCollection(ctx, name)
+}
+
+// ── Sensory Extended ────────────────────────────────────────────────────────
+
+// DegradeSensory triggers progressive quantisation degradation on a node's sensory data.
+func (c *Client) DegradeSensory(ctx context.Context, nodeID, collection string) error {
+	return c.sdk.DegradeSensory(ctx, nodeID, collection)
+}
+
 // ── Search (backward compatible with old HTTP client signature) ─────────────
 
 // Search queries nodes via NQL MATCH with a text filter.
@@ -400,9 +613,11 @@ func (c *Client) Search(ctx context.Context, collection string, query string, li
 // ── EnsureCollections: bulk create all EVA collections ──────────────────────
 
 // DefaultCollections returns the standard EVA collection configurations.
+// Graph-centric collections use poincare metric for hyperbolic geometry;
+// embedding-only collections use cosine for flat vector space.
 func DefaultCollections() []nietzsche.CollectionConfig {
 	return []nietzsche.CollectionConfig{
-		// Vector collections (Qdrant replacement, cosine 3072D)
+		// Vector collections (Qdrant replacement, cosine 3072D — flat embedding space)
 		{Name: "memories", Dim: 3072, Metric: "cosine"},
 		{Name: "signifier_chains", Dim: 3072, Metric: "cosine"},
 		{Name: "eva_self_knowledge", Dim: 3072, Metric: "cosine"},
@@ -411,20 +626,49 @@ func DefaultCollections() []nietzsche.CollectionConfig {
 		{Name: "eva_docs", Dim: 3072, Metric: "cosine"},
 		{Name: "speaker_embeddings", Dim: 3072, Metric: "cosine"},
 		{Name: "stories", Dim: 3072, Metric: "cosine"},
-		// Graph collections (Neo4j replacement)
-		{Name: "patient_graph", Dim: 3072, Metric: "cosine"},
-		{Name: "eva_core", Dim: 3072, Metric: "cosine"},
+		// Graph collections (Neo4j replacement, poincare — hyperbolic hierarchy)
+		{Name: "patient_graph", Dim: 3072, Metric: "poincare"},
+		{Name: "eva_core", Dim: 3072, Metric: "poincare"},
 	}
 }
 
 // EnsureCollections creates all default EVA collections idempotently.
+// It also checks for metric mismatches on existing collections and creates indexes.
 func (c *Client) EnsureCollections(ctx context.Context) error {
 	log := logger.Nietzsche()
 	log.Info().Msg("ensuring all EVA collections exist in NietzscheDB")
 
+	// Build desired metric map for mismatch detection
+	desiredMetrics := make(map[string]string)
 	for _, col := range DefaultCollections() {
+		desiredMetrics[col.Name] = col.Metric
 		if err := c.EnsureCollection(ctx, col.Name, col.Dim, col.Metric); err != nil {
 			return err
+		}
+	}
+
+	// Check existing collections for metric mismatches (warn, don't auto-migrate)
+	existing, err := c.ListCollections(ctx)
+	if err == nil {
+		for _, col := range existing {
+			if desired, ok := desiredMetrics[col.Name]; ok && col.Metric != desired {
+				log.Warn().
+					Str("collection", col.Name).
+					Str("current_metric", col.Metric).
+					Str("desired_metric", desired).
+					Msg("[MIGRATION] collection metric mismatch — manual migration required (drop + recreate)")
+			}
+		}
+	}
+
+	// Create indexes on frequently queried fields (idempotent on server)
+	indexes := []struct{ collection, field string }{
+		{"patient_graph", "node_type"},
+		{"eva_core", "node_type"},
+	}
+	for _, idx := range indexes {
+		if err := c.CreateIndex(ctx, idx.collection, idx.field); err != nil {
+			log.Warn().Err(err).Str("collection", idx.collection).Str("field", idx.field).Msg("failed to create index (non-fatal)")
 		}
 	}
 
@@ -433,6 +677,37 @@ func (c *Client) EnsureCollections(ctx context.Context) error {
 }
 
 // ── Node content helpers ────────────────────────────────────────────────────
+
+// ── Swartz SQL Layer ──────────────────────────────────────────────────────────
+
+// SqlQuery executes a SQL query (SELECT) against NietzscheDB's embedded SQL engine.
+// Returns structured result set with columns and rows.
+func (c *Client) SqlQuery(ctx context.Context, sql, collection string) (*nietzsche.SqlResultSet, error) {
+	log := logger.Nietzsche()
+
+	result, err := c.sdk.SqlQuery(ctx, sql, collection)
+	if err != nil {
+		log.Error().Err(err).Str("sql", sql).Str("collection", collection).Msg("SqlQuery failed")
+		return nil, fmt.Errorf("nietzsche SqlQuery: %w", err)
+	}
+
+	log.Debug().Str("sql", sql).Int("rows", len(result.Rows)).Msg("SqlQuery OK")
+	return result, nil
+}
+
+// SqlExec executes a SQL DDL/DML statement (CREATE TABLE, INSERT, UPDATE, DELETE, DROP TABLE).
+func (c *Client) SqlExec(ctx context.Context, sql, collection string) (*nietzsche.SqlExecResult, error) {
+	log := logger.Nietzsche()
+
+	result, err := c.sdk.SqlExec(ctx, sql, collection)
+	if err != nil {
+		log.Error().Err(err).Str("sql", sql).Str("collection", collection).Msg("SqlExec failed")
+		return nil, fmt.Errorf("nietzsche SqlExec: %w", err)
+	}
+
+	log.Debug().Str("sql", sql).Uint64("affected", result.AffectedRows).Msg("SqlExec OK")
+	return result, nil
+}
 
 // NodeResultToMap converts a NodeResult to a flat map for backward compatibility.
 func NodeResultToMap(nr nietzsche.NodeResult) map[string]interface{} {

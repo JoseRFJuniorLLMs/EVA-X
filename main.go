@@ -15,6 +15,7 @@ import (
 	"eva/internal/brainstem/config"
 	"eva/internal/brainstem/database"
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
+	nietzsche "nietzsche-sdk"
 	"eva/internal/brainstem/push"
 	"eva/internal/cortex/alert"
 	"eva/internal/cortex/eva_memory"
@@ -199,8 +200,12 @@ func main() {
 	// Create adapters
 	graphAdapter := nietzscheInfra.NewGraphAdapter(nzClient, "patient_graph")
 	vectorAdapter := nietzscheInfra.NewVectorAdapter(nzClient)
-	audioBuffer := nietzscheInfra.NewAudioBuffer()
+	audioBuffer := nietzscheInfra.NewAudioBuffer(nzClient)
 	evaGraphAdapter := nietzscheInfra.NewGraphAdapter(nzClient, "eva_core")
+	algoAdapter := nietzscheInfra.NewAlgoAdapter(nzClient)
+	manifoldAdapter := nietzscheInfra.NewManifoldAdapter(nzClient)
+	backupService := nietzscheInfra.NewBackupService(nzClient, 24*time.Hour)
+	cdcListener := nietzscheInfra.NewCDCListener(nzClient)
 
 	// 3. Serviços Base
 	pushService, err := push.NewFirebaseService(cfg.FirebaseCredentialsPath)
@@ -771,7 +776,39 @@ func main() {
 		Handler: router,
 	}
 
-	_ = audioBuffer // TODO: wire to voice handler when Redis audio path is replaced
+	// NietzscheDB services — use _ to suppress unused until wired to handlers
+	_ = audioBuffer
+	_ = algoAdapter
+	_ = manifoldAdapter
+
+	// NietzscheDB Backup Service (daily automated backups)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().Interface("panic", r).Msg("CRITICO: Backup Service panic")
+			}
+		}()
+		backupService.Start(ctx)
+	}()
+	log.Info().Msg("NietzscheDB Backup Service started (daily)")
+
+	// NietzscheDB CDC Listener (change data capture for audit log)
+	cdcListener.Subscribe("eva_core", func(event nietzsche.CDCEvent) {
+		log.Debug().
+			Str("event_type", event.EventType).
+			Str("entity_id", event.EntityID).
+			Str("collection", event.Collection).
+			Msg("[CDC] Change event")
+	})
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().Interface("panic", r).Msg("CRITICO: CDC Listener panic")
+			}
+		}()
+		cdcListener.Start(ctx)
+	}()
+	log.Info().Msg("NietzscheDB CDC Listener started (eva_core)")
 
 	go func() {
 		log.Info().Msgf("EVA rodando na porta %s (NietzscheDB)", cfg.Port)
