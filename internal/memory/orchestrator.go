@@ -20,7 +20,7 @@ import (
 // Voice → FDPN → Krylov → Spectral → REM
 type MemoryOrchestrator struct {
 	db            *sql.DB
-	graphAdapter  *nietzscheInfra.GraphAdapter  // NietzscheDB GraphAdapter (substitui Neo4j)
+	graphAdapter  *nietzscheInfra.GraphAdapter  // NietzscheDB GraphAdapter
 	vectorAdapter *nietzscheInfra.VectorAdapter // NietzscheDB VectorAdapter (substitui Qdrant)
 
 	// Pipeline components

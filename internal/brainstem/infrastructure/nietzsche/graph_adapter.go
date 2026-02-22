@@ -13,8 +13,8 @@ import (
 	nietzsche "nietzsche-sdk"
 )
 
-// GraphAdapter replaces Neo4jClient for graph operations.
-// It translates Neo4j Cypher patterns (MERGE, MATCH, variable-length paths)
+// GraphAdapter provides graph operations via NietzscheDB.
+// It translates Cypher-style patterns (MERGE, MATCH, variable-length paths)
 // into NietzscheDB SDK calls.
 type GraphAdapter struct {
 	client     *Client

@@ -493,9 +493,7 @@ Resposta: {"tool": "list_curriculum", "args": {"status": "completed"}}
 
 🗄️ ACESSO DIRETO A BASES DE DADOS:
 - query_postgresql: Executar query SELECT no PostgreSQL (args: query)
-- query_neo4j: Executar query Cypher no Neo4j (args: query)
-- query_qdrant: Buscar vetores no Qdrant (args: collection, query, limit)
-- query_nietzsche: Consultar NietzscheDB (args: endpoint, params)
+- query_nietzsche: Consultar NietzscheDB — grafo + vetores (args: endpoint, params)
 
 🖥️ SANDBOX + BROWSER + CRON:
 - execute_code: Executar código (args: language[bash/python/node], code, timeout)
@@ -581,8 +579,8 @@ Resposta: {"tool": "run_tests", "args": {}}
 Fala: "EVA, consulta quantos idosos tem no banco"
 Resposta: {"tool": "query_postgresql", "args": {"query": "SELECT COUNT(*) FROM idosos"}}
 
-Fala: "EVA, busca no Neo4j as conexões do paciente"
-Resposta: {"tool": "query_neo4j", "args": {"query": "MATCH (p:Patient)-[:KNOWS]->(c) RETURN p, c LIMIT 10"}}
+Fala: "EVA, busca no grafo as conexões do paciente"
+Resposta: {"tool": "query_nietzsche", "args": {"endpoint": "graph", "params": {"collection": "patient_graph", "query": "neighbors", "node_id": "patient_1", "limit": 10}}}
 
 Fala: "Executa esse script python que calcula fibonacci"
 Resposta: {"tool": "execute_code", "args": {"language": "python", "code": "def fib(n):\n  a,b=0,1\n  for _ in range(n): a,b=b,a+b\n  return a\nprint(fib(10))"}}

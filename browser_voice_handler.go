@@ -31,7 +31,7 @@ import (
 // Client:    internal/gemini (v1beta, producao)
 // Frontend:  App mobile EVA-Mobile / Malaria frontend
 // Protocolo: WebSocket — audio PCM (16kHz in, 24kHz out) + video JPEG + texto
-// Memoria:   Meta-cognitiva via Neo4j (carrega no inicio, salva transcricoes)
+// Memoria:   Meta-cognitiva via NietzscheDB (carrega no inicio, salva transcricoes)
 // CRITICO:   Protocolo WebSocket NAO pode mudar — app mobile depende
 // Ver:       GEMINI_ARCHITECTURE.md para documentacao completa
 //
@@ -312,11 +312,11 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
-	// --- Memoria meta-cognitiva (Neo4j) ---
+	// --- Memoria meta-cognitiva (NietzscheDB) ---
 	var memories []string
 	if s.evaMemory != nil {
 		if err := s.evaMemory.StartSession(ctx, sessionID); err != nil {
-			log.Warn().Err(err).Msg("[BROWSER] Falha ao registrar sessao no Neo4j")
+			log.Warn().Err(err).Msg("[BROWSER] Falha ao registrar sessao no NietzscheDB")
 		}
 		metaCognition, err := s.evaMemory.LoadMetaCognition(ctx)
 		if err != nil {
@@ -738,7 +738,7 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 			Msg("[BROWSER] Reconexao ao Gemini bem-sucedida")
 	}
 
-	// --- Finalizar sessao no Neo4j ---
+	// --- Finalizar sessao no NietzscheDB ---
 	if s.evaMemory != nil {
 		s.evaMemory.EndSession(ctx, sessionID)
 		go s.evaMemory.DetectPatterns(context.Background())
