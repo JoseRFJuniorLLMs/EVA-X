@@ -185,7 +185,7 @@ func architectureEntries() []KnowledgeEntry {
 	return []KnowledgeEntry{
 		{
 			Type: "architecture", Key: "arch:overview", Title: "Arquitetura Geral do EVA-Mind",
-			Summary: "EVA-Mind: IA companeira para idosos. Voz em tempo real, 12 agentes swarm, 130+ tabelas, 110+ tools, 3 bancos (PostgreSQL, Neo4j, Qdrant)",
+			Summary: "EVA-Mind: IA companeira para idosos. Voz em tempo real, 12 agentes swarm, 130+ tabelas, 110+ tools, 2 bancos (PostgreSQL, NietzscheDB)",
 			Content: `EVA-Mind e um sistema de IA companeira para cuidar de idosos, com arquitetura inspirada no cerebro humano.
 
 CAMADAS:
@@ -201,8 +201,7 @@ CAMADAS:
 
 BANCOS:
 - PostgreSQL 15: 130+ tabelas (34.35.142.107:5432)
-- Neo4j: Grafo de conhecimento (localhost:7687)
-- Qdrant: 20+ colecoes vetoriais 3072-dim (localhost:6333)
+- NietzscheDB: Grafo multi-manifold + vetores hiperbolicos (gRPC :50051)
 
 FASES DE IMPLEMENTACAO (7 completas):
 E0: Situational Modulator, A: Hebbian Real-Time, B: FDPN Boost, C: Edge Zones, D: Entity Resolution, E: RAM (Realistic Accuracy Model), F: Core Memory`,
@@ -633,11 +632,15 @@ SPEAKER:
 - speaker_identifications: session_id, speaker_id FK, confidence, emotion, pitch_hz, energy, stress_level`,
 			Location: "migrations/015-041", Parent: "db:postgresql", Tags: `["tools", "memoria_critica", "lgpd", "speaker", "etica"]`, Importance: 8,
 		},
-		// --- Neo4j ---
+		// --- NietzscheDB (Grafo + Vetores) ---
 		{
-			Type: "database", Key: "db:neo4j", Title: "Neo4j — Grafo de Conhecimento e Personalidade",
-			Summary: "Neo4j localhost:7687. Nodes: EvaSelf, CoreMemory, EvaSession/Turn/Topic/Insight, Person, Event, Emotion, Signifier, FDPNNode, HebbianEdge",
-			Content: `Neo4j e o banco de grafos. Host: localhost:7687, User: neo4j, Pass: Debian23.
+			Type: "database", Key: "db:nietzschedb", Title: "NietzscheDB — Grafo Multi-Manifold + Vetores Hiperbolicos",
+			Summary: "NietzscheDB gRPC :50051. Collections: patient_graph, eva_core. Nodes: EvaSelf, CoreMemory, EvaSession/Turn/Topic/Insight, Person, Event, Emotion, Signifier, FDPNNode, HebbianEdge",
+			Content: `NietzscheDB e o banco multi-manifold (Poincare + Klein + Riemann + Minkowski). gRPC :50051, Dashboard :8080.
+
+COLLECTIONS:
+- patient_graph: Grafo de conhecimento dos pacientes
+- eva_core: Identidade e memoria pessoal da EVA
 
 NODES PRINCIPAIS:
 - EvaSelf: Singleton da personalidade EVA. Big Five (openness 0.85, conscientiousness 0.90, extraversion 0.40, agreeableness 0.88, neuroticism 0.15). Eneagrama tipo 2 wing 1. core_values: [empatia, presenca, crescimento, etica]
@@ -649,7 +652,6 @@ NODES PRINCIPAIS:
 - Person: Pessoas no grafo (idosos, familiares)
 - Event: Eventos de vida
 - Emotion: Estados emocionais
-- Topic: Topicos de conversa
 - Signifier: Significantes lacanianos (cadeias de significantes)
 - FDPNNode: Nos FDPN (Formacao, Demanda, Posicao, Nome)
 - HebbianEdge: Arestas com peso hebbiano (slow_weight, fast_weight, decay_rate)
@@ -662,7 +664,7 @@ RELATIONSHIPS:
 - Person -[:FELT]-> Emotion
 - Signifier -[:CHAINS_TO]-> Signifier (cadeias)
 - HebbianEdge conecta entidades co-ativadas`,
-			Location: "internal/brainstem/infrastructure/graph/", Parent: "arch:overview", Tags: `["neo4j", "grafo", "personalidade", "lacan"]`, Importance: 10,
+			Location: "internal/brainstem/infrastructure/nietzsche/", Parent: "arch:overview", Tags: `["nietzschedb", "grafo", "vetores", "personalidade", "lacan"]`, Importance: 10,
 		},
 		// --- Qdrant ---
 		{
@@ -700,12 +702,11 @@ func moduleEntries() []KnowledgeEntry {
 	return []KnowledgeEntry{
 		{
 			Type: "module", Key: "module:brainstem", Title: "Brainstem — Infraestrutura Base",
-			Summary: "config (.env), database (PostgreSQL wrapper), graph (Neo4j), vector (Qdrant), auth (JWT), push (Firebase)",
+			Summary: "config (.env), database (PostgreSQL wrapper), nietzsche (NietzscheDB graph+vector), auth (JWT), push (Firebase)",
 			Content: `PACOTES:
-1. config (config.go): Config struct — DatabaseURL, GoogleAPIKey, Port, Neo4jURI, QdrantHost, QdrantPort, FirebaseCredentialsPath, SMTPHost, SpeakerModelPath, etc
+1. config (config.go): Config struct — DatabaseURL, GoogleAPIKey, Port, NietzscheGRPCAddr, FirebaseCredentialsPath, SMTPHost, SpeakerModelPath, etc
 2. database (db.go): NewDB(url) → *DB{Conn *sql.DB}. Metodos: Close(), Ping()
-3. infrastructure/graph (neo4j_client.go): NewNeo4jClient(cfg) → driver Neo4j
-4. infrastructure/vector (qdrant_client.go): NewQdrantClient(host, port) → *QdrantClient. CreateCollection, Upsert, Search, SearchWithScore, Delete, GetCollectionInfo. Helper: CreatePoint()
+3. infrastructure/nietzsche (client.go): NewClient(addr) → *NietzscheClient (gRPC). GraphAdapter + VectorAdapter
 5. auth (handler.go): JWT authentication. Login()
 6. push (firebase_service.go): Firebase Cloud Messaging. SendPush(token, title, body)`,
 			Location: "internal/brainstem/", Parent: "arch:overview", Tags: `["brainstem", "config", "database"]`, Importance: 8,
@@ -714,7 +715,7 @@ func moduleEntries() []KnowledgeEntry {
 			Type: "module", Key: "module:cortex", Title: "Cortex — Logica de Negocio e IA (16 pacotes)",
 			Summary: "Gemini (voz/tools), Lacan (psicanalise), personality (Eneagrama), learning, self, selfawareness, eva_memory, alert, speaker, situation",
 			Content: `PACOTES:
-1. gemini/handler.go: Gemini Live (voz bidirecional WebSocket). NewHandler(cfg, db, neo4j, qdrant)
+1. gemini/handler.go: Gemini Live (voz bidirecional WebSocket). NewHandler(cfg, db, graphAdapter, vectorAdapter)
 2. gemini/tools_client.go: Gemini 2.5 Flash REST. AnalyzeTranscription() → []ToolCall
 3. lacan/unified_retrieval.go: Monta system prompt (personalidade + memorias + wisdom + Lacan + debug)
 4. lacan/narrative_shift.go: Detecta mudancas narrativas via signifiers
@@ -979,8 +980,7 @@ func infraEntries() []KnowledgeEntry {
 Deploy: git pull → go build -o eva-mind . → systemctl restart eva-mind
 Porta: 8080 (PORT env)
 PostgreSQL: 34.35.142.107:5432 (Cloud SQL)
-Neo4j: localhost:7687
-Qdrant: localhost:6333/6334`,
+NietzscheDB: gRPC :50051, Dashboard :8080`,
 			Location: "main.go", Tags: `["servidor", "gcp", "deploy"]`, Importance: 7,
 		},
 		{

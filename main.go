@@ -429,7 +429,7 @@ func main() {
 	toolsHandler.SetSkillsService(skillsSvc)
 	log.Info().Msgf("🧩 Skills Service: %s (%d skills carregadas)", cfg.SkillsDir, len(skillsSvc.List()))
 
-	// NietzscheDB eva_core collection replaces Neo4j Core Driver (:7688)
+	// NietzscheDB eva_core collection (gRPC :50051)
 	toolsHandler.SetEvaCoreAdapter(evaGraphAdapter)
 	log.Info().Msg("Tools Handler inicializado (150+ tools, NietzscheDB)")
 

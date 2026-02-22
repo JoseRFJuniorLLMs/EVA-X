@@ -38,8 +38,8 @@ type evaMessage struct {
 // Rota:      /ws/eva
 // Client:    internal/cortex/gemini (v1beta, producao)
 // Frontend:  Malaria-Angolar/frontend/src/pages/EvaPage.tsx
-// Memoria:   Meta-cognitiva via Neo4j (internal/cortex/eva_memory)
-//            Identidade pessoal via CoreMemoryEngine (Neo4j :7688)
+// Memoria:   Meta-cognitiva via NietzscheDB (internal/cortex/eva_memory)
+//            Identidade pessoal via CoreMemoryEngine (NietzscheDB :50051)
 // Protocolo:
 //
 //	Browser envia: {"type":"text","text":"pergunta do usuario"}
@@ -95,11 +95,11 @@ func (s *SignalingServer) handleEvaChat(w http.ResponseWriter, r *http.Request) 
 
 	log.Info().Str("session", sessionID).Str("cpf", clientCPF).Bool("hasContext", configMsg.Text != "").Msg("[EVA] Config recebida do cliente")
 
-	// Carregar memoria meta-cognitiva do Neo4j (sistema legado :7687)
+	// Carregar memoria meta-cognitiva do NietzscheDB (sistema legado :50051)
 	var memories []string
 	if s.evaMemory != nil {
 		if err := s.evaMemory.StartSession(ctx, sessionID); err != nil {
-			log.Warn().Err(err).Msg("[EVA] Falha ao registrar sessao no Neo4j")
+			log.Warn().Err(err).Msg("[EVA] Falha ao registrar sessao no NietzscheDB")
 		}
 
 		metaCognition, err := s.evaMemory.LoadMetaCognition(ctx)
@@ -111,7 +111,7 @@ func (s *SignalingServer) handleEvaChat(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	// Injetar identidade pessoal da EVA (CoreMemoryEngine — Neo4j :7688)
+	// Injetar identidade pessoal da EVA (CoreMemoryEngine — NietzscheDB :50051)
 	// GetIdentityContext() retorna: personalidade OCEAN, memorias importantes, autodescricao
 	if s.coreMemory != nil {
 		identityCtx, err := s.coreMemory.GetIdentityContext(ctx)
@@ -123,7 +123,7 @@ func (s *SignalingServer) handleEvaChat(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	// Setup com cortex/gemini — contexto vem do frontend, memoria do Neo4j
+	// Setup com cortex/gemini — contexto vem do frontend, memoria do NietzscheDB
 	err = geminiClient.SendSetup(
 		clientContext,
 		map[string]interface{}{
@@ -189,7 +189,7 @@ func (s *SignalingServer) handleEvaChat(w http.ResponseWriter, r *http.Request) 
 					conn.WriteJSON(evaMessage{Type: "status", Text: "turn_complete"})
 					writeMu.Unlock()
 
-					// Salvar resposta do turno no Neo4j legado + acumular transcript
+					// Salvar resposta do turno no NietzscheDB legado + acumular transcript
 					if responseAccum.Len() > 0 {
 						turn := responseAccum.String()
 						if s.evaMemory != nil {
@@ -260,7 +260,7 @@ func (s *SignalingServer) handleEvaChat(w http.ResponseWriter, r *http.Request) 
 				}
 
 				if msg.Type == "text" && msg.Text != "" {
-					// Salvar mensagem do usuario no Neo4j legado + acumular transcript
+					// Salvar mensagem do usuario no NietzscheDB legado + acumular transcript
 					if s.evaMemory != nil {
 						go s.evaMemory.StoreTurn(ctx, sessionID, "user", msg.Text)
 					}
@@ -275,7 +275,7 @@ func (s *SignalingServer) handleEvaChat(w http.ResponseWriter, r *http.Request) 
 
 	sessionErr := <-errChan
 
-	// Finalizar sessao no Neo4j legado
+	// Finalizar sessao no NietzscheDB legado
 	if s.evaMemory != nil {
 		s.evaMemory.EndSession(ctx, sessionID)
 		go s.evaMemory.DetectPatterns(context.Background())

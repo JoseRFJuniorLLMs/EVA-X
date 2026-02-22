@@ -259,7 +259,7 @@ func (h *ToolsHandler) handleMCPLearnTopic(idosoID int64, args map[string]interf
 }
 
 // ============================================================================
-// 🗄️ mcp_query_neo4j_core — Query Cypher no Neo4j Core (:7688)
+// 🗄️ mcp_query_neo4j_core — Query grafo no NietzscheDB Core (gRPC :50051)
 // ============================================================================
 
 func (h *ToolsHandler) handleMCPQueryNeo4jCore(idosoID int64, args map[string]interface{}) (map[string]interface{}, error) {

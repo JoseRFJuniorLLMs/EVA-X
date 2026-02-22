@@ -219,7 +219,7 @@ func (s *EVAMCPServer) handleToolsList() interface{} {
 		},
 		{
 			Name:        "eva_teach",
-			Description: "Ensina algo novo a EVA. Grava como CoreMemory no Neo4j pessoal dela (porta 7688). Ela lembra pra sempre.",
+			Description: "Ensina algo novo a EVA. Grava como CoreMemory no NietzscheDB (eva_core). Ela lembra pra sempre.",
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{

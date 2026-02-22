@@ -191,7 +191,7 @@ type SignalingServer struct {
 	prosodyAnalyzer    *voice.ProsodyAnalyzer        // ✅ Voice Biomarkers
 	escalationService  *alert.EscalationService      // ✅ Alert Escalation (SMS/WhatsApp/Call)
 	ethicsBoundary     *ethics.EthicalBoundaryEngine // ✅ Ethics Monitoring
-	brainService       *brain.Service                // ✅ Memory Service (Postgres + Qdrant + Neo4j)
+	brainService       *brain.Service                // ✅ Memory Service (Postgres + NietzscheDB)
 
 	// 🧠 NOVOS: Módulos de Psicologia e Personalidade
 	cognitiveOrchestrator *cognitive.CognitiveLoadOrchestrator // ✅ Carga Cognitiva e Ruminação
@@ -323,7 +323,7 @@ func NewSignalingServer(
 	})
 	log.Println("🛡️ Signaling: EthicalBoundaryEngine initialized for Ethics Monitoring")
 
-	// ✅ NOVO: Inicializar NietzscheDB Client (substitui Neo4j)
+	// ✅ Inicializar NietzscheDB Client
 	nietzscheClient, err := nietzscheInfra.NewClient(cfg.NietzscheGRPCAddr)
 	if err != nil {
 		log.Printf("⚠️ NietzscheDB connect failed: %v", err)
@@ -721,7 +721,7 @@ func (s *SignalingServer) handleAudioMessage(session *WebSocketSession, pcmData 
 
 		systemNote := fmt.Sprintf(`
 [SISTEMA - INFORMAÇÃO CRÍTICA DO BACKGROUND]
-Análise clínica recente (Neo4j): %s
+Análise clínica recente (NietzscheDB): %s
 Use isso para guiar sua resposta ao próximo áudio.
 `, insight)
 
