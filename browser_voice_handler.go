@@ -556,17 +556,23 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 					if !ok {
 						continue
 					}
-					if text, ok := part["text"].(string); ok && text != "" {
-						writeMu.Lock()
-						conn.WriteJSON(browserMessage{Type: "text", Text: text})
-						writeMu.Unlock()
-					}
+					// AUDIO ONLY: inlineData (audio PCM) is the primary output.
+					// Text parts in modelTurn.parts during native-audio mode are
+					// tool-call artifacts ([[TOOL:...]]) or model fallback text —
+					// NOT the real transcription. The actual EVA transcription comes
+					// from outputAudioTranscription (handled above, line ~535).
+					// Sending text here was causing voice "cuts" because the model
+					// alternates between generating audio and text, creating gaps.
 					if inlineData, ok := part["inlineData"].(map[string]interface{}); ok {
 						if audioB64, ok := inlineData["data"].(string); ok {
 							writeMu.Lock()
 							conn.WriteJSON(browserMessage{Type: "audio", Data: audioB64})
 							writeMu.Unlock()
 						}
+					} else if text, ok := part["text"].(string); ok && text != "" {
+						// Log para debug — NAO enviar ao browser como subtitle.
+						// A transcricao real vem de outputAudioTranscription.
+						log.Debug().Str("session", sessionID).Str("text", text).Msg("[BROWSER] modelTurn text ignorado (audio-only mode)")
 					}
 				}
 			}
