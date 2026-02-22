@@ -5,8 +5,8 @@ package lacan
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -75,8 +75,8 @@ func (s *SignifierService) incrementSignifier(ctx context.Context, idosoID int64
 		},
 		OnCreateSet: map[string]interface{}{
 			"frequency":        1,
-			"first_occurrence":  now,
-			"last_occurrence":   now,
+			"first_occurrence": now,
+			"last_occurrence":  now,
 			"contexts":         contextStr,
 		},
 		OnMatchSet: map[string]interface{}{
@@ -164,6 +164,93 @@ func (s *SignifierService) GetKeySignifiers(ctx context.Context, idosoID int64, 
 	}
 
 	return signifiers, nil
+}
+
+// FindSemanticNeighbors localiza significantes proximos no manifold hiperbolico (associações livres)
+func (s *SignifierService) FindSemanticNeighbors(ctx context.Context, idosoID int64, word string, limit int) ([]string, error) {
+	if s.client == nil {
+		return nil, nil
+	}
+
+	// 1. Encontrar o nó do significante alvo
+	nqlFind := `MATCH (s:Significante) WHERE s.idoso_id = $idosoId AND s.word = $word RETURN s`
+	qr, err := s.client.ExecuteNQL(ctx, nqlFind, map[string]interface{}{
+		"idosoId": idosoID,
+		"word":    word,
+	}, "")
+	if err != nil || len(qr.Nodes) == 0 {
+		return nil, err
+	}
+	targetID := qr.Nodes[0].ID
+
+	// 2. Buscar vizinhos por proximidade no manifold (HYPERBOLIC_DIST)
+	// Isso simula a "associação livre" lacaniana através da estrutura do grafo.
+	nqlNeighbors := `
+		MATCH (s:Significante) 
+		WHERE s.idoso_id = $idosoId AND s.id != $targetId
+		RETURN s.word
+		ORDER BY HYPERBOLIC_DIST(s, $targetId) ASC
+		LIMIT $limit
+	`
+	qrNeighbors, err := s.client.ExecuteNQL(ctx, nqlNeighbors, map[string]interface{}{
+		"idosoId":  idosoID,
+		"targetId": targetID,
+		"limit":    limit,
+	}, "")
+	if err != nil {
+		return nil, err
+	}
+
+	var neighbors []string
+	for _, node := range qrNeighbors.Nodes {
+		if w, ok := node.Content["word"].(string); ok {
+			neighbors = append(neighbors, w)
+		}
+	}
+	return neighbors, nil
+}
+
+// IdentifySessionDominant identifica o significante central (Ponto de Almofada) usando PageRank
+func (s *SignifierService) IdentifySessionDominant(ctx context.Context, idosoID int64) (string, error) {
+	if s.client == nil {
+		return "", nil
+	}
+
+	// 1. Executar PageRank na coleção (o NietzscheDB já computa centralidade estrutural)
+	// Usamos o SDK interno via GraphAdapter
+	sdkClient := s.client.SDK()
+	if sdkClient == nil {
+		return "", fmt.Errorf("nietzsche sdk client not available")
+	}
+
+	// PageRank focado na estrutura de significantes experimentados
+	// Nota: Em produção, o PageRank pode ser agendado, aqui fazemos sob demanda para a sessão.
+	result, err := sdkClient.RunPageRank(ctx, "patient_graph", 0.85, 20)
+	if err != nil {
+		return "", err
+	}
+
+	// 2. Filtrar os resultados por idosoID e escolher o maior score (Significante)
+	var bestWord string
+	var maxScore float64
+
+	for _, score := range result.Scores {
+		node, err := s.client.GetNode(ctx, score.NodeID, "")
+		if err != nil || node.NodeType != "Significante" {
+			continue
+		}
+
+		if id, ok := node.Content["idoso_id"].(float64); ok && int64(id) == idosoID {
+			if score.Score > maxScore {
+				maxScore = score.Score
+				if w, ok := node.Content["word"].(string); ok {
+					bestWord = w
+				}
+			}
+		}
+	}
+
+	return bestWord, nil
 }
 
 // ShouldInterpelSignifier decide se e momento de interpelar o significante
@@ -290,4 +377,59 @@ func calculateEmotionalCharge(word string) float64 {
 }
 
 // Keeping sql import just to mock the signature if needed but we removed it from struct
-var _ = sql.ErrNoRows
+// ── L-SYSTEMS (GROWTH) ────────────────────────────────────────────────────────
+
+// LSystemRules define como o grafo cresce organicamente (Fase 11)
+var LSystemRules = map[string]string{
+	"A": "AB",   // Associação primária gera ramificação
+	"B": "A[C]", // Ramificação gera conceito lateral
+	"C": "S",    // Conceito se estabiliza como Simbólico
+}
+
+// ApplyLSystemGrowth aplica regras de crescimento ao grafo de um idoso.
+// Simula o 'processo primário' de Freud/Lacan onde os significantes se multiplicam.
+func (s *SignifierService) ApplyLSystemGrowth(ctx context.Context, idosoID int64, iterations int) error {
+	log.Printf("🌿 [L-SYSTEM] Iniciando crescimento orgânico do grafo (Idoso: %d)", idosoID)
+
+	// Localizar os 5 significantes com maior energia (semente)
+	nqlSeed := `
+		MATCH (s:Significante) 
+		WHERE s.idoso_id = $idosoId
+		RETURN s.id, s.word
+		ORDER BY s.energy DESC
+		LIMIT 5
+	`
+	res, err := s.client.ExecuteNQL(ctx, nqlSeed, map[string]interface{}{"idosoId": idosoID}, "")
+	if err != nil || len(res.Nodes) == 0 {
+		return err
+	}
+
+	for _, node := range res.Nodes {
+		word, _ := node.Content["word"].(string)
+		// Aplicar regra simplificada: se a palavra contém padrão 'A', criar associação 'B'
+		if strings.Contains(strings.ToLower(word), "dor") || strings.Contains(strings.ToLower(word), "medo") {
+			// Simular gramática: Criar um nó de 'Angústia' e associar
+			assocWord := "Angústia"
+			// No NietzscheDB, MergeNode garante a existência do nó
+			mergeRes, err := s.client.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+				NodeType: "Significante",
+				MatchKeys: map[string]interface{}{
+					"idoso_id": idosoID,
+					"word":     assocWord,
+				},
+				OnCreateSet: map[string]interface{}{
+					"energy": 0.8,
+				},
+			})
+			if err == nil {
+				s.client.MergeEdge(ctx, nietzscheInfra.MergeEdgeOpts{
+					FromNodeID: node.ID,
+					ToNodeID:   mergeRes.NodeID,
+					EdgeType:   "L_SYSTEM_ASSOCIATION",
+				})
+			}
+		}
+	}
+
+	return nil
+}

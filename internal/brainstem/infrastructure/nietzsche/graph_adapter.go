@@ -31,6 +31,11 @@ func (ga *GraphAdapter) SetCollection(collection string) {
 	ga.collection = collection
 }
 
+// SDK returns the underlying NietzscheDB SDK client.
+func (ga *GraphAdapter) SDK() *nietzsche.NietzscheClient {
+	return ga.client.SDK()
+}
+
 // ── MERGE (replaces Neo4j MERGE) ─────────────────────────────────────────────
 
 // MergeNodeOpts mirrors the options for a Neo4j MERGE on a node.
@@ -52,7 +57,7 @@ type MergeNodeResult struct {
 	NodeID  string
 	// BLOCKER 3 fix: expose the full NodeResult (Embedding, Energy, Depth,
 	// HausdorffLocal, CreatedAt, NodeType) instead of only Content.
-	Node    nietzsche.NodeResult
+	Node nietzsche.NodeResult
 	// Content is a convenience alias for Node.Content; kept for backward compat.
 	Content map[string]interface{}
 }
@@ -103,10 +108,10 @@ func (ga *GraphAdapter) MergeNode(ctx context.Context, opts MergeNodeOpts) (*Mer
 
 // MergeEdgeOpts mirrors the options for a Neo4j MERGE on a relationship.
 type MergeEdgeOpts struct {
-	Collection string
-	FromNodeID string
-	ToNodeID   string
-	EdgeType   string
+	Collection  string
+	FromNodeID  string
+	ToNodeID    string
+	EdgeType    string
 	OnCreateSet map[string]interface{}
 	OnMatchSet  map[string]interface{}
 }
@@ -127,10 +132,10 @@ func (ga *GraphAdapter) MergeEdge(ctx context.Context, opts MergeEdgeOpts) (*Mer
 	}
 
 	result, err := ga.client.MergeEdge(ctx, nietzsche.MergeEdgeOpts{
-		Collection: col,
-		FromNodeID: opts.FromNodeID,
-		ToNodeID:   opts.ToNodeID,
-		EdgeType:   opts.EdgeType,
+		Collection:  col,
+		FromNodeID:  opts.FromNodeID,
+		ToNodeID:    opts.ToNodeID,
+		EdgeType:    opts.EdgeType,
 		OnCreateSet: opts.OnCreateSet,
 		OnMatchSet:  opts.OnMatchSet,
 	})

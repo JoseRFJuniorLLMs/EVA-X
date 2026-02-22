@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"eva/internal/brainstem/config"
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
+	"eva/internal/cortex/mcp"
 	"eva/internal/cortex/personality"
 	"eva/internal/hippocampus/knowledge"
 	"eva/pkg/types"
 	"fmt"
 	"log"
+	nietzsche "nietzsche-sdk"
 	"os"
 	"strings"
 	"sync"
@@ -46,6 +48,9 @@ type UnifiedRetrieval struct {
 
 	// PERFORMANCE: Cache de prompts (TTL 5min)
 	promptCache *PromptCache
+
+	// ✅ NEW: Conexão MCP (External Tools)
+	mcp *mcp.MCPClient
 
 	// Infraestrutura
 	db     *sql.DB
@@ -169,6 +174,7 @@ type UnifiedContext struct {
 	LacanianAnalysis *InterpretationResult // Análise lacaniana completa
 	DemandGraph      string                // Grafo de demandas (FDPN)
 	SignifierChains  string                // Cadeias de significantes (Qdrant)
+	CausalAnalysis   string                // Cadeia causal Minkowski (ds2)
 
 	// IMAGINÁRIO (Narrativa, Memória, História)
 	RecentMemories []string                  // Memórias episódicas recentes
@@ -227,7 +233,7 @@ func NewUnifiedRetrieval(
 	promptCache := NewPromptCache(5 * time.Minute)
 	log.Printf("[UnifiedRetrieval] PromptCache inicializado (TTL 5min)")
 
-	return &UnifiedRetrieval{
+	ret := &UnifiedRetrieval{
 		interpretation: interpretation,
 		embedding:      embedding,
 		fdpn:           fdpn,
@@ -236,11 +242,16 @@ func NewUnifiedRetrieval(
 		debugMode:      debugMode,
 		creatorProfile: creatorProfile,
 		promptCache:    promptCache,
+		mcp:            mcp.NewMCPClient(),
 		db:             db,
 		graph:          graphAdapter,
 		vector:         vectorAdapter,
 		cfg:            cfg,
 	}
+
+	// Registrar servidor MCP padrão para ferramentas externas (Google Search, etc)
+	ret.mcp.RegisterServer("ext-tools", "http://localhost:8092")
+	return ret
 }
 
 // BuildUnifiedContext constrói contexto completo integrando todos os módulos
@@ -446,7 +457,41 @@ func (u *UnifiedRetrieval) BuildUnifiedContext(
 	unified.SystemPrompt = u.buildIntegratedPrompt(unified)
 
 	log.Printf("⚡ [PERF] BuildUnifiedContext concluído em %v (paralelo)", time.Since(startTime))
+	// 9. Causalidade Minkowski (Origem das memórias dominantes)
+	if unified.LacanianAnalysis != nil && unified.LacanianAnalysis.DominantSignifier != "" {
+		nqlFind := `MATCH (s:Significante) WHERE s.idoso_id = $idosoId AND s.word = $word RETURN s.id`
+		qr, err := u.graph.ExecuteNQL(ctx, nqlFind, map[string]interface{}{
+			"idosoId": idosoID,
+			"word":    unified.LacanianAnalysis.DominantSignifier,
+		}, "")
+		if err == nil && len(qr.Nodes) > 0 {
+			dominantID := qr.Nodes[0].ID
+			chain, err := u.graph.SDK().CausalChain(ctx, dominantID, 3, "past", "patient_graph")
+			if err == nil && len(chain.ChainIDs) > 1 {
+				unified.CausalAnalysis = u.formatCausalChain(ctx, chain)
+			}
+		}
+	}
+
 	return unified, nil
+}
+
+// formatCausalChain transforma a cadeia Minkowski em texto explicativo
+func (u *UnifiedRetrieval) formatCausalChain(ctx context.Context, chain *nietzsche.CausalChainResult) string {
+	var builder strings.Builder
+	builder.WriteString("ORIGEM CAUSAL (Caminho ds²): ")
+	for i, id := range chain.ChainIDs {
+		node, err := u.graph.GetNode(ctx, id, "patient_graph")
+		if err == nil {
+			if word, ok := node.Content["word"].(string); ok {
+				if i > 0 {
+					builder.WriteString(" → ")
+				}
+				builder.WriteString(word)
+			}
+		}
+	}
+	return builder.String()
 }
 
 // getMedicalContextAndName recupera contexto médico, nome, CPF e idioma do paciente
@@ -491,46 +536,30 @@ func (u *UnifiedRetrieval) getMedicalContextAndName(ctx context.Context, idosoID
 			personID := personResult.Nodes[0].ID
 			hasGraphData := false
 
-			// Get conditions via BFS with edge type
-			conditionIDs, err := u.graph.BfsWithEdgeType(ctx, personID, "HAS_CONDITION", 1, "")
-			if err == nil && len(conditionIDs) > 0 {
-				var condNames []string
-				for _, cid := range conditionIDs {
-					node, err := u.graph.GetNode(ctx, cid, "")
-					if err == nil {
-						if name, ok := node.Content["name"].(string); ok {
-							condNames = append(condNames, name)
-						}
+			// Get conditions via direct NQL
+			nqlConds := `MATCH (p:Person)-[:HAS_CONDITION]->(c:Condition) WHERE p.id = $idosoId RETURN c.name`
+			qrConds, err := u.graph.ExecuteNQL(ctx, nqlConds, map[string]interface{}{"idosoId": idosoID}, "")
+			if err == nil && len(qrConds.Nodes) > 0 {
+				medicalContext += "\nCondicoes de saude conhecidas:\n"
+				for _, n := range qrConds.Nodes {
+					if name, ok := n.Content["name"].(string); ok {
+						medicalContext += fmt.Sprintf("  - %s\n", name)
 					}
 				}
-				if len(condNames) > 0 {
-					medicalContext += "\nCondicoes de saude conhecidas:\n"
-					for _, c := range condNames {
-						medicalContext += fmt.Sprintf("  - %s\n", c)
-					}
-					hasGraphData = true
-				}
+				hasGraphData = true
 			}
 
-			// Get medications via BFS with edge type
-			medIDs, err := u.graph.BfsWithEdgeType(ctx, personID, "TAKES_MEDICATION", 1, "")
-			if err == nil && len(medIDs) > 0 {
-				var medNames []string
-				for _, mid := range medIDs {
-					node, err := u.graph.GetNode(ctx, mid, "")
-					if err == nil {
-						if name, ok := node.Content["name"].(string); ok {
-							medNames = append(medNames, name)
-						}
+			// Get medications via direct NQL
+			nqlMeds := `MATCH (p:Person)-[:TAKES_MEDICATION]->(m:Medication) WHERE p.id = $idosoId RETURN m.name`
+			qrMeds, err := u.graph.ExecuteNQL(ctx, nqlMeds, map[string]interface{}{"idosoId": idosoID}, "")
+			if err == nil && len(qrMeds.Nodes) > 0 {
+				medicalContext += "\nMedicamentos (historico GraphRAG):\n"
+				for _, n := range qrMeds.Nodes {
+					if name, ok := n.Content["name"].(string); ok {
+						medicalContext += fmt.Sprintf("  - %s\n", name)
 					}
 				}
-				if len(medNames) > 0 {
-					medicalContext += "\nMedicamentos (historico GraphRAG):\n"
-					for _, m := range medNames {
-						medicalContext += fmt.Sprintf("  - %s\n", m)
-					}
-					hasGraphData = true
-				}
+				hasGraphData = true
 			}
 
 			// Get recent symptoms via BFS with edge type
@@ -948,7 +977,7 @@ func (u *UnifiedRetrieval) buildIntegratedPrompt(unified *UnifiedContext) string
 				builder.WriteString(u.creatorProfile.GenerateSystemPrompt(profile))
 			}
 		} else {
-			}
+		}
 
 		builder.WriteString("🔓 MODO DEBUG ATIVADO\n\n")
 
@@ -1033,6 +1062,12 @@ func (u *UnifiedRetrieval) buildIntegratedPrompt(unified *UnifiedContext) string
 	if unified.SignifierChains != "" {
 		builder.WriteString(unified.SignifierChains)
 		builder.WriteString("\n")
+	}
+
+	if unified.CausalAnalysis != "" {
+		builder.WriteString("▌CAUSALIDADE - ORIGEM DO SIGNIFICANTE:\n")
+		builder.WriteString(unified.CausalAnalysis)
+		builder.WriteString("\n\n")
 	}
 
 	// IMAGINÁRIO (Narrativa, Memória)
@@ -1120,6 +1155,14 @@ func (u *UnifiedRetrieval) GetPromptForGemini(ctx context.Context, idosoID int64
 	unified, err := u.BuildUnifiedContext(ctx, idosoID, currentText, previousText)
 	if err != nil {
 		return "", "", err
+	}
+
+	// 3. Se o contexto for muito pobre, tentar busca externa via MCP
+	if unified.MedicalContext == "" && u.mcp != nil {
+		searchResult, err := u.mcp.AutoSearch(ctx, currentText)
+		if err == nil && searchResult != "" {
+			unified.MedicalContext = "\n🔎 BUSCA EXTERNA (MCP):\n" + searchResult + "\n"
+		}
 	}
 
 	return u.buildIntegratedPrompt(unified), unified.IdosoIdioma, nil

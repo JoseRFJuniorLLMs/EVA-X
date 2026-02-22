@@ -6,6 +6,7 @@ package lacan
 import (
 	"context"
 	"database/sql"
+	"strings"
 
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 )
@@ -40,9 +41,11 @@ type InterpretationResult struct {
 	TransferGuidance string
 
 	// Significantes
-	KeySignifiers  []Signifier
-	ShouldInterpel bool
-	InterpelPhrase string
+	KeySignifiers     []Signifier
+	DominantSignifier string   // "Ponto de Almofada" (PageRank)
+	SemanticNeighbors []string // Associações livres próximas no manifold
+	ShouldInterpel    bool
+	InterpelPhrase    string
 
 	// Demanda/Desejo
 	DemandDesire      *Analysis
@@ -81,6 +84,15 @@ func (i *InterpretationService) AnalyzeUtterance(ctx context.Context, idosoID in
 				i.significante.MarkAsInterpelled(ctx, idosoID, sig.Word)
 				break
 			}
+		}
+
+		// Identificar significante dominante da sessao (PageRank)
+		dominant, err := i.significante.IdentifySessionDominant(ctx, idosoID)
+		if err == nil && dominant != "" {
+			result.DominantSignifier = dominant
+			// Buscar vizinhos do dominante (associações livres)
+			neighbors, _ := i.significante.FindSemanticNeighbors(ctx, idosoID, dominant, 3)
+			result.SemanticNeighbors = neighbors
 		}
 	}
 
@@ -127,6 +139,13 @@ func (i *InterpretationService) buildClinicalGuidance(result *InterpretationResu
 		guidance += "SIGNIFICANTES RECORRENTES:\n"
 		for _, sig := range result.KeySignifiers {
 			guidance += "- '" + sig.Word + "' (" + string(rune(sig.Frequency)) + "x)\n"
+		}
+
+		if result.DominantSignifier != "" {
+			guidance += "SIGNIFICANTE DOMINANTE (PONTO DE ALMOFADA): '" + result.DominantSignifier + "'\n"
+			if len(result.SemanticNeighbors) > 0 {
+				guidance += "ASSOCIACOES PROXIMAS: " + strings.Join(result.SemanticNeighbors, ", ") + "\n"
+			}
 		}
 		guidance += "\n"
 	}

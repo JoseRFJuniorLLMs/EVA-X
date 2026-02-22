@@ -24,6 +24,11 @@ func NewVectorAdapter(client *Client) *VectorAdapter {
 	return &VectorAdapter{client: client}
 }
 
+// SDK returns the underlying NietzscheDB SDK client.
+func (va *VectorAdapter) SDK() *nietzsche.NietzscheClient {
+	return va.client.SDK()
+}
+
 // VectorSearchResult mirrors what Qdrant returns — ID, score, and payload.
 type VectorSearchResult struct {
 	ID      string
@@ -287,6 +292,11 @@ func (va *VectorAdapter) InsertNodeContent(ctx context.Context, collection, id s
 
 	log.Debug().Str("collection", collection).Str("id", id).Msg("insert node content completed")
 	return nil
+}
+
+// InsertSensory attaches compressed sensory data to a node (Phase 11).
+func (va *VectorAdapter) InsertSensory(ctx context.Context, opts nietzsche.InsertSensoryOpts) error {
+	return va.client.InsertSensory(ctx, opts)
 }
 
 // float32ToFloat64 converts a float32 slice to float64 (lossless).

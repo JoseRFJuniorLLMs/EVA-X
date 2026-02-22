@@ -106,6 +106,15 @@ type Config struct {
 	SkillsDir  string
 	SandboxDir string
 
+	// Cold Path Archival (S3)
+	S3Enabled        bool
+	S3Endpoint       string
+	S3Region         string
+	S3Bucket         string
+	S3AccessKey      string
+	S3SecretKey      string
+	S3ForcePathStyle bool
+
 	// Feature Flags (V2)
 	EnableGoogleSearch   bool
 	EnableCodeExecution  bool
@@ -226,6 +235,15 @@ func Load() (*Config, error) {
 		// Skills & Sandbox
 		SkillsDir:  getEnvWithDefault("SKILLS_DIR", "/home/eva/skills"),
 		SandboxDir: getEnvWithDefault("SANDBOX_DIR", "/home/eva/sandbox"),
+
+		// S3 / Cold Path
+		S3Enabled:        getEnvBool("S3_ENABLED", false),
+		S3Endpoint:       os.Getenv("S3_ENDPOINT"),
+		S3Region:         getEnvWithDefault("S3_REGION", "us-east-1"),
+		S3Bucket:         os.Getenv("S3_BUCKET"),
+		S3AccessKey:      os.Getenv("S3_ACCESS_KEY"),
+		S3SecretKey:      os.Getenv("S3_SECRET_KEY"),
+		S3ForcePathStyle: getEnvBool("S3_FORCE_PATH_STYLE", true),
 
 		// Load Feature Flags (Default: false for safety/compatibility)
 		EnableGoogleSearch:   getEnvBool("ENABLE_GOOGLE_SEARCH", false),

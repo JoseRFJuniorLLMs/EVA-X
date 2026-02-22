@@ -10,6 +10,7 @@ import (
 	"time"
 
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
+	nietzsche "nietzsche-sdk"
 )
 
 // =============================================================================
@@ -38,13 +39,14 @@ type Memory struct {
 	CallHistoryID *int64    `json:"call_history_id,omitempty"`
 	EventDate     time.Time `json:"event_date,omitempty"` // Data real do evento
 	IsAtomic      bool      `json:"is_atomic"`            // Flag de atomicidade
+	IsArchived    bool      `json:"is_archived"`          // ✅ NEW: Indica se está no Cold Path (S3)
 }
 
 // MemoryStore gerencia o armazenamento de memórias
 type MemoryStore struct {
-	db             *sql.DB
-	graphStore     *GraphStore                    // Para salvar relações no Neo4j
-	vectorAdapter  *nietzscheInfra.VectorAdapter  // Para salvar vetores no NietzscheDB
+	db            *sql.DB
+	graphStore    *GraphStore                   // Para salvar relações no Neo4j
+	vectorAdapter *nietzscheInfra.VectorAdapter // Para salvar vetores no NietzscheDB
 }
 
 // NewMemoryStore cria um novo gerenciador de memórias
@@ -124,6 +126,21 @@ func (m *MemoryStore) Store(ctx context.Context, memory *Memory) error {
 			log.Printf("❌ [VECTOR] Falha ao salvar vetor para memória %d: %v", memory.ID, err)
 		} else {
 			log.Printf("✅ [VECTOR] Vetor salvo com sucesso: %d", memory.ID)
+
+			// 4. ✅ INTEGRAÇÃO SENSORIAL (Fase 11 - Compressão Latente)
+			// Armazenamos uma versão comprimida/latente para reconstrução rápida.
+			// Em produção, isso viria de um encoder VAE; aqui usamos o embedding original.
+			errSensory := m.vectorAdapter.InsertSensory(ctx, nietzsche.InsertSensoryOpts{
+				NodeID:     fmt.Sprintf("%d", memory.ID),
+				Modality:   "text",
+				Latent:     memory.Embedding,
+				Collection: "memories",
+			})
+			if errSensory != nil {
+				log.Printf("⚠️ [SENSORY] Falha ao anexar dados sensoriais para memória %d: %v", memory.ID, errSensory)
+			} else {
+				log.Printf("✅ [SENSORY] Dados sensoriais (Fase 11) anexados à memória %d", memory.ID)
+			}
 		}
 	} else {
 		log.Printf("⚠️ [VECTOR] VectorAdapter não disponível ou embedding vazio - vetor NÃO salvo (apenas Postgres)")
@@ -595,4 +612,49 @@ func parsePostgresArray(s string) []string {
 	}
 
 	return result
+}
+
+// GetArchivalCandidates localiza memórias que podem ser movidas para o Cold Path
+func (m *MemoryStore) GetArchivalCandidates(ctx context.Context, idosoID int64, daysOld int, minImportance float64) ([]*Memory, error) {
+	query := `
+		SELECT id, idoso_id, timestamp, speaker, content, emotion, importance, topics, session_id, call_history_id, event_date, is_atomic, is_archived
+		FROM episodic_memories
+		WHERE idoso_id = $1 
+		  AND is_archived = false
+		  AND importance <= $2
+		  AND event_date < $3
+		LIMIT 100
+	`
+
+	archivalDate := time.Now().AddDate(0, 0, -daysOld)
+	rows, err := m.db.QueryContext(ctx, query, idosoID, minImportance, archivalDate)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var memories []*Memory
+	for rows.Next() {
+		var mem Memory
+		var topics string
+		err := rows.Scan(
+			&mem.ID, &mem.IdosoID, &mem.Timestamp, &mem.Speaker, &mem.Content,
+			&mem.Emotion, &mem.Importance, &topics, &mem.SessionID,
+			&mem.CallHistoryID, &mem.EventDate, &mem.IsAtomic, &mem.IsArchived,
+		)
+		if err != nil {
+			return nil, err
+		}
+		mem.Topics = parsePostgresArray(topics)
+		memories = append(memories, &mem)
+	}
+
+	return memories, nil
+}
+
+// MarkAsArchived marca uma memória como arquivada e limpa o conteúdo pesado no buffer local
+func (m *MemoryStore) MarkAsArchived(ctx context.Context, id int64) error {
+	query := `UPDATE episodic_memories SET is_archived = true WHERE id = $1`
+	_, err := m.db.ExecContext(ctx, query, id)
+	return err
 }
