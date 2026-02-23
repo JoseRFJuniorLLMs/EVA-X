@@ -39,7 +39,9 @@ type evaMessage struct {
 // Client:    internal/cortex/gemini (v1beta, producao)
 // Frontend:  Malaria-Angolar/frontend/src/pages/EvaPage.tsx
 // Memoria:   Meta-cognitiva via NietzscheDB (internal/cortex/eva_memory)
-//            Identidade pessoal via CoreMemoryEngine (NietzscheDB :50051)
+//
+//	Identidade pessoal via CoreMemoryEngine (NietzscheDB :50051)
+//
 // Protocolo:
 //
 //	Browser envia: {"type":"text","text":"pergunta do usuario"}
@@ -150,7 +152,7 @@ func (s *SignalingServer) handleEvaChat(w http.ResponseWriter, r *http.Request) 
 	errChan := make(chan error, 2)
 
 	// Buffers para acumular conversa
-	var responseAccum strings.Builder  // buffer por turno (EVA)
+	var responseAccum strings.Builder   // buffer por turno (EVA)
 	var transcriptAccum strings.Builder // transcript completo da sessao
 	var evaResponses []string           // respostas da EVA para CoreMemory
 
@@ -299,6 +301,16 @@ func (s *SignalingServer) handleEvaChat(w http.ResponseWriter, r *http.Request) 
 					log.Warn().Err(err).Str("session", sessionID).Msg("[CoreMemory] Falha ao processar fim de sessao")
 				} else {
 					log.Info().Str("session", sessionID).Msg("[CoreMemory] Sessao processada — memorias pessoais atualizadas")
+				}
+
+				// 7.12.1 Simbiose AGI: Feed energy based on situation to trigger reflexes
+				if s.situationMod != nil && s.energyFeeder != nil {
+					sit, _ := s.situationMod.Infer(bgCtx, clientCPF, transcript, nil)
+					if err := s.energyFeeder.FeedReflexes(bgCtx, clientCPF, sit, "default"); err != nil {
+						log.Warn().Err(err).Msg("[EnergyFeeder] Falha ao alimentar reflexos")
+					} else {
+						log.Info().Msg("[EnergyFeeder] Reflexos alimentados com sucesso")
+					}
 				}
 			}()
 		}

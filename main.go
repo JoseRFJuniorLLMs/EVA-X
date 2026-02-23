@@ -159,6 +159,7 @@ type SignalingServer struct {
 	coreMemory         *evaSelf.CoreMemoryEngine
 	globalWorkspace    *consciousness.GlobalWorkspace
 	situationMod       *situation.SituationalModulator
+	energyFeeder       *situation.EnergyFeeder
 	ramEngine          *ram.RAMEngine
 	gmailWatcher       *gmailpkg.Watcher
 }
@@ -520,7 +521,8 @@ func main() {
 
 	// 7.12 Situational Modulator (detecta contexto e modula pesos de personalidade)
 	situationMod := situation.NewModulator(nil, nil)
-	log.Info().Msg("🎭 Situational Modulator inicializado")
+	energyFeeder := situation.NewEnergyFeeder(nzClient)
+	log.Info().Msg("🎭 Situational Modulator + Energy Feeder inicializados")
 
 	// 7.13 RAM Engine (Realistic Accuracy Model — interpretacoes + validacao historica)
 	var ramEng *ram.RAMEngine
@@ -581,6 +583,7 @@ func main() {
 		coreMemory:         coreMemoryEngine,
 		globalWorkspace:    globalWS,
 		situationMod:       situationMod,
+		energyFeeder:       energyFeeder,
 		ramEngine:          ramEng,
 	}
 
