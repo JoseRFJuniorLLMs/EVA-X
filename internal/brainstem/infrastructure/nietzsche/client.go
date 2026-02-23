@@ -357,14 +357,27 @@ func (c *Client) InvokeZaratustra(ctx context.Context, opts nietzsche.Zaratustra
 	return c.sdk.InvokeZaratustra(ctx, opts)
 }
 
+// ── Neural Operations (Phase 5) ──────────────────────────────────────────
+
+// GnnInfer performs a GNN inference on a list of nodes.
+func (c *Client) GnnInfer(ctx context.Context, opts nietzsche.GnnInferOpts) (nietzsche.GnnInferResult, error) {
+	return c.sdk.GnnInfer(ctx, opts)
+}
+
+// MctsSearch performs a Monte Carlo Tree Search for the best action.
+func (c *Client) MctsSearch(ctx context.Context, opts nietzsche.MctsOpts) (nietzsche.MctsResult, error) {
+	return c.sdk.MctsSearch(ctx, opts)
+}
+
 // ── Dream System ─────────────────────────────────────────────────────────────
 
 // DreamResult holds the result of a DREAM FROM query.
 type DreamResult struct {
-	DreamID string                   // dream session ID (e.g. "dream_abc123")
-	Events  []map[string]interface{} // detected events (energy spikes, curvature anomalies)
-	Nodes   []map[string]interface{} // nodes discovered/modified during dream
-	Raw     *nietzsche.QueryResult   // full NQL result for advanced inspection
+	DreamID    string                   // dream session ID (e.g. "dream_abc123")
+	SeedNodeID string                   // original seed node ID
+	Events     []map[string]interface{} // detected events (energy spikes, curvature anomalies)
+	Nodes      []map[string]interface{} // nodes discovered/modified during dream
+	Raw        *nietzsche.QueryResult   // full NQL result for advanced inspection
 }
 
 // StartDream initiates a speculative exploration from a seed node via NQL DREAM FROM.
@@ -400,7 +413,11 @@ func (c *Client) StartDream(ctx context.Context, collection string, seedNodeID s
 		return nil, fmt.Errorf("nietzsche dream error: %s", result.Error)
 	}
 
-	dreamResult := &DreamResult{Raw: result}
+	dreamResult := &DreamResult{
+		DreamID:    "",
+		SeedNodeID: seedNodeID,
+		Raw:        result,
+	}
 
 	// Extract dream ID and event data from scalar rows
 	for _, row := range result.ScalarRows {

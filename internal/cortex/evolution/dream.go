@@ -70,7 +70,7 @@ func (d *DreamService) RunDreamCycle(ctx context.Context, collection string, see
 	}
 
 	// 2. Evaluate whether dream is beneficial
-	beneficial, reason := d.EvaluateDream(dreamResult)
+	beneficial, reason := d.EvaluateDream(ctx, collection, dreamResult)
 	result.Reason = reason
 
 	// 3. Commit or reject
@@ -95,12 +95,8 @@ func (d *DreamService) RunDreamCycle(ctx context.Context, collection string, see
 }
 
 // EvaluateDream checks if dream results are beneficial for the graph.
-// A dream is considered beneficial if:
-//   - It detected at least one meaningful event (energy spike, curvature anomaly)
-//   - It affected a non-trivial number of nodes
-//
-// Returns (beneficial, reason).
-func (d *DreamService) EvaluateDream(dream *nietzscheInfra.DreamResult) (bool, string) {
+// It combines heuristic event counting with neural MCTS validation.
+func (d *DreamService) EvaluateDream(ctx context.Context, collection string, dream *nietzscheInfra.DreamResult) (bool, string) {
 	if dream == nil {
 		return false, "nil dream result"
 	}
@@ -117,13 +113,30 @@ func (d *DreamService) EvaluateDream(dream *nietzscheInfra.DreamResult) (bool, s
 		return false, fmt.Sprintf("no events detected (%d nodes explored)", nodeCount)
 	}
 
-	// Accept if at least one event and some nodes were affected
-	if nodeCount > 0 {
-		return true, fmt.Sprintf("%d events detected across %d nodes", eventCount, nodeCount)
+	// Neural Validation (Phase 5):
+	// Use MCTS to verify if the seed node has a high-value action in the "dreamt" state.
+	// We use "clinical_reasoner" model as the primary evaluator.
+	mctsRes, err := d.client.MctsSearch(ctx, "clinical_reasoner", dream.SeedNodeID, 100, collection)
+	if err != nil {
+		log.Printf("[DREAM] MCTS validation failed: %v. Falling back to heuristic evaluation.", err)
+		// Fallback to heuristic: if nodes were affected, it's beneficial
+		if nodeCount > 0 {
+			return true, fmt.Sprintf("%d events detected across %d nodes (heuristic fallback)", eventCount, nodeCount)
+		}
+		return false, "MCTS failed and no nodes affected"
 	}
 
-	// Events without nodes: marginal benefit, still accept
-	return true, fmt.Sprintf("%d events detected (metadata only)", eventCount)
+	// If MCTS finds a high-confidence action (> 0.6), the dream has revealed a useful clinical path.
+	if mctsRes.Value > 0.6 {
+		return true, fmt.Sprintf("MCTS verified value %.2f (best action: %s) with %d events", mctsRes.Value, mctsRes.BestActionID, eventCount)
+	}
+
+	// If MCTS value is low, but we have many events, still accept (curiosity-driven)
+	if eventCount > 3 {
+		return true, fmt.Sprintf("accepted on curiosity (events: %d) despite low MCTS value %.2f", eventCount, mctsRes.Value)
+	}
+
+	return false, fmt.Sprintf("insufficient value revealed: MCTS %.2f, events %d", mctsRes.Value, eventCount)
 }
 
 // CommitDream applies a pending dream, persisting energy changes to the graph.

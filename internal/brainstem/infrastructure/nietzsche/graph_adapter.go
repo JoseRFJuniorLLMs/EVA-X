@@ -332,12 +332,39 @@ func (ga *GraphAdapter) DeleteEdge(ctx context.Context, id string, collection st
 	return ga.client.DeleteEdge(ctx, id, col)
 }
 
-// ── Diffuse (spectral community analysis) ────────────────────────────────────
-
 // Diffuse runs heat-kernel diffusion from source nodes.
 func (ga *GraphAdapter) Diffuse(ctx context.Context, sourceIDs []string,
 	opts nietzsche.DiffuseOpts) ([]nietzsche.DiffusionScale, error) {
 	return ga.client.Diffuse(ctx, sourceIDs, opts)
+}
+
+// ── Neural Operations (Phase 5) ──────────────────────────────────────────
+
+// GnnInfer performs a GNN inference on a list of nodes.
+func (ga *GraphAdapter) GnnInfer(ctx context.Context, modelName string, nodeIDs []string, collection string) (nietzsche.GnnInferResult, error) {
+	col := collection
+	if col == "" {
+		col = ga.collection
+	}
+	return ga.client.GnnInfer(ctx, nietzsche.GnnInferOpts{
+		ModelName:  modelName,
+		Collection: col,
+		NodeIDs:    nodeIDs,
+	})
+}
+
+// MctsSearch performs a Monte Carlo Tree Search for the best action.
+func (ga *GraphAdapter) MctsSearch(ctx context.Context, modelName string, startNodeID string, simulations uint32, collection string) (nietzsche.MctsResult, error) {
+	col := collection
+	if col == "" {
+		col = ga.collection
+	}
+	return ga.client.MctsSearch(ctx, nietzsche.MctsOpts{
+		ModelName:   modelName,
+		StartNodeID: startNodeID,
+		Simulations: simulations,
+		Collection:  col,
+	})
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
