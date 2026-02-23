@@ -15,46 +15,45 @@ import (
 	"eva/internal/brainstem/config"
 	"eva/internal/brainstem/database"
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
-	nietzsche "nietzsche-sdk"
+	"eva/internal/brainstem/oauth"
 	"eva/internal/brainstem/push"
 	"eva/internal/cortex/alert"
+	"eva/internal/cortex/consciousness"
 	"eva/internal/cortex/eva_memory"
 	"eva/internal/cortex/gemini"
-	"eva/internal/cortex/consciousness"
 	"eva/internal/cortex/lacan"
 	"eva/internal/cortex/learning"
+	"eva/internal/cortex/llm"
 	"eva/internal/cortex/personality"
 	"eva/internal/cortex/ram"
-	"eva/internal/cortex/situation"
 	evaSelf "eva/internal/cortex/self"
 	"eva/internal/cortex/selfawareness"
+	"eva/internal/cortex/situation"
+	"eva/internal/cortex/skills"
 	"eva/internal/cortex/voice/speaker"
 	"eva/internal/hippocampus/habits"
 	"eva/internal/hippocampus/knowledge"
 	"eva/internal/hippocampus/memory"
 	"eva/internal/hippocampus/memory/superhuman"
 	"eva/internal/hippocampus/spaced"
+	"eva/internal/integration"
+	"eva/internal/mcp"
+	internalmemory "eva/internal/memory"
+	"eva/internal/memory/krylov"
+	memscheduler "eva/internal/memory/scheduler"
+	"eva/internal/monitoring"
 	"eva/internal/motor/actions"
-	"eva/internal/motor/email"
-	"eva/internal/cortex/llm"
-	"eva/internal/cortex/skills"
 	"eva/internal/motor/browser"
 	"eva/internal/motor/cron"
+	"eva/internal/motor/email"
 	"eva/internal/motor/filesystem"
+	gmailpkg "eva/internal/motor/gmail"
 	"eva/internal/motor/messaging"
 	"eva/internal/motor/sandbox"
 	"eva/internal/motor/selfcode"
 	"eva/internal/motor/smarthome"
 	"eva/internal/motor/telegram"
 	"eva/internal/motor/webhooks"
-	"eva/internal/brainstem/oauth"
-	gmailpkg "eva/internal/motor/gmail"
-	"eva/internal/integration"
-	internalmemory "eva/internal/memory"
-	"eva/internal/memory/krylov"
-	memscheduler "eva/internal/memory/scheduler"
-	"eva/internal/monitoring"
-	"eva/internal/mcp"
 	"eva/internal/research"
 	"eva/internal/scheduler"
 	"eva/internal/security"
@@ -75,6 +74,7 @@ import (
 	"eva/internal/tools"
 	"eva/internal/voice"
 	"eva/pkg/crypto"
+	nietzsche "nietzsche-sdk"
 
 	"github.com/gorilla/mux"
 	"github.com/rs/zerolog/log"
@@ -125,10 +125,10 @@ func (a *ramRetrievalAdapter) RetrieveRelevant(ctx context.Context, patientID in
 	result := make([]ram.Memory, len(memories))
 	for i, m := range memories {
 		result[i] = ram.Memory{
-			ID:      m.ID,
-			Content: m.Content,
+			ID:        m.ID,
+			Content:   m.Content,
 			Timestamp: m.Timestamp,
-			Score:   m.Importance,
+			Score:     m.Importance,
 		}
 	}
 	return result, nil
@@ -228,7 +228,7 @@ func main() {
 	graphStore := memory.NewGraphStore(graphAdapter, cfg)
 	log.Info().Msg("GraphStore conectado ao NietzscheDB (patient_graph)")
 	memoryStore := memory.NewMemoryStore(db.Conn, graphStore, vectorAdapter)
-	personalitySvc := personality.NewPersonalityService(db.Conn)
+	personalitySvc := personality.NewPersonalityService(evaGraphAdapter)
 
 	// 6.2 Wisdom Service (busca semantica em colecoes de sabedoria)
 	var wisdomSvc *knowledge.WisdomService

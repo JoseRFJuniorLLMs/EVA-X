@@ -5,212 +5,166 @@ package personality
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"math"
 	"time"
+
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 )
 
 // PersonalityState representa o estado emocional da relação EVA <-> Idoso
 type PersonalityState struct {
-	IdosoID            int64
-	RelationshipLevel  int // 1-10
-	ConversationCount  int
-	LastInteraction    time.Time
-	DominantEmotion    string
-	FavoriteTopics     []string
-	FirstMeetingDate   time.Time
-	DaysSinceFirstMeet int
+	IdosoID            int64     `json:"idoso_id"`
+	RelationshipLevel  int       `json:"relationship_level"` // 1-10
+	ConversationCount  int       `json:"conversation_count"`
+	LastInteraction    time.Time `json:"last_interaction"`
+	DominantEmotion    string    `json:"dominant_emotion"`
+	FavoriteTopics     []string  `json:"favorite_topics"`
+	FirstMeetingDate   time.Time `json:"first_meeting_date"`
+	DaysSinceFirstMeet int       `json:"days_since_first_meet"`
 }
 
-// PersonalityService gerencia o estado de personalidade
+// PersonalityService gerencia o estado de personalidade via NietzscheDB
 type PersonalityService struct {
-	db *sql.DB
+	client *nietzscheInfra.GraphAdapter
 }
 
-// NewPersonalityService cria um novo serviço
-func NewPersonalityService(db *sql.DB) *PersonalityService {
-	return &PersonalityService{db: db}
+// NewPersonalityService cria um novo serviço com NietzscheDB
+func NewPersonalityService(client *nietzscheInfra.GraphAdapter) *PersonalityService {
+	return &PersonalityService{client: client}
 }
 
-// GetState recupera o estado de personalidade de um idoso
+// GetState recupera o estado de personalidade de um idoso do Grafo
 func (p *PersonalityService) GetState(ctx context.Context, idosoID int64) (*PersonalityState, error) {
-	query := `
-		SELECT 
-			idoso_id,
-			relationship_level,
-			conversation_count,
-			last_interaction,
-			dominant_emotion,
-			favorite_topics,
-			first_meeting_date
-		FROM eva_personality_state
-		WHERE idoso_id = $1
-	`
-
-	state := &PersonalityState{}
-	var topics string
-
-	err := p.db.QueryRowContext(ctx, query, idosoID).Scan(
-		&state.IdosoID,
-		&state.RelationshipLevel,
-		&state.ConversationCount,
-		&state.LastInteraction,
-		&state.DominantEmotion,
-		&topics,
-		&state.FirstMeetingDate,
-	)
-
-	if err == sql.ErrNoRows {
-		// Primeira vez: criar estado inicial
-		return p.initializeState(ctx, idosoID)
-	} else if err != nil {
-		return nil, err
+	if p.client == nil {
+		return nil, fmt.Errorf("nietzsche client not initialized")
 	}
 
-	// Parse topics
-	if topics != "" && topics != "{}" {
-		// Parse PostgreSQL array format
-		state.FavoriteTopics = parsePostgresArray(topics)
+	opts := nietzscheInfra.MergeNodeOpts{
+		NodeType:  "PersonalityState",
+		MatchKeys: map[string]interface{}{"idoso_id": idosoID},
+		OnCreateSet: map[string]interface{}{
+			"relationship_level": 1,
+			"conversation_count": 0,
+			"last_interaction":   nietzscheInfra.NowUnix(),
+			"dominant_emotion":   "neutro",
+			"favorite_topics":    []string{},
+			"first_meeting_date": nietzscheInfra.NowUnix(),
+		},
 	}
 
-	// Calcular dias desde primeira conversa
-	state.DaysSinceFirstMeet = int(time.Since(state.FirstMeetingDate).Hours() / 24)
-
-	return state, nil
-}
-
-// initializeState cria um novo estado para um idoso
-func (p *PersonalityService) initializeState(ctx context.Context, idosoID int64) (*PersonalityState, error) {
-	query := `
-		INSERT INTO eva_personality_state 
-		(idoso_id, relationship_level, conversation_count, last_interaction, dominant_emotion, favorite_topics, first_meeting_date)
-		VALUES ($1, 1, 0, NOW(), 'neutro', '{}', NOW())
-		RETURNING idoso_id, relationship_level, conversation_count, last_interaction, dominant_emotion, favorite_topics, first_meeting_date
-	`
-
-	state := &PersonalityState{}
-	var topics string
-
-	err := p.db.QueryRowContext(ctx, query, idosoID).Scan(
-		&state.IdosoID,
-		&state.RelationshipLevel,
-		&state.ConversationCount,
-		&state.LastInteraction,
-		&state.DominantEmotion,
-		&topics,
-		&state.FirstMeetingDate,
-	)
-
+	result, err := p.client.MergeNode(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
 
-	state.DaysSinceFirstMeet = 0
-	state.FavoriteTopics = []string{}
+	state := &PersonalityState{
+		IdosoID: idosoID,
+	}
+
+	// Helper to extract fields from result.Content
+	c := result.Content
+	if v, ok := c["relationship_level"].(float64); ok {
+		state.RelationshipLevel = int(v)
+	}
+	if v, ok := c["conversation_count"].(float64); ok {
+		state.ConversationCount = int(v)
+	}
+	if v, ok := c["last_interaction"].(float64); ok {
+		state.LastInteraction = time.Unix(int64(v), 0)
+	}
+	if v, ok := c["dominant_emotion"].(string); ok {
+		state.DominantEmotion = v
+	}
+	if v, ok := c["favorite_topics"].([]interface{}); ok {
+		for _, topic := range v {
+			if t, ok := topic.(string); ok {
+				state.FavoriteTopics = append(state.FavoriteTopics, t)
+			}
+		}
+	}
+	if v, ok := c["first_meeting_date"].(float64); ok {
+		state.FirstMeetingDate = time.Unix(int64(v), 0)
+	}
+
+	state.DaysSinceFirstMeet = int(time.Since(state.FirstMeetingDate).Hours() / 24)
 
 	return state, nil
 }
 
 // UpdateAfterConversation atualiza o estado após uma conversa
 func (p *PersonalityService) UpdateAfterConversation(ctx context.Context, idosoID int64, detectedEmotion string, topics []string) error {
-	// Incrementar contador
-	newCount := 0
-	err := p.db.QueryRowContext(ctx, `
-		UPDATE eva_personality_state 
-		SET conversation_count = conversation_count + 1,
-		    last_interaction = NOW()
-		WHERE idoso_id = $1
-		RETURNING conversation_count
-	`, idosoID).Scan(&newCount)
-
+	state, err := p.GetState(ctx, idosoID)
 	if err != nil {
 		return err
 	}
 
-	// Calcular novo nível de relacionamento
+	newCount := state.ConversationCount + 1
 	newLevel := CalculateRelationshipLevel(newCount)
 
-	// Atualizar nível e emoção dominante
-	_, err = p.db.ExecContext(ctx, `
-		UPDATE eva_personality_state 
-		SET relationship_level = $1,
-		    dominant_emotion = $2
-		WHERE idoso_id = $3
-	`, newLevel, detectedEmotion, idosoID)
-
-	// Atualizar tópicos favoritos (merge)
-	if len(topics) > 0 {
-		p.updateFavoriteTopics(ctx, idosoID, topics)
+	// Update in NietzscheDB
+	_, err = p.client.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+		NodeType:  "PersonalityState",
+		MatchKeys: map[string]interface{}{"idoso_id": idosoID},
+		OnMatchSet: map[string]interface{}{
+			"conversation_count": newCount,
+			"last_interaction":   nietzscheInfra.NowUnix(),
+			"relationship_level": newLevel,
+			"dominant_emotion":   detectedEmotion,
+		},
+	})
+	if err != nil {
+		return err
 	}
 
-	return err
+	// Update topics
+	if len(topics) > 0 {
+		return p.updateFavoriteTopics(ctx, idosoID, state.FavoriteTopics, topics)
+	}
+
+	return nil
 }
 
 // updateFavoriteTopics atualiza os tópicos favoritos (mantém top 5)
-func (p *PersonalityService) updateFavoriteTopics(ctx context.Context, idosoID int64, newTopics []string) error {
-	// Buscar tópicos atuais
-	var currentTopicsStr string
-	err := p.db.QueryRowContext(ctx, `SELECT favorite_topics FROM eva_personality_state WHERE idoso_id = $1`, idosoID).Scan(&currentTopicsStr)
-	if err != nil {
-		return err
-	}
-
-	currentTopics := parsePostgresArray(currentTopicsStr)
-
-	// Merge e manter top 5 (simples: adicionar novos)
-	merged := append(currentTopics, newTopics...)
+func (p *PersonalityService) updateFavoriteTopics(ctx context.Context, idosoID int64, current []string, newTopics []string) error {
+	merged := append(current, newTopics...)
 	unique := uniqueStrings(merged)
 
 	if len(unique) > 5 {
 		unique = unique[:5]
 	}
 
-	// Atualizar
-	topicsStr := toPostgresArray(unique)
-	_, err = p.db.ExecContext(ctx, `
-		UPDATE eva_personality_state 
-		SET favorite_topics = $1 
-		WHERE idoso_id = $2
-	`, topicsStr, idosoID)
-
+	_, err := p.client.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+		NodeType:  "PersonalityState",
+		MatchKeys: map[string]interface{}{"idoso_id": idosoID},
+		OnMatchSet: map[string]interface{}{
+			"favorite_topics": unique,
+		},
+	})
 	return err
 }
 
 // GetDaysSinceLastInteraction retorna quantos dias desde última conversa
 func (p *PersonalityService) GetDaysSinceLastInteraction(ctx context.Context, idosoID int64) (int, error) {
-	var lastInteraction time.Time
-	err := p.db.QueryRowContext(ctx, `
-		SELECT last_interaction 
-		FROM eva_personality_state 
-		WHERE idoso_id = $1
-	`, idosoID).Scan(&lastInteraction)
-
+	state, err := p.GetState(ctx, idosoID)
 	if err != nil {
 		return 0, err
 	}
-
-	days := int(time.Since(lastInteraction).Hours() / 24)
-	return days, nil
+	return int(time.Since(state.LastInteraction).Hours() / 24), nil
 }
 
 // CalculateRelationshipLevel calcula nível baseado em número de conversas
-// Progressão logarítmica: 1->3->6->8->10
 func CalculateRelationshipLevel(conversations int) int {
 	if conversations == 0 {
 		return 1
 	}
-
-	// Fórmula: level = min(10, log2(conversas) + 1)
 	level := int(math.Log2(float64(conversations)) + 1)
-
 	if level > 10 {
 		return 10
 	}
 	if level < 1 {
 		return 1
 	}
-
 	return level
 }
 
@@ -218,13 +172,13 @@ func CalculateRelationshipLevel(conversations int) int {
 func GetRelationshipStyle(level int) string {
 	switch {
 	case level <= 2:
-		return "formal" // "Senhora Maria"
+		return "formal"
 	case level <= 5:
-		return "friendly" // "Dona Maria"
+		return "friendly"
 	case level <= 8:
-		return "intimate" // "Maria" ou "Mariazinha"
+		return "intimate"
 	default:
-		return "family" // Apelidos carinhosos
+		return "family"
 	}
 }
 
@@ -242,93 +196,17 @@ func GetRelationshipLabel(level int) string {
 		9:  "Como família",
 		10: "Família do coração",
 	}
-
 	return labels[level]
-}
-
-// Helpers
-
-func parsePostgresArray(s string) []string {
-	if s == "{}" || s == "" {
-		return []string{}
-	}
-
-	// Remove {}
-	s = s[1 : len(s)-1]
-
-	// Split simples (assumindo sem vírgulas nos valores)
-	if s == "" {
-		return []string{}
-	}
-
-	// Remover aspas se existirem
-	result := []string{}
-	for _, item := range splitRespectingQuotes(s) {
-		if item != "" {
-			result = append(result, item)
-		}
-	}
-
-	return result
-}
-
-func splitRespectingQuotes(s string) []string {
-	var result []string
-	var current string
-	inQuotes := false
-
-	for _, c := range s {
-		switch c {
-		case '"':
-			inQuotes = !inQuotes
-		case ',':
-			if !inQuotes {
-				if current != "" {
-					result = append(result, current)
-					current = ""
-				}
-			} else {
-				current += string(c)
-			}
-		default:
-			current += string(c)
-		}
-	}
-
-	if current != "" {
-		result = append(result, current)
-	}
-
-	return result
-}
-
-func toPostgresArray(arr []string) string {
-	if len(arr) == 0 {
-		return "{}"
-	}
-
-	result := "{"
-	for i, s := range arr {
-		if i > 0 {
-			result += ","
-		}
-		result += fmt.Sprintf("\"%s\"", s)
-	}
-	result += "}"
-
-	return result
 }
 
 func uniqueStrings(arr []string) []string {
 	seen := make(map[string]bool)
 	var result []string
-
 	for _, s := range arr {
 		if !seen[s] {
 			seen[s] = true
 			result = append(result, s)
 		}
 	}
-
 	return result
 }
