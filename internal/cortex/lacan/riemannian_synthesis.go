@@ -28,12 +28,12 @@ type ConflictSynthesisService struct {
 
 // ConflictSynthesisResult holds the outcome of a Riemannian conflict synthesis.
 type ConflictSynthesisResult struct {
-	ThesisNodeID    string  `json:"thesis_node_id"`
-	AntithesisNodeID string `json:"antithesis_node_id"`
-	SynthesisNodeID string  `json:"synthesis_node_id"`
-	SynthesisDepth  float64 `json:"synthesis_depth"`    // lower = more abstract
-	NearestDistance float64 `json:"nearest_distance"`
-	PromptFragment  string  `json:"prompt_fragment"`    // text for prompt enrichment
+	ThesisNodeID     string  `json:"thesis_node_id"`
+	AntithesisNodeID string  `json:"antithesis_node_id"`
+	SynthesisNodeID  string  `json:"synthesis_node_id"`
+	SynthesisDepth   float64 `json:"synthesis_depth"` // lower = more abstract
+	NearestDistance  float64 `json:"nearest_distance"`
+	PromptFragment   string  `json:"prompt_fragment"` // text for prompt enrichment
 }
 
 // NewConflictSynthesisService creates a new service. All adapters are optional;
@@ -72,8 +72,8 @@ func (cs *ConflictSynthesisService) SetClient(c *nietzscheInfra.Client) {
 func (cs *ConflictSynthesisService) SynthesizeConflict(
 	ctx context.Context,
 	patientID int64,
-	thesis string,      // what the patient said (previous text)
-	antithesis string,   // what current signals indicate (current text)
+	thesis string, // what the patient said (previous text)
+	antithesis string, // what current signals indicate (current text)
 	contradiction string, // the detected contradiction text from GrandAutre
 ) (*ConflictSynthesisResult, error) {
 	// Graceful degradation: if adapters are missing, return nil (fallback to LLM-only)
@@ -164,7 +164,7 @@ func (cs *ConflictSynthesisService) SynthesizeConflict(
 			"nearest_dist":    synthesisResult.NearestDistance,
 			"detected_at":     now,
 		},
-		Coords: synthesisResult.MidpointCoords,
+		Coords: synthesisResult.SynthesisCoords,
 	})
 	if err != nil {
 		log.Printf("[SYNTHESIS] Insert synthesis node failed (non-fatal): %v", err)
@@ -194,9 +194,9 @@ func (cs *ConflictSynthesisService) SynthesizeConflict(
 		ThesisNodeID:     thesisNode.ID,
 		AntithesisNodeID: antithesisNode.ID,
 		SynthesisNodeID:  synthesisNode.ID,
-		SynthesisDepth:   synthDepth,
-		NearestDistance:   synthesisResult.NearestDistance,
-		PromptFragment:   buildSynthesisPromptFragment(thesis, antithesis, contradiction, synthDepth),
+		SynthesisDepth:   float64(synthDepth),
+		NearestDistance:  synthesisResult.NearestDistance,
+		PromptFragment:   buildSynthesisPromptFragment(thesis, antithesis, contradiction, float64(synthDepth)),
 	}
 
 	log.Printf("[SYNTHESIS] Conflict synthesized for patient %d: thesis=%s antithesis=%s depth=%.3f",
@@ -232,14 +232,14 @@ func (cs *ConflictSynthesisService) QueryConflictHistory(
 	for _, node := range qr.Nodes {
 		r := ConflictSynthesisResult{
 			SynthesisNodeID: node.ID,
-			SynthesisDepth:  node.Depth,
+			SynthesisDepth:  float64(node.Depth),
 		}
 		if t, ok := node.Content["thesis"].(string); ok {
 			r.PromptFragment = buildSynthesisPromptFragment(
 				t,
 				nodeContentStr(node.Content, "antithesis"),
 				nodeContentStr(node.Content, "contradiction"),
-				node.Depth,
+				float64(node.Depth),
 			)
 		}
 		results = append(results, r)

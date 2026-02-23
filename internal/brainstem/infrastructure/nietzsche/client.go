@@ -275,6 +275,28 @@ func (c *Client) MergeEdge(ctx context.Context, opts nietzsche.MergeEdgeOpts) (*
 	return c.sdk.MergeEdge(ctx, opts)
 }
 
+// IncrementEdgeMeta atomically increments a numeric metadata field on an edge.
+func (c *Client) IncrementEdgeMeta(ctx context.Context, opts nietzsche.IncrementEdgeMetaOpts) (float64, error) {
+	return c.sdk.IncrementEdgeMeta(ctx, opts)
+}
+
+// ── Wiederkehr Daemons ─────────────────────────────────────────────────────
+
+// CreateDaemon registers a new Wiederkehr Daemon.
+func (c *Client) CreateDaemon(ctx context.Context, opts nietzsche.CreateDaemonOpts) error {
+	return c.sdk.CreateDaemon(ctx, opts)
+}
+
+// ListDaemons returns all daemons for a collection.
+func (c *Client) ListDaemons(ctx context.Context, collection string) ([]nietzsche.DaemonInfo, error) {
+	return c.sdk.ListDaemons(ctx, collection)
+}
+
+// DropDaemon removes a registered daemon.
+func (c *Client) DropDaemon(ctx context.Context, collection, label string) error {
+	return c.sdk.DropDaemon(ctx, collection, label)
+}
+
 // ── NQL Query ───────────────────────────────────────────────────────────────
 
 // Query executes an NQL (Nietzsche Query Language) query.
@@ -339,7 +361,7 @@ func (c *Client) InvokeZaratustra(ctx context.Context, opts nietzsche.Zaratustra
 
 // DreamResult holds the result of a DREAM FROM query.
 type DreamResult struct {
-	DreamID string                 // dream session ID (e.g. "dream_abc123")
+	DreamID string                   // dream session ID (e.g. "dream_abc123")
 	Events  []map[string]interface{} // detected events (energy spikes, curvature anomalies)
 	Nodes   []map[string]interface{} // nodes discovered/modified during dream
 	Raw     *nietzsche.QueryResult   // full NQL result for advanced inspection
@@ -1103,52 +1125,6 @@ func (c *Client) SchrodingerObserve(ctx context.Context, edgeID, collection stri
 		Msg("SchrodingerObserve: edge observed")
 
 	return prob, state, nil
-}
-
-// ── Edge Metadata Increment ─────────────────────────────────────────────────
-
-// IncrementEdgeMeta atomically increments a numeric metadata field on an edge.
-// Uses NQL MATCH SET with arithmetic expression since the Go SDK does not expose
-// the IncrementEdgeMeta gRPC method directly.
-func (c *Client) IncrementEdgeMeta(ctx context.Context, edgeID, field string,
-	delta float64, collection string) error {
-
-	log := logger.Nietzsche()
-
-	nql := fmt.Sprintf(
-		`MATCH (a)-[r]->(b) WHERE r.id = $edge_id SET r.%s = r.%s + $delta`,
-		field, field,
-	)
-	params := map[string]interface{}{
-		"edge_id": edgeID,
-		"delta":   delta,
-	}
-
-	result, err := c.sdk.Query(ctx, nql, params, collection)
-	if err != nil {
-		log.Error().Err(err).
-			Str("edge_id", edgeID).
-			Str("field", field).
-			Float64("delta", delta).
-			Msg("IncrementEdgeMeta: NQL query failed")
-		return fmt.Errorf("nietzsche increment edge meta: %w", err)
-	}
-
-	if result.Error != "" {
-		log.Error().
-			Str("error", result.Error).
-			Str("edge_id", edgeID).
-			Str("field", field).
-			Msg("IncrementEdgeMeta: NQL returned error")
-		return fmt.Errorf("nietzsche increment edge meta: %s", result.Error)
-	}
-
-	log.Debug().
-		Str("edge_id", edgeID).
-		Str("field", field).
-		Float64("delta", delta).
-		Msg("IncrementEdgeMeta: edge metadata incremented")
-	return nil
 }
 
 // NodeResultToMap converts a NodeResult to a flat map for backward compatibility.
