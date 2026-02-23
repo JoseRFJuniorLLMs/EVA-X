@@ -6,13 +6,14 @@ package nietzsche
 import (
 	"context"
 	"fmt"
+	"math"
 
 	"eva/internal/brainstem/logger"
 
 	nietzsche "nietzsche-sdk"
 )
 
-// VectorAdapter replaces QdrantClient for vector search and upsert operations.
+// VectorAdapter provides vector search and upsert operations via NietzscheDB.
 // It wraps NietzscheDB's KNN search and InsertNode with the same interface patterns
 // that EVA's consumer code expects.
 type VectorAdapter struct {
@@ -29,7 +30,7 @@ func (va *VectorAdapter) SDK() *nietzsche.NietzscheClient {
 	return va.client.SDK()
 }
 
-// VectorSearchResult mirrors what Qdrant returns — ID, score, and payload.
+// VectorSearchResult represents a vector search result — ID, score, and payload.
 type VectorSearchResult struct {
 	ID      string
 	Score   float64
@@ -37,12 +38,34 @@ type VectorSearchResult struct {
 }
 
 // Search performs KNN vector search in a collection.
-// Replaces QdrantClient.Search() and QdrantClient.SearchWithScore().
+// Performs KNN search via NietzscheDB gRPC.
 // Vectors are float32 from Gemini embeddings, converted to float64 for NietzscheDB.
+//
+// NOTE: user_id filtering is done post-KNN (client-side) because the Go SDK's
+// KnnSearch does not yet expose the proto's pushed-down metadata filters
+// (KnnFilter.MatchFilter / KnnFilter.RangeFilter). The proto supports it
+// (pb.KnnRequest.Filters), but the SDK wrapper skips the field.
+// TODO: When the Go SDK exposes KnnSearch filters, pass user_id as a
+// KnnFilterMatch{Field: "user_id", Value: fmt.Sprint(userID)} to avoid
+// over-fetching and post-filtering. See Task 2 / nietzsche-sdk query.go.
 func (va *VectorAdapter) Search(ctx context.Context, collection string,
 	vector []float32, limit int, userID int64) ([]VectorSearchResult, error) {
 
 	log := logger.Nietzsche()
+
+	// If user_id filter is needed, try server-side filtered search first
+	if userID > 0 {
+		filtered, err := va.SearchFiltered(ctx, collection, vector, limit, map[string]string{
+			"user_id": fmt.Sprintf("%d", userID),
+		})
+		if err == nil && len(filtered) > 0 {
+			return filtered, nil
+		}
+		// Fall through to post-filter path on error
+		if err != nil {
+			log.Debug().Err(err).Msg("filtered search unavailable, falling back to post-filter")
+		}
+	}
 
 	// float32 -> float64 (lossless)
 	vec64 := float32ToFloat64(vector)
@@ -61,7 +84,7 @@ func (va *VectorAdapter) Search(ctx context.Context, collection string,
 			continue
 		}
 
-		// Filter by user_id if specified (replaces Qdrant payload filter)
+		// Filter by user_id if specified (NietzscheDB payload filter)
 		if userID > 0 {
 			if uid, ok := node.Content["user_id"]; ok {
 				switch v := uid.(type) {
@@ -95,8 +118,115 @@ func (va *VectorAdapter) Search(ctx context.Context, collection string,
 	return out, nil
 }
 
+// SearchFiltered performs KNN search with server-side metadata pre-filtering.
+// Uses NQL MATCH with WHERE clauses to filter before KNN ranking, avoiding
+// the inefficient post-filter pattern in Search().
+//
+// This is a workaround until the Go SDK exposes KnnSearch pushed-down filters
+// (proto field: KnnRequest.filters with KnnFilterMatch/KnnFilterRange).
+// When the SDK adds filter support, this method should delegate to the SDK's
+// filtered KnnSearch for better performance (single RPC, index pushdown).
+func (va *VectorAdapter) SearchFiltered(ctx context.Context, collection string,
+	vector []float32, limit int, filters map[string]string) ([]VectorSearchResult, error) {
+
+	log := logger.Nietzsche()
+
+	// Build NQL WHERE clause from metadata filters
+	var whereClauses []string
+	params := make(map[string]interface{})
+	i := 0
+	for field, value := range filters {
+		paramName := fmt.Sprintf("f%d", i)
+		whereClauses = append(whereClauses, fmt.Sprintf("n.%s = $%s", field, paramName))
+		params[paramName] = value
+		i++
+	}
+
+	if len(whereClauses) == 0 {
+		return nil, fmt.Errorf("SearchFiltered requires at least one filter")
+	}
+
+	// NQL query: filter first, then return nodes (caller re-ranks by vector distance)
+	nql := fmt.Sprintf("MATCH (n) WHERE %s RETURN n LIMIT %d",
+		joinStrings(whereClauses, " AND "), limit*2)
+
+	result, err := va.client.Query(ctx, nql, params, collection)
+	if err != nil {
+		log.Error().Err(err).Str("collection", collection).Msg("filtered search NQL failed")
+		return nil, fmt.Errorf("filtered search %s: %w", collection, err)
+	}
+
+	// Convert to VectorSearchResult and compute distance from query vector
+	vec64 := float32ToFloat64(vector)
+	var out []VectorSearchResult
+	for _, node := range result.Nodes {
+		score := 0.0
+		if len(node.Embedding) > 0 && len(vec64) > 0 {
+			score = cosineSimilarity(vec64, node.Embedding)
+		}
+		out = append(out, VectorSearchResult{
+			ID:      node.ID,
+			Score:   score,
+			Payload: node.Content,
+		})
+	}
+
+	// Sort by score descending and limit
+	sortByScoreDesc(out)
+	if len(out) > limit {
+		out = out[:limit]
+	}
+
+	log.Debug().
+		Str("collection", collection).
+		Int("filters", len(filters)).
+		Int("results", len(out)).
+		Msg("filtered search completed")
+	return out, nil
+}
+
+// joinStrings joins a slice of strings with a separator.
+func joinStrings(parts []string, sep string) string {
+	result := ""
+	for i, p := range parts {
+		if i > 0 {
+			result += sep
+		}
+		result += p
+	}
+	return result
+}
+
+// cosineSimilarity computes cosine similarity between two float64 vectors.
+func cosineSimilarity(a, b []float64) float64 {
+	if len(a) != len(b) || len(a) == 0 {
+		return 0
+	}
+	var dot, normA, normB float64
+	for i := range a {
+		dot += a[i] * b[i]
+		normA += a[i] * a[i]
+		normB += b[i] * b[i]
+	}
+	if normA == 0 || normB == 0 {
+		return 0
+	}
+	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
+}
+
+// sortByScoreDesc sorts VectorSearchResults by Score in descending order.
+func sortByScoreDesc(results []VectorSearchResult) {
+	for i := 0; i < len(results); i++ {
+		for j := i + 1; j < len(results); j++ {
+			if results[j].Score > results[i].Score {
+				results[i], results[j] = results[j], results[i]
+			}
+		}
+	}
+}
+
 // Upsert inserts or updates a vector node in a collection.
-// Replaces QdrantClient.Upsert() for single-point operations.
+// Inserts or updates via NietzscheDB gRPC for single-point operations.
 func (va *VectorAdapter) Upsert(ctx context.Context, collection string,
 	id string, vector []float32, payload map[string]interface{}) error {
 
@@ -177,7 +307,7 @@ type BatchVectorItem struct {
 }
 
 // Delete removes a vector node by ID.
-// Replaces QdrantClient.Delete().
+// Deletes via NietzscheDB gRPC.
 func (va *VectorAdapter) Delete(ctx context.Context, collection string, id string) error {
 	return va.client.Delete(ctx, collection, id)
 }

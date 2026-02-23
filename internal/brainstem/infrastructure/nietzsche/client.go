@@ -214,7 +214,7 @@ func (c *Client) InsertWithEmbedding(ctx context.Context, collection string, id 
 }
 
 // KnnSearch performs k-nearest-neighbor search using cosine similarity.
-// This replaces Qdrant's Search endpoint for vector retrieval.
+// Performs KNN search via NietzscheDB gRPC for vector retrieval.
 func (c *Client) KnnSearch(ctx context.Context, collection string,
 	queryVector []float64, k uint32) ([]nietzsche.KnnResult, error) {
 
@@ -265,7 +265,7 @@ func (c *Client) UpdateEnergy(ctx context.Context, nodeID string, energy float32
 
 // ── MERGE (upsert) ─────────────────────────────────────────────────────────
 
-// MergeNode finds a node by type + match keys, or creates one (Neo4j MERGE equivalent).
+// MergeNode finds a node by type + match keys, or creates one (MERGE semantics).
 func (c *Client) MergeNode(ctx context.Context, opts nietzsche.MergeNodeOpts) (*nietzsche.MergeNodeResult, error) {
 	return c.sdk.MergeNode(ctx, opts)
 }
@@ -333,6 +333,158 @@ func (c *Client) TriggerSleep(ctx context.Context, opts nietzsche.SleepOpts) (ni
 // InvokeZaratustra runs the autonomous evolution engine.
 func (c *Client) InvokeZaratustra(ctx context.Context, opts nietzsche.ZaratustraOpts) (*nietzsche.ZaratustraResult, error) {
 	return c.sdk.InvokeZaratustra(ctx, opts)
+}
+
+// ── Dream System ─────────────────────────────────────────────────────────────
+
+// DreamResult holds the result of a DREAM FROM query.
+type DreamResult struct {
+	DreamID string                 // dream session ID (e.g. "dream_abc123")
+	Events  []map[string]interface{} // detected events (energy spikes, curvature anomalies)
+	Nodes   []map[string]interface{} // nodes discovered/modified during dream
+	Raw     *nietzsche.QueryResult   // full NQL result for advanced inspection
+}
+
+// StartDream initiates a speculative exploration from a seed node via NQL DREAM FROM.
+// depth controls how many hops to explore (0 = server default 5).
+// noise controls perturbation amplitude (0 = server default 0.05).
+func (c *Client) StartDream(ctx context.Context, collection string, seedNodeID string, depth int, noise float64) (*DreamResult, error) {
+	log := logger.Nietzsche()
+
+	nql := fmt.Sprintf("DREAM FROM $seed DEPTH %d NOISE %.4f", depth, noise)
+	if depth <= 0 {
+		nql = "DREAM FROM $seed"
+		if noise > 0 {
+			nql = fmt.Sprintf("DREAM FROM $seed NOISE %.4f", noise)
+		}
+	} else if noise <= 0 {
+		nql = fmt.Sprintf("DREAM FROM $seed DEPTH %d", depth)
+	}
+
+	params := map[string]interface{}{
+		"seed": seedNodeID,
+	}
+
+	result, err := c.sdk.Query(ctx, nql, params, collection)
+	if err != nil {
+		log.Error().Err(err).
+			Str("collection", collection).
+			Str("seed", seedNodeID).
+			Msg("NietzscheDB DREAM FROM failed")
+		return nil, fmt.Errorf("nietzsche dream from: %w", err)
+	}
+
+	if result.Error != "" {
+		return nil, fmt.Errorf("nietzsche dream error: %s", result.Error)
+	}
+
+	dreamResult := &DreamResult{Raw: result}
+
+	// Extract dream ID and event data from scalar rows
+	for _, row := range result.ScalarRows {
+		if id, ok := row["dream_id"]; ok {
+			if idStr, ok := id.(string); ok {
+				dreamResult.DreamID = idStr
+			}
+		}
+		dreamResult.Events = append(dreamResult.Events, row)
+	}
+
+	// Extract discovered nodes
+	for _, node := range result.Nodes {
+		dreamResult.Nodes = append(dreamResult.Nodes, NodeResultToMap(node))
+	}
+
+	log.Info().
+		Str("collection", collection).
+		Str("seed", seedNodeID).
+		Str("dream_id", dreamResult.DreamID).
+		Int("events", len(dreamResult.Events)).
+		Msg("NietzscheDB dream started")
+
+	return dreamResult, nil
+}
+
+// ApplyDream commits a pending dream session, persisting energy changes to the graph.
+func (c *Client) ApplyDream(ctx context.Context, collection string, dreamID string) error {
+	log := logger.Nietzsche()
+
+	nql := fmt.Sprintf(`APPLY DREAM "%s"`, dreamID)
+	result, err := c.sdk.Query(ctx, nql, nil, collection)
+	if err != nil {
+		log.Error().Err(err).
+			Str("collection", collection).
+			Str("dream_id", dreamID).
+			Msg("NietzscheDB APPLY DREAM failed")
+		return fmt.Errorf("nietzsche apply dream %s: %w", dreamID, err)
+	}
+
+	if result.Error != "" {
+		return fmt.Errorf("nietzsche apply dream error: %s", result.Error)
+	}
+
+	log.Info().
+		Str("collection", collection).
+		Str("dream_id", dreamID).
+		Msg("NietzscheDB dream applied")
+	return nil
+}
+
+// RejectDream discards a pending dream session without modifying the graph.
+func (c *Client) RejectDream(ctx context.Context, collection string, dreamID string) error {
+	log := logger.Nietzsche()
+
+	nql := fmt.Sprintf(`REJECT DREAM "%s"`, dreamID)
+	result, err := c.sdk.Query(ctx, nql, nil, collection)
+	if err != nil {
+		log.Error().Err(err).
+			Str("collection", collection).
+			Str("dream_id", dreamID).
+			Msg("NietzscheDB REJECT DREAM failed")
+		return fmt.Errorf("nietzsche reject dream %s: %w", dreamID, err)
+	}
+
+	if result.Error != "" {
+		return fmt.Errorf("nietzsche reject dream error: %s", result.Error)
+	}
+
+	log.Info().
+		Str("collection", collection).
+		Str("dream_id", dreamID).
+		Msg("NietzscheDB dream rejected")
+	return nil
+}
+
+// ShowDreams lists all pending dream sessions for a collection.
+func (c *Client) ShowDreams(ctx context.Context, collection string) ([]map[string]interface{}, error) {
+	log := logger.Nietzsche()
+
+	result, err := c.sdk.Query(ctx, "SHOW DREAMS", nil, collection)
+	if err != nil {
+		log.Error().Err(err).
+			Str("collection", collection).
+			Msg("NietzscheDB SHOW DREAMS failed")
+		return nil, fmt.Errorf("nietzsche show dreams: %w", err)
+	}
+
+	if result.Error != "" {
+		return nil, fmt.Errorf("nietzsche show dreams error: %s", result.Error)
+	}
+
+	var dreams []map[string]interface{}
+	for _, row := range result.ScalarRows {
+		dreams = append(dreams, row)
+	}
+	if dreams == nil {
+		dreams = []map[string]interface{}{}
+	}
+
+	log.Debug().
+		Str("collection", collection).
+		Int("pending_dreams", len(dreams)).
+		Msg("NietzscheDB show dreams completed")
+
+	return dreams, nil
 }
 
 // ── Sensory ─────────────────────────────────────────────────────────────────
@@ -617,7 +769,7 @@ func (c *Client) Search(ctx context.Context, collection string, query string, li
 // embedding-only collections use cosine for flat vector space.
 func DefaultCollections() []nietzsche.CollectionConfig {
 	return []nietzsche.CollectionConfig{
-		// Vector collections (Qdrant replacement, cosine 3072D — flat embedding space)
+		// Vector collections (cosine 3072D — flat embedding space)
 		{Name: "memories", Dim: 3072, Metric: "cosine"},
 		{Name: "signifier_chains", Dim: 3072, Metric: "cosine"},
 		{Name: "eva_self_knowledge", Dim: 3072, Metric: "cosine"},
@@ -626,9 +778,11 @@ func DefaultCollections() []nietzsche.CollectionConfig {
 		{Name: "eva_docs", Dim: 3072, Metric: "cosine"},
 		{Name: "speaker_embeddings", Dim: 3072, Metric: "cosine"},
 		{Name: "stories", Dim: 3072, Metric: "cosine"},
-		// Graph collections (Neo4j replacement, poincare — hyperbolic hierarchy)
+		// Graph collections (poincare — hyperbolic hierarchy)
 		{Name: "patient_graph", Dim: 3072, Metric: "poincare"},
 		{Name: "eva_core", Dim: 3072, Metric: "poincare"},
+		// Cache collection (key-value TTL cache, not vector storage)
+		{Name: "eva_cache", Dim: 2, Metric: "cosine"},
 	}
 }
 
@@ -663,12 +817,55 @@ func (c *Client) EnsureCollections(ctx context.Context) error {
 
 	// Create indexes on frequently queried fields (idempotent on server)
 	indexes := []struct{ collection, field string }{
+		// patient_graph: graph queries filter heavily by these fields
 		{"patient_graph", "node_type"},
+		{"patient_graph", "patient_id"},
+		{"patient_graph", "created_at"},
+		{"patient_graph", "label"},
+		{"patient_graph", "importance"},
+		// eva_core: EVA's self-model graph
 		{"eva_core", "node_type"},
+		{"eva_core", "label"},
+		{"eva_core", "created_at"},
+		{"eva_core", "category"},
+		// memories: vector collection with metadata filters
+		{"memories", "user_id"},
+		{"memories", "importance"},
+		{"memories", "created_at"},
+		// eva_self_knowledge: introspection queries
+		{"eva_self_knowledge", "category"},
+		{"eva_self_knowledge", "created_at"},
 	}
 	for _, idx := range indexes {
 		if err := c.CreateIndex(ctx, idx.collection, idx.field); err != nil {
 			log.Warn().Err(err).Str("collection", idx.collection).Str("field", idx.field).Msg("failed to create index (non-fatal)")
+		}
+	}
+
+	// Register node-type schemas for validation (non-fatal errors — server may
+	// already have the schema or not support SetSchema on older versions).
+	schemas := []struct {
+		nodeType   string
+		required   []string
+		collection string
+	}{
+		{"Condition", []string{"name"}, "patient_graph"},
+		{"Medication", []string{"name", "dosage"}, "patient_graph"},
+		{"EpisodicMemory", []string{"content", "patient_id"}, "patient_graph"},
+		{"PersonalityTrait", []string{"name"}, "eva_core"},
+	}
+	for _, s := range schemas {
+		if err := c.SetSchema(ctx, s.nodeType, s.required, nil, s.collection); err != nil {
+			log.Warn().Err(err).
+				Str("collection", s.collection).
+				Str("node_type", s.nodeType).
+				Msg("failed to set schema (non-fatal)")
+		} else {
+			log.Debug().
+				Str("collection", s.collection).
+				Str("node_type", s.nodeType).
+				Int("required_fields", len(s.required)).
+				Msg("schema registered")
 		}
 	}
 
@@ -707,6 +904,251 @@ func (c *Client) SqlExec(ctx context.Context, sql, collection string) (*nietzsch
 
 	log.Debug().Str("sql", sql).Uint64("affected", result.AffectedRows).Msg("SqlExec OK")
 	return result, nil
+}
+
+// ── Schrödinger Edges ────────────────────────────────────────────────────────
+// Probabilistic edges with Markov transition probabilities. Edges are
+// "superpositions" that collapse at MATCH time — metadata fields:
+//   probability ∈ [0,1], decay_rate, context_boost (tag), boost_factor.
+
+// SchrodingerCreate creates a probabilistic (Schrödinger) edge between two nodes.
+// The edge is stored as a regular edge with probabilistic metadata fields:
+// probability, decay_rate, and optional collapse_when / context_boost.
+func (c *Client) SchrodingerCreate(ctx context.Context, fromID, toID, edgeType,
+	collection string, probability float64, collapseCondition string) (string, error) {
+
+	log := logger.Nietzsche()
+
+	// Build NQL CREATE-style via InsertEdge — Schrödinger metadata is stored in
+	// edge.metadata which is exposed through InsertEdge content/weight fields.
+	// Since the Go SDK InsertEdge only takes basic fields, we use NQL to set
+	// the metadata properties on the edge after creation.
+	edgeID, err := c.sdk.InsertEdge(ctx, nietzsche.InsertEdgeOpts{
+		From:       fromID,
+		To:         toID,
+		EdgeType:   edgeType,
+		Weight:     probability, // weight doubles as initial probability
+		Collection: collection,
+	})
+	if err != nil {
+		log.Error().Err(err).
+			Str("from", fromID).Str("to", toID).
+			Str("edge_type", edgeType).
+			Msg("SchrodingerCreate: InsertEdge failed")
+		return "", fmt.Errorf("nietzsche schrodinger create: %w", err)
+	}
+
+	// Set probabilistic metadata via NQL MATCH SET on the new edge
+	nql := `MATCH (a)-[r]->(b) WHERE r.id = $edge_id SET r.probability = $prob, r.decay_rate = 0.01`
+	params := map[string]interface{}{
+		"edge_id": edgeID,
+		"prob":    probability,
+	}
+	if collapseCondition != "" {
+		nql = `MATCH (a)-[r]->(b) WHERE r.id = $edge_id SET r.probability = $prob, r.decay_rate = 0.01, r.collapse_when = $cond`
+		params["cond"] = collapseCondition
+	}
+
+	result, err := c.sdk.Query(ctx, nql, params, collection)
+	if err != nil {
+		log.Warn().Err(err).Str("edge_id", edgeID).
+			Msg("SchrodingerCreate: metadata SET failed (edge created but metadata incomplete)")
+	} else if result.Error != "" {
+		log.Warn().Str("error", result.Error).Str("edge_id", edgeID).
+			Msg("SchrodingerCreate: metadata SET returned error")
+	}
+
+	log.Info().
+		Str("edge_id", edgeID).
+		Str("from", fromID).Str("to", toID).
+		Float64("probability", probability).
+		Str("collapse_when", collapseCondition).
+		Msg("SchrodingerCreate: probabilistic edge created")
+	return edgeID, nil
+}
+
+// SchrodingerCollapse collapses a Schrödinger edge under the given context.
+// It reads the edge's probability, evaluates context-dependent boost, and
+// performs a probabilistic collapse (random sample vs effective probability).
+// Returns whether the edge collapsed into existence and the final probability used.
+func (c *Client) SchrodingerCollapse(ctx context.Context, edgeID, collection string,
+	contextData map[string]interface{}) (collapsed bool, finalProb float64, err error) {
+
+	log := logger.Nietzsche()
+
+	// Read edge metadata via NQL
+	nql := `MATCH (a)-[r]->(b) WHERE r.id = $edge_id RETURN r.probability, r.context_boost, r.boost_factor`
+	params := map[string]interface{}{
+		"edge_id": edgeID,
+	}
+
+	result, err := c.sdk.Query(ctx, nql, params, collection)
+	if err != nil {
+		log.Error().Err(err).Str("edge_id", edgeID).Msg("SchrodingerCollapse: query failed")
+		return false, 0, fmt.Errorf("nietzsche schrodinger collapse query: %w", err)
+	}
+	if result.Error != "" {
+		return false, 0, fmt.Errorf("nietzsche schrodinger collapse: %s", result.Error)
+	}
+
+	// Extract probability from scalar rows
+	prob := 1.0
+	boostFactor := 1.5
+	contextBoost := ""
+
+	if len(result.ScalarRows) > 0 {
+		row := result.ScalarRows[0]
+		if p, ok := row["r.probability"]; ok {
+			if pf, ok := p.(float64); ok {
+				prob = pf
+			}
+		}
+		if cb, ok := row["r.context_boost"]; ok {
+			if cbs, ok := cb.(string); ok {
+				contextBoost = cbs
+			}
+		}
+		if bf, ok := row["r.boost_factor"]; ok {
+			if bff, ok := bf.(float64); ok {
+				boostFactor = bff
+			}
+		}
+	}
+
+	// Apply context boost if context matches
+	effectiveProb := prob
+	if contextBoost != "" && contextData != nil {
+		if ctxVal, ok := contextData["context"]; ok {
+			if ctxStr, ok := ctxVal.(string); ok {
+				if ctxStr == contextBoost {
+					effectiveProb = prob * boostFactor
+					if effectiveProb > 1.0 {
+						effectiveProb = 1.0
+					}
+				}
+			}
+		}
+	}
+
+	// Probabilistic collapse: pseudo-random based on edge_id hash for reproducibility
+	// Use a simple deterministic approach: hash of edgeID + current time modulo
+	h := uint64(0)
+	for _, ch := range edgeID {
+		h = h*31 + uint64(ch)
+	}
+	sample := float64(h%10000) / 10000.0
+	collapsed = sample < effectiveProb
+	finalProb = effectiveProb
+
+	log.Info().
+		Str("edge_id", edgeID).
+		Float64("base_prob", prob).
+		Float64("effective_prob", effectiveProb).
+		Bool("collapsed", collapsed).
+		Msg("SchrodingerCollapse: edge collapse evaluated")
+
+	return collapsed, finalProb, nil
+}
+
+// SchrodingerObserve reads a Schrödinger edge's current probability and state
+// without collapsing it. Returns the base probability and a human-readable state.
+func (c *Client) SchrodingerObserve(ctx context.Context, edgeID, collection string) (probability float64, state string, err error) {
+	log := logger.Nietzsche()
+
+	nql := `MATCH (a)-[r]->(b) WHERE r.id = $edge_id RETURN r.probability, r.decay_rate, r.context_boost, r.boost_factor`
+	params := map[string]interface{}{
+		"edge_id": edgeID,
+	}
+
+	result, err := c.sdk.Query(ctx, nql, params, collection)
+	if err != nil {
+		log.Error().Err(err).Str("edge_id", edgeID).Msg("SchrodingerObserve: query failed")
+		return 0, "", fmt.Errorf("nietzsche schrodinger observe: %w", err)
+	}
+	if result.Error != "" {
+		return 0, "", fmt.Errorf("nietzsche schrodinger observe: %s", result.Error)
+	}
+
+	if len(result.ScalarRows) == 0 {
+		log.Debug().Str("edge_id", edgeID).Msg("SchrodingerObserve: edge not found or no probability metadata")
+		return 1.0, "deterministic", nil // no probability metadata = deterministic edge
+	}
+
+	row := result.ScalarRows[0]
+	prob := 1.0
+	if p, ok := row["r.probability"]; ok {
+		if pf, ok := p.(float64); ok {
+			prob = pf
+		}
+	}
+
+	// Determine state label
+	switch {
+	case prob >= 1.0:
+		state = "deterministic"
+	case prob <= 0.0:
+		state = "collapsed_absent"
+	case prob >= 0.8:
+		state = "superposition_strong"
+	case prob >= 0.4:
+		state = "superposition_medium"
+	default:
+		state = "superposition_weak"
+	}
+
+	log.Debug().
+		Str("edge_id", edgeID).
+		Float64("probability", prob).
+		Str("state", state).
+		Msg("SchrodingerObserve: edge observed")
+
+	return prob, state, nil
+}
+
+// ── Edge Metadata Increment ─────────────────────────────────────────────────
+
+// IncrementEdgeMeta atomically increments a numeric metadata field on an edge.
+// Uses NQL MATCH SET with arithmetic expression since the Go SDK does not expose
+// the IncrementEdgeMeta gRPC method directly.
+func (c *Client) IncrementEdgeMeta(ctx context.Context, edgeID, field string,
+	delta float64, collection string) error {
+
+	log := logger.Nietzsche()
+
+	nql := fmt.Sprintf(
+		`MATCH (a)-[r]->(b) WHERE r.id = $edge_id SET r.%s = r.%s + $delta`,
+		field, field,
+	)
+	params := map[string]interface{}{
+		"edge_id": edgeID,
+		"delta":   delta,
+	}
+
+	result, err := c.sdk.Query(ctx, nql, params, collection)
+	if err != nil {
+		log.Error().Err(err).
+			Str("edge_id", edgeID).
+			Str("field", field).
+			Float64("delta", delta).
+			Msg("IncrementEdgeMeta: NQL query failed")
+		return fmt.Errorf("nietzsche increment edge meta: %w", err)
+	}
+
+	if result.Error != "" {
+		log.Error().
+			Str("error", result.Error).
+			Str("edge_id", edgeID).
+			Str("field", field).
+			Msg("IncrementEdgeMeta: NQL returned error")
+		return fmt.Errorf("nietzsche increment edge meta: %s", result.Error)
+	}
+
+	log.Debug().
+		Str("edge_id", edgeID).
+		Str("field", field).
+		Float64("delta", delta).
+		Msg("IncrementEdgeMeta: edge metadata incremented")
+	return nil
 }
 
 // NodeResultToMap converts a NodeResult to a flat map for backward compatibility.

@@ -131,10 +131,10 @@ func (clo *CognitiveLoadOrchestrator) RecordInteraction(load InteractionLoad) er
 		return fmt.Errorf("erro ao atualizar estado: %w", err)
 	}
 
-	// 5. Atualizar cache Redis
+	// 5. Atualizar cache NietzscheDB
 	err = clo.updateRedisCache(load.PatientID)
 	if err != nil {
-		log.Printf("⚠️ [COGNITIVE] Erro ao atualizar Redis: %v", err)
+		log.Printf("⚠️ [COGNITIVE] Erro ao atualizar cache: %v", err)
 	}
 
 	// 6. Verificar se precisa tomar decisão

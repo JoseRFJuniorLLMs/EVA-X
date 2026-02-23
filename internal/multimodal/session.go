@@ -129,7 +129,7 @@ func (s *MultimodalSession) SetMemoryPipeline(
 }
 
 // FlushMemoryBuffer processa e persiste o buffer de memória visual
-// Pipeline: Embed → Compress (Krylov) → Store (Postgres + Qdrant)
+// Pipeline: Embed → Compress (Krylov) → Store (Postgres + NietzscheDB vector)
 func (s *MultimodalSession) FlushMemoryBuffer(ctx context.Context) error {
 	s.mu.Lock()
 	if len(s.visualMemoryBuf) == 0 {
@@ -162,7 +162,7 @@ func (s *MultimodalSession) FlushMemoryBuffer(ctx context.Context) error {
 		return fmt.Errorf("failed to compress batch: %w", err)
 	}
 
-	// Fase 3: Persistir no Postgres + Qdrant
+	// Fase 3: Persistir no Postgres + NietzscheDB vector
 	if err := s.storageManager.StoreBatch(ctx, entries); err != nil {
 		return fmt.Errorf("failed to store batch: %w", err)
 	}

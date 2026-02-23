@@ -42,7 +42,7 @@ type DevelopmentalRouter struct {
 	lacanEngine     interface{} // For adults (existing)
 
 	// Vector DB client
-	qdrantClient interface{} // Placeholder
+	vectorClient interface{} // Placeholder (NietzscheDB vector)
 }
 
 // NewDevelopmentalRouter creates a new developmental router
@@ -99,8 +99,8 @@ func (r *DevelopmentalRouter) SelectIntervention(user *User, input string) (*Int
 		analysis = r.analyzeAdults(input)
 	}
 
-	// 3. Search Qdrant with age filter
-	intervention, err := r.searchQdrant(analysis, ageGroup)
+	// 3. Search NietzscheDB vector with age filter
+	intervention, err := r.searchVector(analysis, ageGroup)
 	if err != nil {
 		return nil, fmt.Errorf("failed to search interventions: %w", err)
 	}
@@ -154,9 +154,9 @@ func (r *DevelopmentalRouter) analyzeAdults(input string) AnalysisResult {
 	}
 }
 
-// searchQdrant searches for interventions with age filtering
-func (r *DevelopmentalRouter) searchQdrant(analysis AnalysisResult, ageGroup AgeGroup) (*Intervention, error) {
-	// TODO: Implement Qdrant search with filter
+// searchVector searches for interventions with age filtering
+func (r *DevelopmentalRouter) searchVector(analysis AnalysisResult, ageGroup AgeGroup) (*Intervention, error) {
+	// TODO: Implement NietzscheDB vector search with filter
 	// Filter: target_audience must include ageGroup
 
 	return &Intervention{

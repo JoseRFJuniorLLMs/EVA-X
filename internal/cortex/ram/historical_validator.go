@@ -19,7 +19,7 @@ type HistoricalValidator struct {
 	maxMemoriesToCheck  int     // 20 default
 }
 
-// GraphStore interface para Neo4j
+// GraphStore interface para NietzscheDB graph
 type GraphStore interface {
 	GetTemporalMemories(ctx context.Context, patientID int64, startDate, endDate time.Time) ([]Memory, error)
 	GetRelatedMemories(ctx context.Context, memoryID int64, depth int) ([]Memory, error)

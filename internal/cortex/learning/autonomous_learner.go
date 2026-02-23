@@ -156,10 +156,10 @@ func (l *AutonomousLearner) StudyTopic(ctx context.Context, topic string) ([]Lea
 		return nil, fmt.Errorf("summarization failed: %w", err)
 	}
 
-	// 3. Armazenar no Qdrant
+	// 3. Armazenar no NietzscheDB vector
 	if l.vectorAdapter != nil && l.embedSvc != nil {
 		if err := l.storeInsights(ctx, insights); err != nil {
-			log.Warn().Err(err).Msg("[LEARNER] Failed to store in Qdrant (insights still returned)")
+			log.Warn().Err(err).Msg("[LEARNER] Failed to store in NietzscheDB vector (insights still returned)")
 		}
 	}
 

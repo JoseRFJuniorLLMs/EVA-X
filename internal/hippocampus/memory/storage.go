@@ -45,7 +45,7 @@ type Memory struct {
 // MemoryStore gerencia o armazenamento de memórias
 type MemoryStore struct {
 	db            *sql.DB
-	graphStore    *GraphStore                   // Para salvar relações no Neo4j
+	graphStore    *GraphStore                   // Para salvar relações no NietzscheDB graph
 	vectorAdapter *nietzscheInfra.VectorAdapter // Para salvar vetores no NietzscheDB
 }
 
@@ -60,7 +60,7 @@ func NewMemoryStore(db *sql.DB, graphStore *GraphStore, vectorAdapter *nietzsche
 }
 
 // Store salva uma nova memória no banco
-// ✅ CORREÇÃO P5: Agora salva no Postgres E Neo4j
+// ✅ CORREÇÃO P5: Agora salva no Postgres E NietzscheDB graph
 func (m *MemoryStore) Store(ctx context.Context, memory *Memory) error {
 	query := `
 		INSERT INTO episodic_memories 
@@ -92,14 +92,14 @@ func (m *MemoryStore) Store(ctx context.Context, memory *Memory) error {
 	log.Printf("✅ [STORAGE] Memória salva no Postgres: ID=%d, idoso=%d, speaker=%s",
 		memory.ID, memory.IdosoID, memory.Speaker)
 
-	// 2. ✅ Salvar relações no Neo4j
+	// 2. ✅ Salvar relações no NietzscheDB graph
 	if m.graphStore != nil {
 		if err := m.graphStore.AddEpisodicMemory(ctx, memory); err != nil {
 			// NÃO falhar a operação, mas logar claramente
-			log.Printf("❌ [NEO4J] Falha ao salvar relações para memória %d: %v", memory.ID, err)
-			log.Printf("⚠️ [NEO4J] Memória salva no Postgres MAS relações Neo4j falharam!")
+			log.Printf("❌ [GRAPH] Falha ao salvar relações para memória %d: %v", memory.ID, err)
+			log.Printf("⚠️ [GRAPH] Memória salva no Postgres MAS relações NietzscheDB graph falharam!")
 		} else {
-			log.Printf("✅ [NEO4J] Relações salvas: %d topics, emoção=%s (memória %d)",
+			log.Printf("✅ [GRAPH] Relações salvas: %d topics, emoção=%s (memória %d)",
 				len(memory.Topics), memory.Emotion, memory.ID)
 		}
 	}

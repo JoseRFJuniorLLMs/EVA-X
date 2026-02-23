@@ -52,7 +52,7 @@ func (s *Service) SaveEpisodicMemoryWithContext(
 		}
 	}
 
-	// 3. Save via MemoryStore (Postgres + Neo4j + Qdrant com emotion/importance reais)
+	// 3. Save via MemoryStore (Postgres + NietzscheDB graph + NietzscheDB vector com emotion/importance reais)
 	if s.memoryStore == nil {
 		return fmt.Errorf("memoryStore não inicializado — verifique conexão com banco de dados")
 	}

@@ -17,12 +17,12 @@ import (
 )
 
 // Service encapsulates the cognitive functions of EVA
-// AUDIT FIX 2026-01-27: Adicionado graphAdapter e graphStore para salvar no Neo4j
+// AUDIT FIX 2026-01-27: Adicionado graphAdapter e graphStore para salvar no NietzscheDB graph
 type Service struct {
 	db                 *sql.DB
 	vectorAdapter      *nietzscheInfra.VectorAdapter
-	graphAdapter       *nietzscheInfra.GraphAdapter // AUDIT FIX: Adicionado para salvar no Neo4j
-	graphStore         *memory.GraphStore           // AUDIT FIX: Store para Neo4j
+	graphAdapter       *nietzscheInfra.GraphAdapter // AUDIT FIX: Adicionado para salvar no NietzscheDB graph
+	graphStore         *memory.GraphStore           // AUDIT FIX: Store para NietzscheDB graph
 	memoryStore        *memory.MemoryStore          // AUDIT FIX 2026-02-17: Store para salvar com importância/emoção reais
 	fdpnEngine         *lacan.FDPNEngine
 	personalityService *ps.PersonalityService

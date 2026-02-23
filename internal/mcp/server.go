@@ -19,7 +19,7 @@ import (
 // EmbeddingFunc generates embeddings for text
 type EmbeddingFunc func(ctx context.Context, text string) ([]float32, error)
 
-// VectorSearchFunc searches vectors in Qdrant
+// VectorSearchFunc searches vectors in NietzscheDB
 type VectorSearchFunc func(ctx context.Context, collection string, vector []float32, limit int) ([]VectorResult, error)
 
 // VectorResult represents a vector search result

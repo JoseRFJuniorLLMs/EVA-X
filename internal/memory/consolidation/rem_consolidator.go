@@ -30,6 +30,7 @@ type REMConsolidator struct {
 	minHot       int     // Minimo de memorias quentes para consolidar
 	srcConfig    *SelectiveReplayConfig
 	hebbian      *HebbianStrengthener
+	bridge       *NietzscheBridge // Hyperbolic centroid via Frechet mean (nil = Euclidean fallback)
 	mu           sync.Mutex
 }
 
@@ -77,6 +78,13 @@ func NewREMConsolidator(graphAdapter *nietzscheInfra.GraphAdapter, krylov *krylo
 		srcConfig:    DefaultSelectiveReplayConfig(),
 		hebbian:      NewHebbianStrengthener(graphAdapter, 1.5),
 	}
+}
+
+// SetNietzscheBridge injects the NietzscheBridge for hyperbolic centroid computation.
+// When set, consolidation uses Frechet mean on the Poincare ball instead of
+// Euclidean averaging. If nil (default), falls back to abstractCommunity().
+func (r *REMConsolidator) SetNietzscheBridge(bridge *NietzscheBridge) {
+	r.bridge = bridge
 }
 
 // ConsolidateNightly executa consolidacao noturna para um paciente
@@ -131,7 +139,22 @@ func (r *REMConsolidator) ConsolidateNightly(ctx context.Context, patientID int6
 			continue
 		}
 
-		concept := r.abstractCommunity(comm)
+		var concept *ProtoConcept
+
+		// Hyperbolic path: use NietzscheBridge for Frechet mean on Poincare ball.
+		// This preserves hierarchy (||x|| = depth), unlike Euclidean averaging.
+		// Fallback: abstractCommunity() with Euclidean centroid (legacy behavior).
+		if r.bridge != nil {
+			_, bridgeConcept, err := r.bridge.SynthesizeCommunityFromMemories(ctx, comm, "")
+			if err != nil {
+				log.Printf("[REM] NietzscheBridge failed, falling back to Euclidean: %v", err)
+				concept = r.abstractCommunity(comm)
+			} else {
+				concept = bridgeConcept
+			}
+		} else {
+			concept = r.abstractCommunity(comm)
+		}
 
 		// 5. Criar no semantico no grafo
 		err := r.createSemanticNode(ctx, patientID, concept)

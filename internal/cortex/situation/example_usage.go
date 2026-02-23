@@ -55,8 +55,8 @@ func ExampleUsage_IntegrationFDPN() {
 
 	// Pseudo-código (integração real requer FDPNEngine instanciado)
 	/*
-		fdpn := memory.NewFDPNEngine(neo4j, redis, qdrant)
-		modulator := situation.NewModulator(redis, nil)
+		fdpn := memory.NewFDPNEngine(nietzscheGraph, nietzscheCache, nietzscheVector)
+		modulator := situation.NewModulator(nietzscheCache, nil)
 
 		// Antes de cada query:
 		sit, _ := modulator.Infer(ctx, userID, query, recentEvents)
@@ -211,13 +211,13 @@ func ExampleUsage_Performance() {
 
 // ExampleUsage_CacheEffect demonstra efeito do cache
 func ExampleUsage_CacheEffect() {
-	// Com cache Redis (na prática)
+	// Com cache NietzscheDB (na prática)
 	fmt.Println("=== Cache Effect ===")
 
 	// Primeira chamada: cache miss (~5ms)
 	// Segunda chamada (mesmo userID): cache hit (<1ms)
 
-	log.Println("Ver testes de integração para benchmark real com Redis")
+	log.Println("Ver testes de integração para benchmark real com NietzscheDB cache")
 }
 
 // ExampleUsage_AlertCritical demonstra alertas críticos

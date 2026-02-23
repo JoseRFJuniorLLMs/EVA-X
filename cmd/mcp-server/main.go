@@ -239,7 +239,7 @@ func (s *EVAMCPServer) handleToolsList() interface{} {
 		},
 		{
 			Name:        "eva_learn_topic",
-			Description: "EVA estuda um topico autonomamente: pesquisa web, resume com Gemini, armazena no Qdrant.",
+			Description: "EVA estuda um topico autonomamente: pesquisa web, resume com Gemini, armazena no NietzscheDB vector.",
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{

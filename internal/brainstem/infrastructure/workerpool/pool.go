@@ -178,7 +178,7 @@ var (
 	// AnalysisPool para processamento de texto/audio (CPU-bound)
 	AnalysisPool = NewPool(10, "analysis")
 
-	// IOPool para operacoes de I/O (Redis, Postgres, APIs)
+	// IOPool para operacoes de I/O (NietzscheDB, Postgres, APIs)
 	IOPool = NewPool(20, "io")
 
 	// BackgroundPool para tarefas de baixa prioridade

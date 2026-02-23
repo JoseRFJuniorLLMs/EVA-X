@@ -402,7 +402,7 @@ func NewSignalingServer(
 		log.Println("📚 Signaling: ZettelService initialized (Memória Externa Viva)")
 	}
 
-	// ✅ NOVO: Inicializar AudioBuffer + AudioAnalysis (substitui Redis)
+	// ✅ NOVO: Inicializar AudioBuffer + AudioAnalysis (NietzscheDB backed)
 	server.audioBuffer = nietzscheInfra.NewAudioBuffer(nietzscheClient)
 	server.audioAnalysis = knowledge.NewAudioAnalysisService(cfg, server.audioBuffer, ctxService)
 	log.Printf("✅ NietzscheDB AudioBuffer + Audio Analysis inicializado")
@@ -831,7 +831,7 @@ func (s *SignalingServer) handleGeminiResponse(session *WebSocketSession, respon
 				}
 			}
 
-			// ✅ NOVO: Salvar em Postgres + Qdrant + Neo4j via BrainService
+			// ✅ NOVO: Salvar em Postgres + NietzscheDB via BrainService
 			if s.brainService != nil {
 				brainSvc := s.brainService
 				workerpool.AnalysisPool.TrySubmit(func() {
@@ -841,7 +841,7 @@ func (s *SignalingServer) handleGeminiResponse(session *WebSocketSession, respon
 				})
 			}
 
-			// ✅ NOVO: Neo4j Thinking Mode (Fase 2)
+			// ✅ NOVO: NietzscheDB Graph Thinking Mode (Fase 2)
 			if s.knowledge != nil {
 				knowledgeSvc := s.knowledge
 				workerpool.AnalysisPool.TrySubmit(func() {
@@ -983,7 +983,7 @@ func (s *SignalingServer) handleGeminiResponse(session *WebSocketSession, respon
 			log.Printf("💬 [TRANSCRICAO] EVA: %s", aiText)
 			go s.saveTranscription(session.IdosoID, "assistant", aiText)
 
-			// ✅ NOVO: Salvar resposta EVA em Postgres + Qdrant + Neo4j
+			// ✅ NOVO: Salvar resposta EVA em Postgres + NietzscheDB
 			if s.brainService != nil {
 				// 🚀 IMPROVEMENT 6: Use SaveEpisodicMemoryWithContext instead of old function
 				memCtx := brain.MemoryContext{
@@ -1015,7 +1015,7 @@ func (s *SignalingServer) handleGeminiResponse(session *WebSocketSession, respon
 		session.SetState(vdefs.StateListening)
 		log.Printf("🎙️ Iniciando análise de áudio...")
 
-		// ✅ FASE 2.3: Audio Emotion Analysis (Redis Powered)
+		// ✅ FASE 2.3: Audio Emotion Analysis (NietzscheDB Powered)
 		if s.audioAnalysis != nil {
 			go func(sessID string, uid int64) {
 				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

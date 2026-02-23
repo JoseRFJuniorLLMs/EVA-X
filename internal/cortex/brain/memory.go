@@ -92,7 +92,7 @@ func (s *Service) ProcessUserSpeech(ctx context.Context, idosoID int64, text str
 	}
 }
 
-// SaveEpisodicMemory saves memory to Postgres, Qdrant, and Neo4j
+// SaveEpisodicMemory saves memory to Postgres, NietzscheDB vector, and NietzscheDB graph
 // AUDIT FIX: 2026-01-27 - Agora salva em TODOS os datastores
 //
 // ⚠️ DEPRECATED: Use SaveEpisodicMemoryWithContext instead

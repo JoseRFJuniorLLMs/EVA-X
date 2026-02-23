@@ -6,15 +6,21 @@ package diffusor
 import (
 	"context"
 	"math"
+	"sort"
+
+	nietzsche "nietzsche-sdk"
 
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 )
 
-// HeatKernelDiffusion implements heat kernel-based graph navigation
-// Simulates "heat" diffusing through the knowledge graph to discover implicit relations
+// HeatKernelDiffusion implements heat kernel-based graph navigation using
+// NietzscheDB's native Diffuse RPC. Instead of reimplementing BFS + manual
+// heat calculation locally, this delegates to the server's Chebyshev-accelerated
+// heat-kernel solver for correctness and performance.
 type HeatKernelDiffusion struct {
 	graphAdapter *nietzscheInfra.GraphAdapter
 	timeParam    float64 // t parameter for diffusion (controls spread)
+	collection   string  // NietzscheDB collection for diffusion
 }
 
 // NodeActivation represents activation level of a node after diffusion
@@ -42,7 +48,9 @@ type Insight struct {
 	Evidence   []Path
 }
 
-// NewHeatKernelDiffusion creates a new heat kernel diffusion engine
+// NewHeatKernelDiffusion creates a new heat kernel diffusion engine.
+// The collection parameter specifies which NietzscheDB collection to run
+// diffusion on. If empty, the GraphAdapter's default collection is used.
 func NewHeatKernelDiffusion(graphAdapter *nietzscheInfra.GraphAdapter, timeParam float64) *HeatKernelDiffusion {
 	return &HeatKernelDiffusion{
 		graphAdapter: graphAdapter,
@@ -50,59 +58,65 @@ func NewHeatKernelDiffusion(graphAdapter *nietzscheInfra.GraphAdapter, timeParam
 	}
 }
 
-// DiffuseFromNode simulates heat diffusion from a starting node
+// SetCollection overrides the collection used for Diffuse RPC calls.
+func (hk *HeatKernelDiffusion) SetCollection(collection string) {
+	hk.collection = collection
+}
+
+// DiffuseFromNode runs heat-kernel diffusion from a starting node using
+// NietzscheDB's native Diffuse RPC. The maxSteps parameter is translated
+// into multiple diffusion time scales: the server computes e^{-tL} using
+// Chebyshev polynomial approximation, which is both faster and more accurate
+// than the old local BFS-based iteration.
 func (hk *HeatKernelDiffusion) DiffuseFromNode(ctx context.Context, nodeID string, maxSteps int) ([]NodeActivation, error) {
-	// Initialize activation map
-	activations := make(map[string]float64)
-	activations[nodeID] = 1.0 // Source node starts at full activation
+	// Build diffusion time values from timeParam and maxSteps.
+	// We sample multiple time scales to capture both local and global structure.
+	tValues := hk.buildTValues(maxSteps)
 
-	// Iteratively diffuse heat
-	for step := 0; step < maxSteps; step++ {
-		newActivations := make(map[string]float64)
-
-		// For each active node, spread heat to neighbors
-		for currentNode, activation := range activations {
-			if activation < 0.01 { // Skip very low activations
-				continue
-			}
-
-			// Get neighbors from Neo4j
-			neighbors, err := hk.getNeighbors(ctx, currentNode)
-			if err != nil {
-				continue
-			}
-
-			// Distribute heat to neighbors
-			heatPerNeighbor := activation * hk.diffusionRate(step)
-			for _, neighbor := range neighbors {
-				newActivations[neighbor] += heatPerNeighbor
-			}
-
-			// Keep some heat at current node (decay)
-			newActivations[currentNode] += activation * (1.0 - hk.diffusionRate(step))
-		}
-
-		activations = newActivations
+	scales, err := hk.graphAdapter.Diffuse(ctx, []string{nodeID}, nietzsche.DiffuseOpts{
+		TValues:    tValues,
+		KChebyshev: 0, // server default (10)
+		Collection: hk.collection,
+	})
+	if err != nil {
+		return nil, err
 	}
 
-	// Convert to sorted list
-	result := []NodeActivation{}
-	for nodeID, activation := range activations {
+	// Merge results across all time scales into a single activation map.
+	// For nodes appearing at multiple scales, take the maximum activation.
+	activations := make(map[string]float64)
+	for _, scale := range scales {
+		for i, nid := range scale.NodeIDs {
+			if i < len(scale.Scores) {
+				if scale.Scores[i] > activations[nid] {
+					activations[nid] = scale.Scores[i]
+				}
+			}
+		}
+	}
+
+	// Convert to sorted list, filtering out insignificant activations
+	result := make([]NodeActivation, 0, len(activations))
+	for nid, activation := range activations {
 		if activation > 0.05 { // Only return significant activations
 			result = append(result, NodeActivation{
-				NodeID:     nodeID,
+				NodeID:     nid,
 				Activation: activation,
 			})
 		}
 	}
 
 	// Sort by activation (highest first)
-	sortByActivation(result)
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Activation > result[j].Activation
+	})
 
 	return result, nil
 }
 
 // FindImplicitRelations discovers non-obvious connections between two nodes
+// by running bidirectional diffusion and finding bridge nodes activated from
+// both sides.
 func (hk *HeatKernelDiffusion) FindImplicitRelations(ctx context.Context, nodeA, nodeB string) ([]Path, error) {
 	// Diffuse from both nodes
 	activationsA, err := hk.DiffuseFromNode(ctx, nodeA, 5)
@@ -174,32 +188,40 @@ func (hk *HeatKernelDiffusion) SimulateInsight(ctx context.Context, query string
 	return insights, nil
 }
 
-// Helper functions
+// ── Internal helpers ─────────────────────────────────────────────────────────
 
-func (hk *HeatKernelDiffusion) diffusionRate(step int) float64 {
-	// Heat diffusion rate decreases with time
-	// Using exponential decay: e^(-t/τ)
-	return math.Exp(-float64(step) / hk.timeParam)
+// buildTValues generates diffusion time values from timeParam and maxSteps.
+// Produces a logarithmic spread of time values capturing multiple resolution
+// scales: small t for local neighbourhood, large t for global structure.
+func (hk *HeatKernelDiffusion) buildTValues(maxSteps int) []float64 {
+	if maxSteps <= 0 {
+		maxSteps = 5
+	}
+
+	// Generate 3 time scales: local (t/10), medium (t), global (t*10)
+	// This mirrors how the old iterative method explored increasingly
+	// distant neighbourhoods with each step.
+	baseT := hk.timeParam
+	if baseT <= 0 {
+		baseT = 1.0
+	}
+
+	tValues := []float64{
+		baseT * 0.1,  // local neighbourhood
+		baseT,        // medium range
+		baseT * 10.0, // global structure
+	}
+
+	// For high maxSteps, add intermediate scales for finer resolution
+	if maxSteps > 5 {
+		tValues = append(tValues, baseT*0.5, baseT*5.0)
+	}
+
+	return tValues
 }
 
-func (hk *HeatKernelDiffusion) getNeighbors(ctx context.Context, nodeID string) ([]string, error) {
-	// Get neighbors via BFS depth 1
-	neighborIDs, err := hk.graphAdapter.Bfs(ctx, nodeID, 1, "")
-	if err != nil {
-		return nil, err
-	}
-	// Filter out the source node itself
-	neighbors := make([]string, 0, len(neighborIDs))
-	for _, nid := range neighborIDs {
-		if nid != nodeID {
-			neighbors = append(neighbors, nid)
-		}
-	}
-	return neighbors, nil
-}
-
+// findShortestPath uses BFS to find a path between two nodes.
 func (hk *HeatKernelDiffusion) findShortestPath(ctx context.Context, startID, endID string) (Path, error) {
-	// Use BFS to find path between nodes
 	neighborIDs, err := hk.graphAdapter.Bfs(ctx, startID, 10, "")
 	if err != nil {
 		return Path{}, err
@@ -216,17 +238,6 @@ func (hk *HeatKernelDiffusion) findShortestPath(ctx context.Context, startID, en
 		Nodes: []string{startID, endID},
 		Hops:  1,
 	}, nil
-}
-
-func sortByActivation(activations []NodeActivation) {
-	// Simple bubble sort (would use sort.Slice in production)
-	for i := 0; i < len(activations); i++ {
-		for j := i + 1; j < len(activations); j++ {
-			if activations[j].Activation > activations[i].Activation {
-				activations[i], activations[j] = activations[j], activations[i]
-			}
-		}
-	}
 }
 
 func findCommonActivations(a, b []NodeActivation) []NodeActivation {

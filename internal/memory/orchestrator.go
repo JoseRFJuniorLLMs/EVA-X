@@ -21,7 +21,7 @@ import (
 type MemoryOrchestrator struct {
 	db            *sql.DB
 	graphAdapter  *nietzscheInfra.GraphAdapter  // NietzscheDB GraphAdapter
-	vectorAdapter *nietzscheInfra.VectorAdapter // NietzscheDB VectorAdapter (substitui Qdrant)
+	vectorAdapter *nietzscheInfra.VectorAdapter // NietzscheDB VectorAdapter (busca vetorial)
 
 	// Pipeline components
 	fdpnEngine      *memory.FDPNEngine
@@ -86,9 +86,9 @@ func (o *MemoryOrchestrator) IngestMemory(ctx context.Context, userID string, co
 		log.Debug().Msg("✅ Krylov: Subspace updated")
 	}
 
-	// STEP 4: Store in Qdrant (with compressed embedding)
-	// TODO: Store in Qdrant with compressed embedding
-	// This would require Qdrant integration
+	// STEP 4: Store in NietzscheDB vector (with compressed embedding)
+	// TODO: Store in NietzscheDB vector with compressed embedding
+	// This would require VectorAdapter integration
 
 	// STEP 5: Store in PostgreSQL
 	// TODO: Store episodic memory in database

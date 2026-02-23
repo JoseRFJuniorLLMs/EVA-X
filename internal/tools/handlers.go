@@ -71,11 +71,12 @@ type ToolsHandler struct {
 	smartHomeService  *smarthome.Service              // ✅ Smart Home (Home Assistant)
 	webhookService    *webhooks.Service               // ✅ Webhooks
 	skillsService     *skills.Service                 // ✅ Runtime Skills
-	graphAdapter      *nietzscheInfra.GraphAdapter     // ✅ NietzscheDB GraphAdapter (substitui Neo4j geral)
-	evaCoreAdapter    *nietzscheInfra.GraphAdapter     // ✅ NietzscheDB GraphAdapter (substitui Neo4j Core — memória pessoal EVA)
-	vectorAdapter     *nietzscheInfra.VectorAdapter   // ✅ NietzscheDB VectorAdapter (substitui Qdrant)
+	graphAdapter      *nietzscheInfra.GraphAdapter     // ✅ NietzscheDB GraphAdapter (grafo geral)
+	evaCoreAdapter    *nietzscheInfra.GraphAdapter     // ✅ NietzscheDB GraphAdapter (grafo Core — memória pessoal EVA)
+	vectorAdapter     *nietzscheInfra.VectorAdapter   // ✅ NietzscheDB VectorAdapter (busca vetorial)
 	nietzscheClient   *nietzscheInfra.Client          // ✅ NietzscheDB gRPC (porta 50051 — grafo + vetores + cache)
-	embedFunc         EmbedFunc                       // ✅ Embedding func (text → vector para Qdrant)
+	manifoldAdapter   *nietzscheInfra.ManifoldAdapter // ✅ NietzscheDB ManifoldAdapter (Riemann/Minkowski/Klein)
+	embedFunc         EmbedFunc                       // ✅ Embedding func (text → vector para NietzscheDB)
 	debugMode         bool                            // ✅ Novas tools só habilitadas em debug
 	swarmRouter       SwarmRouter                     // ✅ Bridge para swarm orchestrator (tools sem case no switch)
 	NotifyFunc        func(idosoID int64, msgType string, payload interface{})
@@ -223,12 +224,12 @@ func (h *ToolsHandler) SetSkillsService(svc *skills.Service) {
 	h.skillsService = svc
 }
 
-// SetGraphAdapter configura o GraphAdapter NietzscheDB (substitui Neo4j geral)
+// SetGraphAdapter configura o GraphAdapter NietzscheDB (grafo geral)
 func (h *ToolsHandler) SetGraphAdapter(adapter *nietzscheInfra.GraphAdapter) {
 	h.graphAdapter = adapter
 }
 
-// SetVectorAdapter configura o VectorAdapter NietzscheDB (substitui Qdrant)
+// SetVectorAdapter configura o VectorAdapter NietzscheDB (busca vetorial)
 func (h *ToolsHandler) SetVectorAdapter(adapter *nietzscheInfra.VectorAdapter) {
 	h.vectorAdapter = adapter
 }
@@ -238,7 +239,12 @@ func (h *ToolsHandler) SetNietzscheClient(client *nietzscheInfra.Client) {
 	h.nietzscheClient = client
 }
 
-// SetEvaCoreAdapter configura o GraphAdapter para eva_core collection (substitui Neo4j Core)
+// SetManifoldAdapter configura o ManifoldAdapter (Riemann/Minkowski/Klein)
+func (h *ToolsHandler) SetManifoldAdapter(adapter *nietzscheInfra.ManifoldAdapter) {
+	h.manifoldAdapter = adapter
+}
+
+// SetEvaCoreAdapter configura o GraphAdapter para eva_core collection (grafo Core)
 func (h *ToolsHandler) SetEvaCoreAdapter(adapter *nietzscheInfra.GraphAdapter) {
 	h.evaCoreAdapter = adapter
 }
@@ -995,10 +1001,10 @@ func (h *ToolsHandler) ExecuteTool(name string, args map[string]interface{}, ido
 		return h.handleQueryPostgreSQL(idosoID, args)
 
 	case "query_nietzsche_graph":
-		return h.handleQueryNeo4j(idosoID, args)
+		return h.handleQueryGraph(idosoID, args)
 
 	case "query_nietzsche_vector":
-		return h.handleQueryQdrant(idosoID, args)
+		return h.handleQueryVector(idosoID, args)
 
 	case "query_nietzsche":
 		return h.handleQueryNietzsche(idosoID, args)
@@ -1138,13 +1144,47 @@ func (h *ToolsHandler) ExecuteTool(name string, args map[string]interface{}, ido
 		return h.handleMCPLearnTopic(idosoID, args)
 
 	case "mcp_query_nietzsche_core":
-		return h.handleMCPQueryNeo4jCore(idosoID, args)
+		return h.handleMCPQueryGraphCore(idosoID, args)
 
 	case "mcp_read_source":
 		return h.handleMCPReadSource(idosoID, args)
 
 	case "mcp_edit_source":
 		return h.handleMCPEditSource(idosoID, args)
+
+	// ============================================================================
+	// NietzscheDB Dialectical Tools — Multi-Manifold Operations
+	// ============================================================================
+
+	case "nietzsche_hegelian_synthesis":
+		return h.handleHegelianSynthesis(idosoID, args)
+
+	case "nietzsche_hegelian_synthesis_multi":
+		return h.handleHegelianSynthesisMulti(idosoID, args)
+
+	case "nietzsche_schrodinger_edges":
+		return h.handleSchrodingerEdges(idosoID, args)
+
+	case "nietzsche_collapse_edge":
+		return h.handleCollapseEdge(idosoID, args)
+
+	case "nietzsche_diffuse_memory":
+		return h.handleDiffuseMemory(idosoID, args)
+
+	case "nietzsche_trigger_sleep":
+		return h.handleTriggerSleep(idosoID, args)
+
+	case "nietzsche_invoke_zaratustra":
+		return h.handleInvokeZaratustra(idosoID, args)
+
+	case "nietzsche_causal_chain":
+		return h.handleCausalChain(idosoID, args)
+
+	case "nietzsche_klein_path":
+		return h.handleKleinPath(idosoID, args)
+
+	case "nietzsche_dream_explore":
+		return h.handleDreamExplore(idosoID, args)
 
 	default:
 		// Bridge para swarm orchestrator — tools registradas nos swarm agents

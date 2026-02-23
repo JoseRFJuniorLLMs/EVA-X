@@ -1,7 +1,7 @@
 // Copyright (C) 2025-2026 Jose R F Junior <web2ajax@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// seed_knowledge populates eva_self_knowledge in PostgreSQL AND Qdrant (semantic search).
+// seed_knowledge populates eva_self_knowledge in PostgreSQL AND NietzscheDB vector (semantic search).
 // Covers ALL 130+ tables, all modules, all concepts, all infrastructure.
 // Run: go run cmd/seed_knowledge/main.go
 package main
@@ -71,7 +71,7 @@ func main() {
 
 	cfg, err := config.Load()
 	if err != nil {
-		log.Printf("WARN: Config load failed (Qdrant disabled): %v", err)
+		log.Printf("WARN: Config load failed (NietzscheDB vector disabled): %v", err)
 	}
 
 	var vectorAdapter *nietzscheInfra.VectorAdapter
@@ -189,7 +189,7 @@ func architectureEntries() []KnowledgeEntry {
 			Content: `EVA-Mind e um sistema de IA companeira para cuidar de idosos, com arquitetura inspirada no cerebro humano.
 
 CAMADAS:
-1. BRAINSTEM — Infraestrutura: config, database (PostgreSQL), graph (Neo4j), vector (Qdrant), auth (JWT), push (Firebase)
+1. BRAINSTEM — Infraestrutura: config, database (PostgreSQL), NietzscheDB (graph + vector + cache), auth (JWT), push (Firebase)
 2. CORTEX — Logica e IA: gemini (voz bidirecional + tools), lacan (psicanalise), personality (Eneagrama 9 tipos), learning (estudo autonomo), self (Core Memory), selfawareness (introspecao), eva_memory (meta-cognitiva), alert (escalation), voice/speaker (fingerprinting)
 3. HIPPOCAMPUS — Memoria: memory (episodica + graph + retrieval), superhuman (12 subsistemas), knowledge (embeddings + wisdom + self-knowledge), habits (tracking), spaced (repetition SM-2)
 4. MOTOR — Acoes: email (SMTP)
@@ -666,11 +666,11 @@ RELATIONSHIPS:
 - HebbianEdge conecta entidades co-ativadas`,
 			Location: "internal/brainstem/infrastructure/nietzsche/", Parent: "arch:overview", Tags: `["nietzschedb", "grafo", "vetores", "personalidade", "lacan"]`, Importance: 10,
 		},
-		// --- Qdrant ---
+		// --- NietzscheDB Vector ---
 		{
-			Type: "database", Key: "db:qdrant", Title: "Qdrant — 20+ Colecoes Vetoriais",
-			Summary: "Qdrant localhost:6333. 20+ colecoes 3072-dim (Cosine). Codigo, docs, sabedoria, learnings, signifiers, self-knowledge, speaker",
-			Content: `Qdrant e o banco vetorial. Host: localhost:6333 (REST) / 6334 (gRPC).
+			Type: "database", Key: "db:nietzsche_vector", Title: "NietzscheDB — 20+ Colecoes Vetoriais",
+			Summary: "NietzscheDB vector via gRPC :50051. 20+ colecoes 3072-dim (Cosine). Codigo, docs, sabedoria, learnings, signifiers, self-knowledge, speaker",
+			Content: `NietzscheDB e o banco vetorial unificado (gRPC :50051).
 
 COLECOES (todas 3072-dim Cosine, exceto speaker):
 CORE:
@@ -691,7 +691,7 @@ SPEAKER (192-dim):
 
 EMBEDDING MODEL: gemini-embedding-001 (Google), 3072 dimensoes
 BUSCA: Cosine similarity, top-K com payload filtering`,
-			Location: "internal/brainstem/infrastructure/vector/", Parent: "arch:overview", Tags: `["qdrant", "vetorial", "embeddings"]`, Importance: 10,
+			Location: "internal/brainstem/infrastructure/nietzsche/", Parent: "arch:overview", Tags: `["nietzschedb", "vetorial", "embeddings"]`, Importance: 10,
 		},
 	}
 }

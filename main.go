@@ -185,7 +185,7 @@ func main() {
 	}
 	defer db.Close()
 
-	// NietzscheDB — single database replacing Neo4j + Qdrant + Redis
+	// NietzscheDB — single unified database (graph + vector + cache)
 	nzClient, err := nietzscheInfra.NewClient(cfg.NietzscheGRPCAddr)
 	if err != nil {
 		log.Fatal().Err(err).Msg("NietzscheDB indisponivel — banco unico obrigatorio")
@@ -206,6 +206,9 @@ func main() {
 	manifoldAdapter := nietzscheInfra.NewManifoldAdapter(nzClient)
 	backupService := nietzscheInfra.NewBackupService(nzClient, 24*time.Hour)
 	cdcListener := nietzscheInfra.NewCDCListener(nzClient)
+	cdcBridge := nietzscheInfra.NewWebSocketBridge(cdcListener, nzClient)
+	cacheAdapter := nietzscheInfra.NewCacheAdapter(nzClient, cfg.NietzscheCacheCollection)
+	log.Info().Str("collection", cfg.NietzscheCacheCollection).Msg("NietzscheDB CacheAdapter created")
 
 	// 3. Serviços Base
 	pushService, err := push.NewFirebaseService(cfg.FirebaseCredentialsPath)
@@ -233,6 +236,8 @@ func main() {
 	if embedErr != nil {
 		log.Warn().Err(embedErr).Msg("EmbeddingService indisponivel - Wisdom desabilitada")
 	} else {
+		// Wire NietzscheDB CacheAdapter into embedding caches
+		embedSvc.SetCacheAdapter(cacheAdapter)
 		wisdomSvc = knowledge.NewWisdomService(vectorAdapter, embedSvc)
 		log.Info().Msg("Wisdom Service inicializado")
 	}
@@ -603,6 +608,9 @@ func main() {
 	router.HandleFunc("/ws/browser", server.handleBrowserVoice)
 	router.HandleFunc("/ws/eva", server.handleEvaChat)
 	router.HandleFunc("/ws/logs", server.handleLogStream)
+	router.HandleFunc("/ws/perspektive", func(w http.ResponseWriter, r *http.Request) {
+		handlePerspektiveWS(w, r, cdcBridge)
+	})
 	// Rota legado para Twilio Media Stream
 	router.HandleFunc("/calls/stream/{agendamento_id}", server.voiceHandler.HandleMediaStream)
 
@@ -780,6 +788,7 @@ func main() {
 	_ = audioBuffer
 	_ = algoAdapter
 	_ = manifoldAdapter
+	_ = cacheAdapter
 
 	// NietzscheDB Backup Service (daily automated backups)
 	go func() {
@@ -792,7 +801,7 @@ func main() {
 	}()
 	log.Info().Msg("NietzscheDB Backup Service started (daily)")
 
-	// NietzscheDB CDC Listener (change data capture for audit log)
+	// NietzscheDB CDC Listener + WebSocket Bridge (change data capture for audit log + Perspektive)
 	cdcListener.Subscribe("eva_core", func(event nietzsche.CDCEvent) {
 		log.Debug().
 			Str("event_type", event.EventType).
@@ -803,12 +812,12 @@ func main() {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Error().Interface("panic", r).Msg("CRITICO: CDC Listener panic")
+				log.Error().Interface("panic", r).Msg("CRITICO: CDC Bridge panic")
 			}
 		}()
-		cdcListener.Start(ctx)
+		cdcBridge.Start(ctx, []string{"patient_graph", "eva_core"})
 	}()
-	log.Info().Msg("NietzscheDB CDC Listener started (eva_core)")
+	log.Info().Msg("NietzscheDB CDC Bridge started (patient_graph, eva_core) — /ws/perspektive ready")
 
 	go func() {
 		log.Info().Msgf("EVA rodando na porta %s (NietzscheDB)", cfg.Port)

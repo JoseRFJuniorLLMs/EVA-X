@@ -660,7 +660,7 @@ type SelfKnowledgeItem struct {
 	Importance   int    `json:"importance"`
 }
 
-// SearchSelfKnowledge searches EVA's self-knowledge using semantic search (Qdrant)
+// SearchSelfKnowledge searches EVA's self-knowledge using semantic search (NietzscheDB vector)
 // with PostgreSQL ILIKE as fallback.
 func (s *SelfAwarenessService) SearchSelfKnowledge(ctx context.Context, query string, limit int) ([]SelfKnowledgeItem, error) {
 	if limit <= 0 {
@@ -813,7 +813,7 @@ func (s *SelfAwarenessService) Introspect(ctx context.Context) (*IntrospectionRe
 
 // ======================== Code Indexing (AST) ========================
 
-// IndexCodebase indexes all .go files in the given base path into Qdrant
+// IndexCodebase indexes all .go files in the given base path into NietzscheDB vector
 // using full Go AST parsing (structs with fields, method signatures, interfaces, constants).
 func (s *SelfAwarenessService) IndexCodebase(ctx context.Context, basePath string) (int, error) {
 	if s.vectorAdapter == nil || s.embedSvc == nil {
@@ -928,7 +928,7 @@ func (s *SelfAwarenessService) IndexCodebase(ctx context.Context, basePath strin
 
 // ======================== Docs Indexing (.md) ========================
 
-// IndexDocs indexes all .md files in the given base path into Qdrant.
+// IndexDocs indexes all .md files in the given base path into NietzscheDB vector.
 // Large files are split into chunks for better semantic search.
 func (s *SelfAwarenessService) IndexDocs(ctx context.Context, basePath string) (int, error) {
 	if s.vectorAdapter == nil || s.embedSvc == nil {

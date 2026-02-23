@@ -165,7 +165,7 @@ func (ebe *EthicalBoundaryEngine) AnalyzeEthicalBoundaries(patientID int64, conv
 		return event, nil
 	}
 
-	// 3. Verificar dominância de significante "EVA" via Neo4j
+	// 3. Verificar dominância de significante "EVA" via NietzscheDB graph
 	evaDominance, err := ebe.checkSignifierDominance(patientID)
 	if err == nil && evaDominance > 0.6 {
 		event := &EthicalEvent{
