@@ -12,7 +12,8 @@ import (
 	"time"
 )
 
-// Neo4jClient interface para operações no grafo (entity resolution)
+// Neo4jClient interface para operações no grafo NietzscheDB (entity resolution)
+// NOTE: Name kept for backward compatibility; actual backend is NietzscheDB.
 type Neo4jClient interface {
 	ExecuteQuery(ctx context.Context, query string, params map[string]interface{}) ([]map[string]interface{}, error)
 }

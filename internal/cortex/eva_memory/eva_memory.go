@@ -43,7 +43,7 @@ func New(graphAdapter *nietzscheInfra.GraphAdapter) *EvaMemory {
 }
 
 // InitSchema creates initial nodes/structure in NietzscheDB for the EVA graph.
-// NietzscheDB does not need explicit constraints/indexes like Neo4j --
+// NietzscheDB does not need explicit constraints/indexes --
 // collections are created at startup via EnsureCollections.
 // This method is kept for API compatibility but is now a no-op.
 func (em *EvaMemory) InitSchema(ctx context.Context) error {

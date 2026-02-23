@@ -1,7 +1,7 @@
 // Copyright (C) 2025-2026 Jose R F Junior <web2ajax@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// index_code indexes all EVA-Mind .go files AND .md docs into Qdrant for semantic search.
+// index_code indexes all EVA-Mind .go files AND .md docs into NietzscheDB vector for semantic search.
 // Uses full Go AST parsing (structs with fields, method signatures, interfaces, constants).
 // Run: go run cmd/index_code/main.go [basePath]
 package main

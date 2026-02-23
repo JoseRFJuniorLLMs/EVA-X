@@ -19,7 +19,7 @@ import (
 type WisdomSource struct {
 	Name       string // Nome para CLI
 	File       string // Caminho do arquivo
-	Collection string // Nome da coleção no Qdrant
+	Collection string // Nome da coleção no NietzscheDB vector
 	Tradition  string // Tradição (sufi, quarto_caminho, zen, etc)
 	Type       string // Tipo (teaching, story, exercise, poem, koan)
 	Tags       []string

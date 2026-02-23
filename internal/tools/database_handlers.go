@@ -93,10 +93,10 @@ func min(a, b int) int {
 }
 
 // ============================================================================
-// 🔗 NIETZSCHEDB GRAPH — Query NQL (substitui Neo4j Cypher)
+// 🔗 NIETZSCHEDB GRAPH — Query NQL
 // ============================================================================
 
-func (h *ToolsHandler) handleQueryNeo4j(idosoID int64, args map[string]interface{}) (map[string]interface{}, error) {
+func (h *ToolsHandler) handleQueryGraph(idosoID int64, args map[string]interface{}) (map[string]interface{}, error) {
 	query, _ := args["query"].(string)
 	if query == "" {
 		return map[string]interface{}{"error": "Informe a query NQL"}, nil
@@ -150,10 +150,10 @@ func (h *ToolsHandler) handleQueryNeo4j(idosoID int64, args map[string]interface
 }
 
 // ============================================================================
-// 🔍 QDRANT — Busca Vetorial
+// 🔍 NIETZSCHEDB — Busca Vetorial
 // ============================================================================
 
-func (h *ToolsHandler) handleQueryQdrant(idosoID int64, args map[string]interface{}) (map[string]interface{}, error) {
+func (h *ToolsHandler) handleQueryVector(idosoID int64, args map[string]interface{}) (map[string]interface{}, error) {
 	collection, _ := args["collection"].(string)
 	query, _ := args["query"].(string)
 

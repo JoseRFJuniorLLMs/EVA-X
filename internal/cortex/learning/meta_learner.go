@@ -275,10 +275,10 @@ func (ml *MetaLearner) adjustParameters(pattern string, failCount int) {
 		log.Printf("[META-LEARNER] Threshold ajustado: %.2f -> %.2f", current, ml.parameterTuning["similarity_threshold"])
 
 	case pattern == "causal_nietzsche_causal":
-		// Se queries causais falham no Neo4j, aumentar profundidade
+		// Se queries causais falham no NietzscheDB graph, aumentar profundidade
 		current := ml.parameterTuning["nietzsche_depth"]
 		ml.parameterTuning["nietzsche_depth"] = math.Min(current+1, 4)
-		log.Printf("[META-LEARNER] Neo4j depth ajustado: %.0f -> %.0f", current, ml.parameterTuning["nietzsche_depth"])
+		log.Printf("[META-LEARNER] NietzscheDB graph depth ajustado: %.0f -> %.0f", current, ml.parameterTuning["nietzsche_depth"])
 	}
 }
 

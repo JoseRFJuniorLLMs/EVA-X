@@ -32,10 +32,11 @@ const (
 // Integra TODOS os módulos lacanianos em um contexto coerente para o Gemini
 type UnifiedRetrieval struct {
 	// Módulos Lacanianos
-	interpretation *InterpretationService
-	embedding      *knowledge.EmbeddingService
-	fdpn           *FDPNEngine
-	zeta           *ZetaRouter
+	interpretation    *InterpretationService
+	embedding         *knowledge.EmbeddingService
+	fdpn              *FDPNEngine
+	zeta              *ZetaRouter
+	conflictSynthesis *ConflictSynthesisService
 
 	// 📚 Serviço de Sabedoria (histórias, fábulas, ensinamentos)
 	wisdom *knowledge.WisdomService
@@ -173,8 +174,9 @@ type UnifiedContext struct {
 	// SIMBÓLICO (Linguagem, Estrutura, Grafo)
 	LacanianAnalysis *InterpretationResult // Análise lacaniana completa
 	DemandGraph      string                // Grafo de demandas (FDPN)
-	SignifierChains  string                // Cadeias de significantes (Qdrant)
+	SignifierChains  string                // Cadeias de significantes (NietzscheDB vector)
 	CausalAnalysis   string                // Cadeia causal Minkowski (ds2)
+	ConflictHistory  string                // Historico de conflitos (Riemannian synthesis)
 
 	// IMAGINÁRIO (Narrativa, Memória, História)
 	RecentMemories []string                  // Memórias episódicas recentes
@@ -182,7 +184,7 @@ type UnifiedContext struct {
 	Patterns       []*types.RecurrentPattern // Padrões detectados
 
 	// 📚 SABEDORIA (Histórias, Fábulas, Ensinamentos, Técnicas)
-	WisdomContext string // Contexto de sabedoria relevante (Qdrant)
+	WisdomContext string // Contexto de sabedoria relevante (NietzscheDB vector)
 
 	// INTERVENÇÃO (Ética + Postura)
 	EthicalStance *EthicalStance
@@ -214,6 +216,16 @@ func NewUnifiedRetrieval(
 	fdpn := NewFDPNEngine(graphAdapter)
 	zeta := NewZetaRouter(interpretation)
 
+	// Initialize ConflictSynthesisService for Riemannian conflict resolution
+	var conflictSynthesis *ConflictSynthesisService
+	if graphAdapter != nil {
+		nClient := graphAdapter.Client()
+		manifoldAdapter := nietzscheInfra.NewManifoldAdapter(nClient)
+		conflictSynthesis = NewConflictSynthesisService(graphAdapter, manifoldAdapter, nClient)
+		interpretation.SetConflictSynthesis(conflictSynthesis)
+		log.Printf("[UnifiedRetrieval] ConflictSynthesisService inicializado (Riemannian synthesis)")
+	}
+
 	// Inicializar modo debug para o Criador
 	debugMode := NewDebugMode(db)
 
@@ -234,19 +246,20 @@ func NewUnifiedRetrieval(
 	log.Printf("[UnifiedRetrieval] PromptCache inicializado (TTL 5min)")
 
 	ret := &UnifiedRetrieval{
-		interpretation: interpretation,
-		embedding:      embedding,
-		fdpn:           fdpn,
-		zeta:           zeta,
-		wisdom:         wisdomService,
-		debugMode:      debugMode,
-		creatorProfile: creatorProfile,
-		promptCache:    promptCache,
-		mcp:            mcp.NewMCPClient(),
-		db:             db,
-		graph:          graphAdapter,
-		vector:         vectorAdapter,
-		cfg:            cfg,
+		interpretation:    interpretation,
+		embedding:         embedding,
+		fdpn:              fdpn,
+		zeta:              zeta,
+		conflictSynthesis: conflictSynthesis,
+		wisdom:            wisdomService,
+		debugMode:         debugMode,
+		creatorProfile:    creatorProfile,
+		promptCache:       promptCache,
+		mcp:               mcp.NewMCPClient(),
+		db:                db,
+		graph:             graphAdapter,
+		vector:            vectorAdapter,
+		cfg:               cfg,
 	}
 
 	// Registrar servidor MCP padrão para ferramentas externas (Google Search, etc)
@@ -341,7 +354,7 @@ func (u *UnifiedRetrieval) BuildUnifiedContext(
 		mu.Unlock()
 	}()
 
-	// 5. CADEIAS SEMÂNTICAS (Qdrant) - paralelo
+	// 5. CADEIAS SEMÂNTICAS (NietzscheDB vector) - paralelo
 	if u.embedding != nil {
 		wg.Add(1)
 		go func() {
@@ -353,7 +366,7 @@ func (u *UnifiedRetrieval) BuildUnifiedContext(
 		}()
 	}
 
-	// 6. SABEDORIA (Qdrant) - paralelo
+	// 6. SABEDORIA (NietzscheDB vector) - paralelo
 	if u.wisdom != nil {
 		wg.Add(1)
 		go func() {
@@ -432,6 +445,11 @@ func (u *UnifiedRetrieval) BuildUnifiedContext(
 		if addressee != ADDRESSEE_UNKNOWN {
 			unified.DemandGraph += "\n" + GetClinicalGuidanceForAddressee(addressee)
 		}
+	}
+
+	// CONFLICT HISTORY (Riemannian Synthesis - cross-session continuity)
+	if u.conflictSynthesis != nil {
+		unified.ConflictHistory = u.conflictSynthesis.BuildConflictHistoryContext(ctx, idosoID)
 	}
 
 	// VERIFICAÇÃO MODO DEBUG (Criador)
@@ -1068,6 +1086,12 @@ func (u *UnifiedRetrieval) buildIntegratedPrompt(unified *UnifiedContext) string
 		builder.WriteString("▌CAUSALIDADE - ORIGEM DO SIGNIFICANTE:\n")
 		builder.WriteString(unified.CausalAnalysis)
 		builder.WriteString("\n\n")
+	}
+
+	if unified.ConflictHistory != "" {
+		builder.WriteString("▌SINTESES RIEMANNIANAS - CONFLITOS ANTERIORES:\n")
+		builder.WriteString(unified.ConflictHistory)
+		builder.WriteString("\n")
 	}
 
 	// IMAGINÁRIO (Narrativa, Memória)

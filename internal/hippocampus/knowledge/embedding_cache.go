@@ -1,4 +1,4 @@
-// Copyright (C) 2025-2026 Jose R F Junior <web2ajax@gmail.com>
+// Copyright (C) 2025-2026 Jose R F Junior
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 package knowledge
@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/hex"
-	"encoding/json"
 	"log"
 	"sync"
 	"time"
@@ -18,18 +17,20 @@ import (
 // ============================================================================
 // PERFORMANCE FIX: Cache de Embeddings
 // Issue: Cada texto gera nova chamada Gemini API (custo + latencia)
-// Fix: Cache Redis com TTL 24h + cache local LRU
+// Fix: NietzscheDB CacheAdapter com TTL 24h + cache local LRU
 // Impacto esperado: 90% reducao em chamadas de API
 // ============================================================================
 
-// EmbeddingCache gerencia cache de embeddings em dois niveis
+// EmbeddingCache gerencia cache de embeddings em dois niveis:
+//   - L1: local in-memory LRU (1000 items, fastest)
+//   - L2: NietzscheDB CacheAdapter (eva_cache collection, persistent, TTL-based)
 type EmbeddingCache struct {
-	cache     *nietzscheInfra.CacheStore
-	local     *localCache
-	ttl       time.Duration
-	hits      int64
-	misses    int64
-	mu        sync.RWMutex
+	adapter *nietzscheInfra.CacheAdapter
+	local   *localCache
+	ttl     time.Duration
+	hits    int64
+	misses  int64
+	mu      sync.RWMutex
 }
 
 // localCache implementa cache LRU em memoria
@@ -44,10 +45,11 @@ type cacheItem struct {
 	expiresAt time.Time
 }
 
-// NewEmbeddingCache cria um novo cache de embeddings
-func NewEmbeddingCache(cacheStore *nietzscheInfra.CacheStore) *EmbeddingCache {
+// NewEmbeddingCache cria um novo cache de embeddings.
+// adapter may be nil; in that case only the local LRU layer is active.
+func NewEmbeddingCache(adapter *nietzscheInfra.CacheAdapter) *EmbeddingCache {
 	return &EmbeddingCache{
-		cache: cacheStore,
+		adapter: adapter,
 		local: &localCache{
 			items:    make(map[string]*cacheItem),
 			maxItems: 1000, // Cache local com max 1000 embeddings
@@ -62,7 +64,7 @@ func (c *EmbeddingCache) cacheKey(text string) string {
 	return "emb:" + hex.EncodeToString(hash[:])
 }
 
-// Get busca embedding no cache (local primeiro, depois Redis)
+// Get busca embedding no cache (local primeiro, depois NietzscheDB)
 func (c *EmbeddingCache) Get(ctx context.Context, text string) ([]float32, bool) {
 	key := c.cacheKey(text)
 
@@ -72,17 +74,15 @@ func (c *EmbeddingCache) Get(ctx context.Context, text string) ([]float32, bool)
 		return emb, true
 	}
 
-	// 2. Tentar CacheStore se nao encontrou localmente
-	if c.cache != nil {
-		data, err := c.cache.Get(ctx, key)
-		if err == nil {
-			var embedding []float32
-			if err := json.Unmarshal([]byte(data), &embedding); err == nil {
-				// Atualizar cache local
-				c.local.set(key, embedding, c.ttl)
-				c.recordHit()
-				return embedding, true
-			}
+	// 2. Tentar CacheAdapter (NietzscheDB) se nao encontrou localmente
+	if c.adapter != nil {
+		var embedding []float32
+		found, err := c.adapter.GetJSON(ctx, key, &embedding)
+		if err == nil && found {
+			// Atualizar cache local
+			c.local.set(key, embedding, c.ttl)
+			c.recordHit()
+			return embedding, true
 		}
 	}
 
@@ -97,15 +97,11 @@ func (c *EmbeddingCache) Set(ctx context.Context, text string, embedding []float
 	// 1. Salvar no cache local
 	c.local.set(key, embedding, c.ttl)
 
-	// 2. Salvar no CacheStore (async para nao bloquear)
-	if c.cache != nil {
+	// 2. Salvar no CacheAdapter (async para nao bloquear)
+	if c.adapter != nil {
 		go func() {
-			data, err := json.Marshal(embedding)
-			if err != nil {
-				return
-			}
-			if err := c.cache.Set(ctx, key, string(data), c.ttl); err != nil {
-				log.Printf("⚠️ [CACHE] Erro ao salvar embedding no cache: %v", err)
+			if err := c.adapter.SetJSON(ctx, key, embedding, c.ttl); err != nil {
+				log.Printf("[CACHE] Erro ao salvar embedding no NietzscheDB cache: %v", err)
 			}
 		}()
 	}
@@ -195,17 +191,18 @@ func (lc *localCache) evictOldest() {
 
 // SignifierCache gerencia cache de cadeias de significantes
 type SignifierCache struct {
-	cache *nietzscheInfra.CacheStore
-	local *sync.Map
-	ttl   time.Duration
+	adapter *nietzscheInfra.CacheAdapter
+	local   *sync.Map
+	ttl     time.Duration
 }
 
-// NewSignifierCache cria cache para signifiers
-func NewSignifierCache(cacheStore *nietzscheInfra.CacheStore) *SignifierCache {
+// NewSignifierCache cria cache para signifiers.
+// adapter may be nil; in that case only the local sync.Map layer is active.
+func NewSignifierCache(adapter *nietzscheInfra.CacheAdapter) *SignifierCache {
 	return &SignifierCache{
-		cache: cacheStore,
-		local: &sync.Map{},
-		ttl:   5 * time.Minute, // TTL menor pois muda mais frequentemente
+		adapter: adapter,
+		local:   &sync.Map{},
+		ttl:     5 * time.Minute, // TTL menor pois muda mais frequentemente
 	}
 }
 
@@ -224,15 +221,13 @@ func (sc *SignifierCache) GetSignifiers(ctx context.Context, idosoID int64, text
 		return val.([]SignifierChain), true
 	}
 
-	// CacheStore
-	if sc.cache != nil {
-		data, err := sc.cache.Get(ctx, key)
-		if err == nil {
-			var chains []SignifierChain
-			if err := json.Unmarshal([]byte(data), &chains); err == nil {
-				sc.local.Store(key, chains)
-				return chains, true
-			}
+	// CacheAdapter (NietzscheDB)
+	if sc.adapter != nil {
+		var chains []SignifierChain
+		found, err := sc.adapter.GetJSON(ctx, key, &chains)
+		if err == nil && found {
+			sc.local.Store(key, chains)
+			return chains, true
 		}
 	}
 
@@ -245,13 +240,11 @@ func (sc *SignifierCache) SetSignifiers(ctx context.Context, idosoID int64, text
 
 	sc.local.Store(key, chains)
 
-	if sc.cache != nil {
+	if sc.adapter != nil {
 		go func() {
-			data, err := json.Marshal(chains)
-			if err != nil {
-				return
+			if err := sc.adapter.SetJSON(ctx, key, chains, sc.ttl); err != nil {
+				log.Printf("[CACHE] Erro ao salvar signifiers no NietzscheDB cache: %v", err)
 			}
-			sc.cache.Set(ctx, key, string(data), sc.ttl)
 		}()
 	}
 }

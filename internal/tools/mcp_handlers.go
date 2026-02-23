@@ -109,7 +109,7 @@ func (h *ToolsHandler) handleMCPRecall(idosoID int64, args map[string]interface{
 }
 
 // ============================================================================
-// 📚 mcp_teach_eva — Ensina algo a EVA (grava no Neo4j Core como CoreMemory)
+// 📚 mcp_teach_eva — Ensina algo a EVA (grava no NietzscheDB Core como CoreMemory)
 // ============================================================================
 
 func (h *ToolsHandler) handleMCPTeachEva(idosoID int64, args map[string]interface{}) (map[string]interface{}, error) {
@@ -259,10 +259,10 @@ func (h *ToolsHandler) handleMCPLearnTopic(idosoID int64, args map[string]interf
 }
 
 // ============================================================================
-// 🗄️ mcp_query_neo4j_core — Query grafo no NietzscheDB Core (gRPC :50051)
+// 🗄️ mcp_query_graph_core — Query grafo no NietzscheDB Core (gRPC :50051)
 // ============================================================================
 
-func (h *ToolsHandler) handleMCPQueryNeo4jCore(idosoID int64, args map[string]interface{}) (map[string]interface{}, error) {
+func (h *ToolsHandler) handleMCPQueryGraphCore(idosoID int64, args map[string]interface{}) (map[string]interface{}, error) {
 	query, _ := args["query"].(string)
 	if query == "" {
 		return map[string]interface{}{"error": "Informe a query NQL"}, nil

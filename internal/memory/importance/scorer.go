@@ -26,7 +26,7 @@ func NewScorer(db *sql.DB) *Scorer {
 type ImportanceFactors struct {
 	Frequency          float64 // How often accessed (0-1)
 	Recency            float64 // How recent (0-1)
-	GraphCentrality    float64 // Neo4j connections (0-1)
+	GraphCentrality    float64 // NietzscheDB graph connections (0-1)
 	EmotionalIntensity float64 // Emotional weight (0-1)
 	GoalRelevance      float64 // Relevance to patient goals (0-1)
 }
@@ -73,8 +73,8 @@ func (s *Scorer) CalculateImportance(ctx context.Context, memoryID int64) (*Memo
 	// Exponential decay: recent = 1.0, 30 days ago = 0.5, 90 days = 0.1
 	factors.Recency = math.Exp(-daysSinceCreation / 30.0)
 
-	// 3. Graph Centrality: How connected in Neo4j
-	// TODO: Query Neo4j for degree centrality
+	// 3. Graph Centrality: How connected in NietzscheDB graph
+	// TODO: Query NietzscheDB graph for degree centrality
 	// For now, use placeholder
 	factors.GraphCentrality = 0.5
 

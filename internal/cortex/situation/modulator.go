@@ -34,11 +34,25 @@ type Event struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
+// GeometricSituation extends Situation with multi-manifold geometric context.
+// It embeds the classic rules-based Situation and adds hyperbolic/Minkowski metadata
+// from NietzscheDB's multi-manifold engine for deeper emotion analysis.
+type GeometricSituation struct {
+	Situation                        // embed classic rules-based situation
+	ManifoldType      string         `json:"manifold_type"`      // "poincare", "minkowski", "klein"
+	PoincareDepth     float64        `json:"poincare_depth"`     // 0=center(abstract), ~1=edge(specific)
+	MinkowskiCone     string         `json:"minkowski_cone"`     // "past_light_cone", "future_light_cone"
+	RiskHierarchy     []string       `json:"risk_hierarchy"`     // ancestor nodes (Poincare, more abstract)
+	CausalAntecedents []string       `json:"causal_antecedents"` // events in past cone (Minkowski)
+}
+
 // SituationalModulator detecta e modula contexto situacional
 type SituationalModulator struct {
 	cache            *nietzscheInfra.CacheStore
 	cacheTTL         time.Duration
 	stressorKeywords map[string][]string
+	manifold         *nietzscheInfra.ManifoldAdapter
+	graphAdapter     *nietzscheInfra.GraphAdapter
 }
 
 // Config para o modulator
@@ -61,6 +75,18 @@ func NewModulator(cache *nietzscheInfra.CacheStore, config *Config) *Situational
 		cacheTTL:         config.CacheTTL,
 		stressorKeywords: config.StressorKeywords,
 	}
+}
+
+// SetManifoldAdapter injects the multi-manifold adapter for geometric inference.
+// Optional — InferGeometric() degrades gracefully when nil.
+func (m *SituationalModulator) SetManifoldAdapter(ma *nietzscheInfra.ManifoldAdapter) {
+	m.manifold = ma
+}
+
+// SetGraphAdapter injects the graph adapter for BFS hierarchy traversal.
+// Optional — InferGeometric() degrades gracefully when nil.
+func (m *SituationalModulator) SetGraphAdapter(ga *nietzscheInfra.GraphAdapter) {
+	m.graphAdapter = ga
 }
 
 // Infer detecta situação atual (<10ms)
@@ -101,6 +127,102 @@ func (m *SituationalModulator) Infer(ctx context.Context, userID string, recentT
 	}
 
 	return sit, nil
+}
+
+// InferGeometric performs geometric emotion analysis using NietzscheDB's multi-manifold engine.
+// It first runs the classic rules-based Infer() (<10ms), then enriches the result with
+// hyperbolic (Poincare) depth and/or Minkowski causal context depending on detected stressors.
+//
+// Strategy selection:
+//   - crisis/hospital → Minkowski: CausalHistory() for past light cone antecedents
+//   - grief/disease   → Poincare: BFS upward in risk hierarchy (abstract ancestors)
+//   - default         → basic Poincare with patient node depth
+//
+// InferGeometric does NOT replace Infer() — it is an optional upgrade for callers
+// that have manifold/graph adapters available.
+func (m *SituationalModulator) InferGeometric(ctx context.Context, patientID string, collection string) (*GeometricSituation, error) {
+	// 1. Run classic rules-based inference first (always <10ms)
+	baseSit, err := m.Infer(ctx, patientID, "", nil)
+	if err != nil {
+		return nil, fmt.Errorf("geometric: base infer failed: %w", err)
+	}
+
+	// 2. Check geometric cache (5min TTL, separate key from base Infer)
+	geoCacheKey := fmt.Sprintf("geo_situation:%s:%s", patientID, collection)
+	if m.cache != nil {
+		if cached, cacheErr := m.cache.Get(ctx, geoCacheKey); cacheErr == nil {
+			var geo GeometricSituation
+			if json.Unmarshal([]byte(cached), &geo) == nil {
+				return &geo, nil
+			}
+		}
+	}
+
+	// 3. Build geometric result embedding the base situation
+	geo := &GeometricSituation{
+		Situation:    baseSit,
+		ManifoldType: "poincare", // default manifold
+	}
+
+	// 4. Strategy: crisis/hospital → Minkowski causal analysis
+	isCrisis := contains(baseSit.Stressors, "crise") || contains(baseSit.Stressors, "hospital")
+	isGrief := contains(baseSit.Stressors, "luto") || contains(baseSit.Stressors, "doença")
+
+	if isCrisis && m.manifold != nil {
+		geo.ManifoldType = "minkowski"
+		geo.MinkowskiCone = "past_light_cone"
+
+		// Trace causal history: what events led to this crisis?
+		causalResult, causalErr := m.manifold.CausalHistory(ctx, patientID, collection)
+		if causalErr == nil && causalResult != nil {
+			geo.CausalAntecedents = causalResult.ChainIDs
+		}
+
+		// Also get Poincare depth for severity assessment
+		geo.PoincareDepth = m.getPatientDepth(ctx, patientID, collection)
+
+	} else if isGrief && m.graphAdapter != nil {
+		// 5. Strategy: grief/disease → Poincare BFS for risk hierarchy
+		geo.ManifoldType = "poincare"
+
+		// BFS upward to find abstract ancestor concepts (risk factors)
+		ancestors, bfsErr := m.graphAdapter.BfsWithEdgeType(ctx, patientID, "RISK_FACTOR", 5, collection)
+		if bfsErr == nil {
+			geo.RiskHierarchy = ancestors
+		}
+
+		// Get depth to understand abstraction level
+		geo.PoincareDepth = m.getPatientDepth(ctx, patientID, collection)
+
+	} else {
+		// 6. Default: basic Poincare with patient node depth
+		geo.ManifoldType = "poincare"
+		geo.PoincareDepth = m.getPatientDepth(ctx, patientID, collection)
+	}
+
+	// 7. Cache geometric result (5min TTL)
+	if m.cache != nil {
+		data, _ := json.Marshal(geo)
+		m.cache.Set(ctx, geoCacheKey, string(data), m.cacheTTL)
+	}
+
+	return geo, nil
+}
+
+// getPatientDepth retrieves the Poincare ball depth of a patient node.
+// Depth 0 = center (abstract/general), ~1 = edge (specific/concrete).
+// Returns 0.0 if the node cannot be found or adapters are nil.
+func (m *SituationalModulator) getPatientDepth(ctx context.Context, patientID string, collection string) float64 {
+	if m.graphAdapter == nil {
+		return 0.0
+	}
+
+	node, err := m.graphAdapter.GetNode(ctx, patientID, collection)
+	if err != nil || !node.Found {
+		return 0.0
+	}
+
+	return float64(node.Depth)
 }
 
 // ModulateWeights ajusta pesos de personality por contexto (<1ms)

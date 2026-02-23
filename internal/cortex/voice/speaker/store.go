@@ -59,12 +59,12 @@ func NewSpeakerStore(db *database.DB, vectorAdapter *nietzscheInfra.VectorAdapte
 	return &SpeakerStore{db: db, vectorAdapter: vectorAdapter}
 }
 
-// EnsureQdrantCollection is a no-op - NietzscheDB handles collection management.
-func (s *SpeakerStore) EnsureQdrantCollection(ctx context.Context) error {
+// EnsureVectorCollection is a no-op - NietzscheDB handles collection management.
+func (s *SpeakerStore) EnsureVectorCollection(ctx context.Context) error {
 	return nil
 }
 
-// FindSpeaker searches for a matching speaker by embedding similarity via Qdrant.
+// FindSpeaker searches for a matching speaker by embedding similarity via NietzscheDB vector.
 // Returns the best matching profile, similarity score, and error.
 // Returns nil profile if no match above threshold.
 func (s *SpeakerStore) FindSpeaker(ctx context.Context, embedding []float32) (*SpeakerProfile, float64, error) {
@@ -109,7 +109,7 @@ func (s *SpeakerStore) FindSpeaker(ctx context.Context, embedding []float32) (*S
 	return nil, score, nil
 }
 
-// EnrollSpeaker creates a new speaker profile and stores the embedding in Qdrant.
+// EnrollSpeaker creates a new speaker profile and stores the embedding in NietzscheDB vector.
 func (s *SpeakerStore) EnrollSpeaker(ctx context.Context, profile *SpeakerProfile, embedding []float32) (int, error) {
 	// Insert profile in PostgreSQL
 	query := `
@@ -130,17 +130,17 @@ func (s *SpeakerStore) EnrollSpeaker(ctx context.Context, profile *SpeakerProfil
 		return 0, fmt.Errorf("failed to insert speaker profile: %w", err)
 	}
 
-	// Store embedding in Qdrant
+	// Store embedding in NietzscheDB vector
 	if s.vectorAdapter != nil {
-		s.storeEmbeddingQdrant(ctx, id, embedding)
+		s.storeEmbeddingVector(ctx, id, embedding)
 	}
 
 	log.Info().Int("speaker_id", id).Str("name", profile.Name).Msg("Speaker enrolled")
 	return id, nil
 }
 
-// storeEmbedding stores an embedding in NietzscheDB.
-func (s *SpeakerStore) storeEmbeddingQdrant(ctx context.Context, speakerID int, embedding []float32) {
+// storeEmbeddingVector stores an embedding in NietzscheDB.
+func (s *SpeakerStore) storeEmbeddingVector(ctx context.Context, speakerID int, embedding []float32) {
 	pointID := uuid.New().String()
 
 	payload := map[string]interface{}{

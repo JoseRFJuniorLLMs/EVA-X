@@ -148,7 +148,7 @@ func TestMCPToEVA_CriticalMappings(t *testing.T) {
 		"eva_identity":         "mcp_get_identity",
 		"eva_learn_topic":      "mcp_learn_topic",
 		"eva_query_postgres":   "query_postgresql",
-		"eva_query_neo4j_core": "mcp_query_neo4j_core",
+		"eva_query_nietzsche_core": "mcp_query_nietzsche_core",
 		"eva_read_source":      "mcp_read_source",
 		"eva_edit_source":      "mcp_edit_source",
 	}

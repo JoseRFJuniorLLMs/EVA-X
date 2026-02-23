@@ -47,22 +47,34 @@ func NewEmbeddingService(cfg *config.Config, vectorAdapter *nietzscheInfra.Vecto
 		vectorAdapter:  vectorAdapter,
 		httpClient:     &http.Client{Timeout: 10 * time.Second},
 		collectionName: "signifier_chains",
-		// PERFORMANCE FIX: Inicializar caches (sem Redis por enquanto)
+		// Caches initialized with nil adapter (local LRU only).
+		// Call SetCacheAdapter() to enable persistent NietzscheDB caching.
 		embeddingCache: NewEmbeddingCache(nil),
 		signifierCache: NewSignifierCache(nil),
 	}
 
-	log.Printf("✅ [EMBEDDING] Service initialized with caching enabled")
+	log.Printf("[EMBEDDING] Service initialized with local LRU caching")
 	return svc, nil
 }
 
-// SetRedisClient configura o cliente Redis para cache distribuido
-func (e *EmbeddingService) SetRedisClient(redisClient interface{}) {
-	// Type assertion para redis.Client
-	if rc, ok := redisClient.(interface{ Get(context.Context, string) interface{} }); ok {
-		_ = rc // Usar quando tivermos interface completa
-		log.Printf("✅ [EMBEDDING] Redis cache enabled")
+// SetCacheAdapter wires a NietzscheDB CacheAdapter into the embedding and signifier caches.
+// This enables the persistent L2 cache layer (NietzscheDB eva_cache collection).
+// Must be called after NewEmbeddingService if distributed caching is desired.
+func (e *EmbeddingService) SetCacheAdapter(adapter *nietzscheInfra.CacheAdapter) {
+	if adapter == nil {
+		return
 	}
+	e.embeddingCache = NewEmbeddingCache(adapter)
+	e.signifierCache = NewSignifierCache(adapter)
+	log.Printf("[EMBEDDING] NietzscheDB CacheAdapter enabled (collection: %s)", adapter.Collection())
+}
+
+// SetRedisClient is deprecated. Use SetCacheAdapter instead.
+// Kept for backward compatibility; this is a no-op (NietzscheDB replaced Redis).
+func (e *EmbeddingService) SetRedisClient(redisClient interface{}) {
+	// DEPRECATED: Redis has been replaced by NietzscheDB CacheAdapter.
+	// Use SetCacheAdapter() instead.
+	log.Printf("[EMBEDDING] SetRedisClient called (deprecated no-op) — use SetCacheAdapter()")
 }
 
 // ensureCollection is no longer needed - NietzscheDB handles collection management.
@@ -116,7 +128,7 @@ func (e *EmbeddingService) generateEmbeddingFromAPI(ctx context.Context, text st
 				{"text": text},
 			},
 		},
-		"outputDimensionality": 3072, // Máxima qualidade - Qdrant recriado com 3072
+		"outputDimensionality": 3072, // Máxima qualidade - NietzscheDB collections com 3072-dim
 	}
 
 	jsonData, err := json.Marshal(payload)

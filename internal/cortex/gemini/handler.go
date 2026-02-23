@@ -19,8 +19,8 @@ import (
 type Handler struct {
 	cfg            *config.Config
 	db             *database.DB
-	graphAdapter   *nietzscheInfra.GraphAdapter   // NietzscheDB GraphAdapter (substitui Neo4j)
-	vectorAdapter  *nietzscheInfra.VectorAdapter  // NietzscheDB VectorAdapter (substitui Qdrant)
+	graphAdapter   *nietzscheInfra.GraphAdapter   // NietzscheDB GraphAdapter (grafo)
+	vectorAdapter  *nietzscheInfra.VectorAdapter  // NietzscheDB VectorAdapter (busca vetorial)
 	toolsClient    *ToolsClient                   // Cliente REST separado para Tools
 }
 

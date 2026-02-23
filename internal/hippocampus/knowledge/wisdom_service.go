@@ -13,7 +13,7 @@ import (
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 )
 
-// WisdomService busca sabedoria relevante em múltiplas coleções Qdrant
+// WisdomService busca sabedoria relevante em múltiplas coleções NietzscheDB vector
 // Implementa busca semântica para histórias, fábulas, ensinamentos, técnicas
 type WisdomService struct {
 	vectorAdapter *nietzscheInfra.VectorAdapter
@@ -31,7 +31,7 @@ type WisdomResult struct {
 	Moral      string   `json:"moral"`      // Para fábulas
 	Tags       []string `json:"tags"`
 	Score      float64  `json:"score"`      // Similaridade semântica
-	Collection string   `json:"collection"` // Coleção Qdrant de origem
+	Collection string   `json:"collection"` // Coleção NietzscheDB de origem
 }
 
 // WisdomSearchOptions define opções de busca

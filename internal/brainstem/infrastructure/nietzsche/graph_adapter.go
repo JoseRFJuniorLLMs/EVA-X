@@ -36,9 +36,15 @@ func (ga *GraphAdapter) SDK() *nietzsche.NietzscheClient {
 	return ga.client.SDK()
 }
 
-// ── MERGE (replaces Neo4j MERGE) ─────────────────────────────────────────────
+// Client returns the EVA-level NietzscheDB Client wrapper.
+// Used by services that need access to higher-level operations (e.g. Dream System).
+func (ga *GraphAdapter) Client() *Client {
+	return ga.client
+}
 
-// MergeNodeOpts mirrors the options for a Neo4j MERGE on a node.
+// ── MERGE ────────────────────────────────────────────────────────────────────
+
+// MergeNodeOpts defines options for a MERGE operation on a node.
 type MergeNodeOpts struct {
 	Collection  string
 	NodeType    string
@@ -62,7 +68,7 @@ type MergeNodeResult struct {
 	Content map[string]interface{}
 }
 
-// MergeNode finds or creates a node by type + match keys (Neo4j MERGE equivalent).
+// MergeNode finds or creates a node by type + match keys (MERGE semantics).
 func (ga *GraphAdapter) MergeNode(ctx context.Context, opts MergeNodeOpts) (*MergeNodeResult, error) {
 	log := logger.Nietzsche()
 
@@ -106,7 +112,7 @@ func (ga *GraphAdapter) MergeNode(ctx context.Context, opts MergeNodeOpts) (*Mer
 	}, nil
 }
 
-// MergeEdgeOpts mirrors the options for a Neo4j MERGE on a relationship.
+// MergeEdgeOpts defines options for a MERGE operation on a relationship/edge.
 type MergeEdgeOpts struct {
 	Collection  string
 	FromNodeID  string
@@ -122,7 +128,7 @@ type MergeEdgeResult struct {
 	EdgeID  string
 }
 
-// MergeEdge finds or creates an edge (Neo4j MERGE on relationship).
+// MergeEdge finds or creates an edge (MERGE semantics on relationship).
 func (ga *GraphAdapter) MergeEdge(ctx context.Context, opts MergeEdgeOpts) (*MergeEdgeResult, error) {
 	log := logger.Nietzsche()
 
@@ -153,13 +159,13 @@ func (ga *GraphAdapter) MergeEdge(ctx context.Context, opts MergeEdgeOpts) (*Mer
 	}, nil
 }
 
-// ── MATCH + WHERE (replaces Neo4j ExecuteRead) ───────────────────────────────
+// ── MATCH + WHERE ────────────────────────────────────────────────────────────
 
 // QueryResult holds the result of an NQL query.
 type QueryResult = nietzsche.QueryResult
 
 // ExecuteNQL runs an NQL query against a collection.
-// Replaces Neo4j ExecuteRead for simple MATCH queries.
+// Executes NQL MATCH queries against NietzscheDB graph.
 func (ga *GraphAdapter) ExecuteNQL(ctx context.Context, nql string,
 	params map[string]interface{}, collection string) (*QueryResult, error) {
 
@@ -171,10 +177,10 @@ func (ga *GraphAdapter) ExecuteNQL(ctx context.Context, nql string,
 	return ga.client.Query(ctx, nql, params, col)
 }
 
-// ── BFS (replaces Neo4j *1..N variable-length paths) ─────────────────────────
+// ── BFS (variable-length path traversal) ─────────────────────────────────────
 
 // Bfs performs breadth-first traversal from a start node.
-// Replaces Neo4j patterns like: MATCH (a)-[*1..N]-(b)
+// Implements variable-length path traversal: (a)-[*1..N]-(b)
 func (ga *GraphAdapter) Bfs(ctx context.Context, startID string, maxDepth uint32,
 	collection string) ([]string, error) {
 
@@ -242,7 +248,7 @@ func (ga *GraphAdapter) BfsWithEdgeType(ctx context.Context, startID string,
 	return result, nil
 }
 
-// ── Node CRUD (replaces Neo4j CREATE/SET/DELETE) ─────────────────────────────
+// ── Node CRUD (CREATE/SET/DELETE) ─────────────────────────────────────────────
 
 // InsertNode creates a new node.
 func (ga *GraphAdapter) InsertNode(ctx context.Context, opts nietzsche.InsertNodeOpts) (nietzsche.NodeResult, error) {
@@ -270,7 +276,7 @@ func (ga *GraphAdapter) DeleteNode(ctx context.Context, id string, collection st
 	return ga.client.Delete(ctx, col, id)
 }
 
-// UpdateEnergy updates a node's energy (replaces Neo4j SET n.energy = ...).
+// UpdateEnergy updates a node's energy field via NietzscheDB.
 func (ga *GraphAdapter) UpdateEnergy(ctx context.Context, nodeID string, energy float32, collection string) error {
 	col := collection
 	if col == "" {
@@ -298,7 +304,7 @@ func (ga *GraphAdapter) DeleteEdge(ctx context.Context, id string, collection st
 	return ga.client.DeleteEdge(ctx, id, col)
 }
 
-// ── Diffuse (replaces Neo4j spectral community analysis) ─────────────────────
+// ── Diffuse (spectral community analysis) ────────────────────────────────────
 
 // Diffuse runs heat-kernel diffusion from source nodes.
 func (ga *GraphAdapter) Diffuse(ctx context.Context, sourceIDs []string,
@@ -308,12 +314,12 @@ func (ga *GraphAdapter) Diffuse(ctx context.Context, sourceIDs []string,
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-// NowUnix returns current time as Unix float64 (replaces Neo4j datetime()).
+// NowUnix returns current time as Unix float64.
 func NowUnix() float64 {
 	return float64(time.Now().Unix())
 }
 
-// DaysAgoUnix returns Unix timestamp for N days ago (replaces Neo4j duration({days: N})).
+// DaysAgoUnix returns Unix timestamp for N days ago.
 func DaysAgoUnix(days int) float64 {
 	return float64(time.Now().Add(-time.Duration(days) * 24 * time.Hour).Unix())
 }

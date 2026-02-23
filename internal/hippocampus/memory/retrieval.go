@@ -27,7 +27,7 @@ type RetrievalService struct {
 	db            *sql.DB
 	embedder      *EmbeddingService
 	vectorAdapter *nietzscheInfra.VectorAdapter
-	graphStore    *GraphStore // Para busca recursiva via Neo4j
+	graphStore    *GraphStore // Para busca recursiva via NietzscheDB graph
 	fdpn          FDPNActivator
 	hebbianRT     *HebbianRealTime
 }
@@ -49,7 +49,7 @@ type SearchResult struct {
 	Score      float64 // Score composto (Smart Forgetting): similaridade + recência + importância
 }
 
-// Retrieve busca as K memórias mais relevantes para uma query (APENAS Qdrant)
+// Retrieve busca as K memórias mais relevantes para uma query (NietzscheDB vector)
 func (r *RetrievalService) Retrieve(ctx context.Context, idosoID int64, query string, k int) ([]*SearchResult, error) {
 	// 1. Gerar embedding da query
 	queryEmbedding, err := r.embedder.GenerateEmbedding(ctx, query)
@@ -64,9 +64,24 @@ func (r *RetrievalService) Retrieve(ctx context.Context, idosoID int64, query st
 	log.Printf("🔍 [MEMORY] Vector Search: Query=\"%s\"", query)
 
 	// 2. BUSCA NO NIETZSCHEDB
-	qResults, err := r.vectorAdapter.Search(ctx, "memories", queryEmbedding, k, idosoID)
-	if err != nil {
-		return nil, fmt.Errorf("erro busca vetorial: %w", err)
+	// Use HybridSearch (BM25 + KNN) when text query is available alongside vector.
+	// Falls back to pure vector Search if HybridSearch fails or query is empty.
+	var qResults []nietzscheInfra.VectorSearchResult
+	if query != "" && r.vectorAdapter != nil {
+		hybridResults, hybridErr := r.vectorAdapter.HybridSearch(ctx, "memories", query, queryEmbedding, k)
+		if hybridErr != nil {
+			log.Printf("⚠️ [MEMORY] HybridSearch failed, falling back to KNN: %v", hybridErr)
+		} else {
+			qResults = hybridResults
+		}
+	}
+	// Fallback to pure vector search if hybrid was not used or failed
+	if len(qResults) == 0 {
+		var err2 error
+		qResults, err2 = r.vectorAdapter.Search(ctx, "memories", queryEmbedding, k, idosoID)
+		if err2 != nil {
+			return nil, fmt.Errorf("erro busca vetorial: %w", err2)
+		}
 	}
 
 	var allResults []*SearchResult
@@ -95,7 +110,7 @@ func (r *RetrievalService) Retrieve(ctx context.Context, idosoID int64, query st
 
 	log.Printf("✅ [MEMORY] %d resultados hidratados direto do NietzscheDB (sem PG)", len(allResults))
 
-	// 4. BUSCA RECURSIVA VIA GRAFO (Neo4j A1/A5)
+	// 4. BUSCA RECURSIVA VIA GRAFO (NietzscheDB graph A1/A5)
 	//    Estes IDs NÃO têm payload — hidratamos do PG apenas eles.
 	var graphOnlyIDs []int64
 	if r.graphStore != nil && len(topSemanticIDs) > 0 {

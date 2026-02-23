@@ -6,6 +6,7 @@ package lacan
 import (
 	"context"
 	"database/sql"
+	"log"
 	"strings"
 
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
@@ -13,10 +14,11 @@ import (
 
 // InterpretationService coordena todos os servicos lacanianos
 type InterpretationService struct {
-	transferencia *TransferenceService
-	significante  *SignifierService
-	demandaDesejo *DemandDesireService
-	grandAutre    *GrandAutreService
+	transferencia     *TransferenceService
+	significante      *SignifierService
+	demandaDesejo     *DemandDesireService
+	grandAutre        *GrandAutreService
+	conflictSynthesis *ConflictSynthesisService
 
 	db          *sql.DB
 	graphClient *nietzscheInfra.GraphAdapter
@@ -32,6 +34,12 @@ func NewInterpretationService(db *sql.DB, graphClient *nietzscheInfra.GraphAdapt
 		db:            db,
 		graphClient:   graphClient,
 	}
+}
+
+// SetConflictSynthesis injects the ConflictSynthesisService (late binding).
+// Called from UnifiedRetrieval after ManifoldAdapter is available.
+func (i *InterpretationService) SetConflictSynthesis(cs *ConflictSynthesisService) {
+	i.conflictSynthesis = cs
 }
 
 // InterpretationResult contem resultado completo da analise lacaniana
@@ -55,6 +63,9 @@ type InterpretationResult struct {
 	ReflexiveQuestion string
 	Contradiction     string
 	ShouldSilence     bool
+
+	// Riemannian Synthesis (NietzscheDB persisted conflict resolution)
+	ConflictSynthesis *ConflictSynthesisResult
 
 	// Orientacao Clinica Final
 	ClinicalGuidance string
@@ -107,6 +118,18 @@ func (i *InterpretationService) AnalyzeUtterance(ctx context.Context, idosoID in
 	// 5. Detectar contradicao (se houver texto anterior)
 	if previousText != "" {
 		result.Contradiction = i.grandAutre.PointToContradiction(previousText, text)
+
+		// 5b. Riemannian Synthesis: persist conflict in NietzscheDB
+		if result.Contradiction != "" && i.conflictSynthesis != nil {
+			synthesis, err := i.conflictSynthesis.SynthesizeConflict(
+				ctx, idosoID, previousText, text, result.Contradiction,
+			)
+			if err != nil {
+				log.Printf("[SYNTHESIS] Error synthesizing conflict (non-fatal): %v", err)
+			} else {
+				result.ConflictSynthesis = synthesis
+			}
+		}
 	}
 
 	// 6. Decidir sobre silencio
@@ -156,10 +179,14 @@ func (i *InterpretationService) buildClinicalGuidance(result *InterpretationResu
 		guidance += "- Use: \"" + result.InterpelPhrase + "\"\n\n"
 	}
 
-	// Contradicao
+	// Contradicao + Sintese Riemanniana
 	if result.Contradiction != "" {
 		guidance += "CONTRADICAO DETECTADA:\n"
-		guidance += "- " + result.Contradiction + "\n\n"
+		guidance += "- " + result.Contradiction + "\n"
+		if result.ConflictSynthesis != nil && result.ConflictSynthesis.PromptFragment != "" {
+			guidance += "- " + result.ConflictSynthesis.PromptFragment + "\n"
+		}
+		guidance += "\n"
 	}
 
 	// Reflexao

@@ -79,9 +79,10 @@ type Config struct {
 	EVAWorkspaceDir string // Sandbox para filesystem
 	EVAProjectDir   string // Diretório do código-fonte EVA
 
-	// NietzscheDB (replaces Neo4j + Qdrant + Redis)
-	NietzscheGRPCAddr string
-	AppURL            string
+	// NietzscheDB (unified graph + vector + cache)
+	NietzscheGRPCAddr        string
+	NietzscheCacheCollection string // Collection for CacheAdapter (default: "eva_cache")
+	AppURL                   string
 
 	// Speaker Recognition
 	SpeakerModelPath string
@@ -114,6 +115,12 @@ type Config struct {
 	S3AccessKey      string
 	S3SecretKey      string
 	S3ForcePathStyle bool
+
+	// Evolution Scheduler (Sleep, Zaratustra, CDC, Backup)
+	SleepInterval      string // Duration string (e.g. "6h") — Riemannian reconsolidation interval
+	ZaratustraInterval string // Duration string (e.g. "4h") — Zaratustra evolution cycle interval
+	CDCEnabled         bool   // Whether to start CDC listener
+	BackupInterval     string // Duration string (e.g. "24h") — automated backup interval
 
 	// Feature Flags (V2)
 	EnableGoogleSearch   bool
@@ -188,9 +195,10 @@ func Load() (*Config, error) {
 		// Auth
 		JWTSecret: getEnvRequired("JWT_SECRET"),
 
-		// NietzscheDB (replaces Neo4j + Qdrant + Redis)
-		NietzscheGRPCAddr: getEnvWithDefault("NIETZSCHE_GRPC_ADDR", "localhost:50051"),
-		AppURL:            getEnv("APP_URL", "https://eva-mind-fzpn.fly.dev"),
+		// NietzscheDB (unified graph + vector + cache)
+		NietzscheGRPCAddr:        getEnvWithDefault("NIETZSCHE_GRPC_ADDR", "localhost:50051"),
+		NietzscheCacheCollection: getEnvWithDefault("NIETZSCHE_CACHE_COLLECTION", "eva_cache"),
+		AppURL:                   getEnv("APP_URL", "https://eva-mind-fzpn.fly.dev"),
 
 		// Speaker Recognition
 		SpeakerModelPath: getEnvWithDefault("SPEAKER_MODEL_PATH", ""),

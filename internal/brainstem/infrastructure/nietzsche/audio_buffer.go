@@ -23,8 +23,11 @@ const (
 
 // AudioBuffer stores audio chunks per session using NietzscheDB ListRPush/ListLRange.
 // Falls back to in-memory storage if NietzscheDB is unavailable.
+// When a SensoryAdapter is attached, FlushToSensory can persist accumulated audio
+// as compressed sensory data via the NietzscheDB InsertSensory RPC.
 type AudioBuffer struct {
-	client *Client // nil → in-memory-only mode
+	client  *Client         // nil → in-memory-only mode
+	sensory *SensoryAdapter // nil → sensory compression disabled
 
 	mu       sync.Mutex
 	sessions map[string]*audioSession // in-memory fallback
@@ -44,6 +47,48 @@ func NewAudioBuffer(client *Client) *AudioBuffer {
 	}
 	go ab.cleanupLoop()
 	return ab
+}
+
+// SetSensoryAdapter attaches a SensoryAdapter for persisting accumulated audio
+// as compressed sensory data. This enables FlushToSensory to delegate audio
+// storage to the multi-modal sensory compression layer.
+func (ab *AudioBuffer) SetSensoryAdapter(adapter *SensoryAdapter) {
+	ab.sensory = adapter
+}
+
+// FlushToSensory retrieves all buffered audio for a session and stores it as
+// compressed audio sensory data via the SensoryAdapter. The audio buffer is NOT
+// cleared (callers can still retrieve raw chunks via GetFullAudio).
+// Returns an error if no SensoryAdapter is attached or if the store fails.
+func (ab *AudioBuffer) FlushToSensory(ctx context.Context, sessionID, nodeID, encoderVersion string) error {
+	if ab.sensory == nil {
+		return fmt.Errorf("audio buffer: no SensoryAdapter attached, cannot flush to sensory layer")
+	}
+
+	log := logger.Nietzsche()
+
+	// Retrieve all accumulated audio chunks
+	fullAudio, err := ab.GetFullAudio(ctx, sessionID, false)
+	if err != nil {
+		return fmt.Errorf("audio buffer flush to sensory: get full audio: %w", err)
+	}
+	if len(fullAudio) == 0 {
+		log.Debug().Str("session", sessionID).Msg("[AudioBuffer] no audio data to flush")
+		return nil
+	}
+
+	// Delegate to the SensoryAdapter for audio-modality storage
+	err = ab.sensory.StoreAudioSensory(ctx, audioCollection, nodeID, fullAudio, encoderVersion)
+	if err != nil {
+		return fmt.Errorf("audio buffer flush to sensory: store: %w", err)
+	}
+
+	log.Info().
+		Str("session", sessionID).
+		Str("node_id", nodeID).
+		Int("audio_bytes", len(fullAudio)).
+		Msg("[AudioBuffer] audio flushed to sensory layer")
+	return nil
 }
 
 // AppendAudioChunk appends an audio chunk to the session.

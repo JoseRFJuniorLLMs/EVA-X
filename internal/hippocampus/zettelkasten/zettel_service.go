@@ -692,7 +692,7 @@ func (zs *ZettelService) saveZettel(ctx context.Context, z *Zettel) error {
 }
 
 // saveToGraph saves a zettel and its entities to NietzscheDB graph
-// Replaces Neo4j session.Run() with MergeNode/MergeEdge
+// Uses NietzscheDB MergeNode/MergeEdge for graph persistence
 func (zs *ZettelService) saveToGraph(ctx context.Context, z *Zettel) error {
 	if zs.graphAdapter == nil {
 		return nil
@@ -1051,7 +1051,7 @@ func (zs *ZettelService) getRelatedFromSQL(ctx context.Context, zettelID string)
 	return zs.scanZettels(rows)
 }
 
-// getRelatedFromGraph uses BFS from NietzscheDB instead of Neo4j variable-length path query
+// getRelatedFromGraph uses BFS from NietzscheDB for variable-length path traversal
 func (zs *ZettelService) getRelatedFromGraph(ctx context.Context, zettelID string, depth int) ([]*Zettel, error) {
 	// Find the zettel node by its zettel ID
 	zettelResult, err := zs.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
@@ -1115,7 +1115,7 @@ func (zs *ZettelService) getRelatedFromGraph(ctx context.Context, zettelID strin
 }
 
 // getGraphFromNietzsche builds the graph data from NietzscheDB
-// Replaces getGraphFromNeo4j
+// Builds graph data from NietzscheDB
 func (zs *ZettelService) getGraphFromNietzsche(ctx context.Context, idosoID int64, centerID string, depth int) (*GraphData, error) {
 	graphData := &GraphData{
 		Nodes: []GraphNode{},

@@ -73,7 +73,7 @@ func NewSpeakerService(db *database.DB, vectorAdapter *nietzscheInfra.VectorAdap
 	if vectorAdapter != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := store.EnsureQdrantCollection(ctx); err != nil {
+		if err := store.EnsureVectorCollection(ctx); err != nil {
 			log.Warn().Err(err).Msg("Failed to ensure speaker_embeddings collection")
 		}
 	}
@@ -199,7 +199,7 @@ func (s *SpeakerService) processBuffer(sessionID, cpf string, audioData []byte, 
 						msg.Confidence = 1.0
 						msg.IsNew = false
 
-						go s.store.storeEmbeddingQdrant(ctx, existing.ID, embedding)
+						go s.store.storeEmbeddingVector(ctx, existing.ID, embedding)
 					} else {
 						id, err := s.store.EnrollSpeaker(ctx, newProfile, embedding)
 						if err != nil {
