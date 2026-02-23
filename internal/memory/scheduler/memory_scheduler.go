@@ -5,6 +5,7 @@ package scheduler
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"eva/internal/memory"
@@ -33,7 +34,10 @@ func (s *MemoryScheduler) Start(ctx context.Context) {
 	// Schedule nightly consolidation at 3 AM
 	go s.scheduleNightlyConsolidation(ctx)
 
-	// Schedule Krylov reorthogonalization every 6 hours
+	// Schedule nightly backup at 2 AM
+	go s.scheduleNightlyBackup(ctx)
+
+	// Schedule evolution (Zaratustra) every 6 hours
 	go s.scheduleKrylovMaintenance(ctx)
 }
 
@@ -86,6 +90,47 @@ func (s *MemoryScheduler) runNightlyConsolidation(ctx context.Context) {
 	} else {
 		log.Info().Msg("✅ Nightly consolidation complete")
 	}
+
+	// TASK 8.1: Trigger Sleep cycle (RIEMANN reconsolidation)
+	log.Info().Msg("💤 Triggering NietzscheDB Sleep cycle")
+	if err := s.orchestrator.TriggerSleep(consolidationCtx, "memories"); err != nil {
+		log.Error().Err(err).Msg("❌ NietzscheDB Sleep cycle failed")
+	}
+
+	// TASK 7.5: Trigger speculative Dream Simulation
+	log.Info().Msg("💤 Triggering nightly Dream Simulation")
+	if err := s.orchestrator.RunDreamSimulation(consolidationCtx, "patient_graph"); err != nil {
+		log.Error().Err(err).Msg("❌ Nightly Dream Simulation failed")
+	}
+}
+
+// scheduleNightlyBackup runs NietzscheDB backup at 2 AM daily
+func (s *MemoryScheduler) scheduleNightlyBackup(ctx context.Context) {
+	for {
+		// Calculate time until next 2 AM
+		now := time.Now()
+		next2AM := time.Date(now.Year(), now.Month(), now.Day(), 2, 0, 0, 0, now.Location())
+
+		if now.After(next2AM) {
+			next2AM = next2AM.Add(24 * time.Hour)
+		}
+
+		duration := time.Until(next2AM)
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.stopChan:
+			return
+		case <-time.After(duration):
+			log.Info().Msg("💾 Running nightly NietzscheDB backup")
+			backupLabel := fmt.Sprintf("nightly_%s", time.Now().Format("20060102"))
+			if err := s.orchestrator.CreateBackup(ctx, backupLabel); err != nil {
+				log.Error().Err(err).Msg("❌ NietzscheDB backup failed")
+			}
+			time.Sleep(1 * time.Hour)
+		}
+	}
 }
 
 // scheduleKrylovMaintenance runs Krylov reorthogonalization every 6 hours
@@ -106,8 +151,13 @@ func (s *MemoryScheduler) scheduleKrylovMaintenance(ctx context.Context) {
 		case <-ticker.C:
 			// Run maintenance
 			log.Info().Msg("🔧 Running Krylov maintenance")
-			// TODO: Call Krylov reorthogonalization
-			// s.orchestrator.krylovManager.MemoryConsolidation()
+			s.orchestrator.MemoryConsolidation()
+
+			// TASK 8.2: Invoke Zaratustra autonomous evolution
+			log.Info().Msg("⚡ Invoking Zaratustra evolution")
+			if err := s.orchestrator.InvokeZaratustra(ctx, "memories"); err != nil {
+				log.Error().Err(err).Msg("❌ Zaratustra evolution failed")
+			}
 		}
 	}
 }

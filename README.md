@@ -25,8 +25,8 @@ WHAT IS EVA-MIND
 
 	- Real-time bidirectional voice via WebSocket (Gemini Live API)
 	- Real-time camera and screen analysis for medical assistance
-	- Patient memory graphs (Neo4j) with Hebbian learning
-	- Semantic memory search (Qdrant vector database)
+	- Unified Graph & Vector Memory (NietzscheDB) with Hebbian learning
+	- Native Hyperbolic embeddings (Poincaré ball)
 	- Krylov subspace compression (1536D -> 64D, ~97% precision)
 	- Psychoanalytic context modeling (Lacanian framework)
 	- Personality system (Big Five + Enneagram) with evolution
@@ -58,7 +58,7 @@ ARCHITECTURE
 	Each directory maps to a brain region:
 
 	brainstem/     - Configuration, database, auth, push notifications,
-	                 infrastructure (Neo4j, Qdrant, Redis, worker pools)
+	                 infrastructure (NietzscheDB, PostgreSQL, worker pools)
 
 	cortex/        - Higher-order processing:
 	  gemini/        - Gemini Live API client (v1beta, thread-safe,
@@ -247,23 +247,23 @@ MEMORY SYSTEM
 
 	EVA's memory is inspired by neuroscience. It has multiple layers:
 
-	1. Episodic Memory (PostgreSQL + Qdrant)
-	   - Per-patient conversation history
-	   - Stored as text with vector embeddings (1536D)
-	   - Timestamped, importance-scored, emotion-tagged
-	   - Retrieved by semantic similarity + recency + importance
+	1. Unified Memory (NietzscheDB)
+	   - Graph, Vector, and Cache in a single gRPC-driven substrate.
+	   - Stored as nodes with Poincaré embeddings (Hyperbolic space).
+	   - Hierarchical depth encoded as geometric distance to origin.
+	   - Retrieved by NQL (Nietzsche Query Language) + KNN.
 
-	2. Semantic Memory (Neo4j knowledge graphs)
-	   - Per-patient knowledge graphs
-	   - Medical conditions, medications, family, preferences
-	   - Entities extracted and linked automatically
-	   - Hebbian edge strengthening on co-activation
+	2. Hebbian Learning (Native)
+	   - Real-time: Updates node/edge energy after every retrieval.
+	   - Synaptogenesis: Automatic edge creation via preferential attachment.
+	   - Edge weighting: Bio-inspired dual plasticity (fast/slow weights).
 
-	3. FDPN Network (Spreading Activation)
-	   - Anderson (1983) spreading activation model
-	   - Nodes activate neighbors based on edge weights
-	   - Primed by personality weights and situational context
-	   - Redis cache for performance (<10ms latency)
+	3. REM Consolidation (Periodic)
+	   - Sleep-inspired memory consolidation pipeline.
+	   - Hot episodic memories -> selective replay -> spectral
+	     clustering -> Krylov centroid -> semantic NietzscheDB node.
+	   - Prunes redundant memories, creates abstractions.
+	   - Science: Rasch & Born (2013), Tadros et al. (2022).
 
 	4. Hebbian Learning
 	   - Real-time: updates weights after every retrieval query
@@ -613,10 +613,8 @@ BUILDING
 	Prerequisites:
 
 	- Go 1.24 or later
-	- Neo4j 5.x (two instances: patients on 7687, EVA self on 7688)
-	- Qdrant vector database
+	- NietzscheDB (unified graph + vector + cache)
 	- PostgreSQL 15+
-	- Redis (optional, for caching)
 	- Google Gemini API key
 
 	Build:
@@ -637,8 +635,8 @@ CONFIGURATION
 	Required variables:
 
 		DATABASE_URL          - PostgreSQL connection string
-		NEO4J_URI             - Neo4j bolt URI (patients)
-		NEO4J_PASSWORD        - Neo4j password
+		NIETZSCHE_GRPC_ADDR   - NietzscheDB endpoint (default: localhost:50051)
+		NIETZSCHE_ENCRYPTION_KEY - AES key for at-rest encryption (PHI)
 		GOOGLE_API_KEY        - Gemini API key
 		MODEL_ID              - Gemini model for voice
 		                        (e.g. gemini-2.5-flash-native-audio-preview-12-2025)

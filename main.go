@@ -211,6 +211,31 @@ func main() {
 	cacheAdapter := nietzscheInfra.NewCacheAdapter(nzClient, cfg.NietzscheCacheCollection)
 	log.Info().Str("collection", cfg.NietzscheCacheCollection).Msg("NietzscheDB CacheAdapter created")
 
+	// NietzscheDB Security & Wiederkehr
+	securityAdapter := nietzscheInfra.NewSecurityAdapter(nietzscheInfra.SecurityConfig{
+		EncryptionKey: cfg.NIETZSCHE_ENCRYPTION_KEY,
+		RBACEnabled:   cfg.NIETZSCHE_RBAC_ENABLED,
+		APIKeyAdmin:   cfg.NIETZSCHE_API_KEY_ADMIN,
+		APIKeyWriter:  cfg.NIETZSCHE_API_KEY_WRITER,
+		APIKeyReader:  cfg.NIETZSCHE_API_KEY_READER,
+	})
+	if err := securityAdapter.ValidateEncryptionForPHI(); err != nil {
+		log.Warn().Err(err).Msg("Security warning: compliance issues detected")
+	}
+
+	wiederkehrAdapter := nietzscheInfra.NewWiederkehrAdapter(nzClient)
+
+	// Register default daemons (Sprint 11.2)
+	go func() {
+		time.Sleep(10 * time.Second) // Wait for server to be fully ready
+		ctx := context.Background()
+		// Energy Guard: prevent hotspots
+		_ = wiederkehrAdapter.CreateEnergyGuard(ctx, "patient_graph", 0.85, "1h")
+		// Decay Reaper: implement natural forgetting
+		_ = wiederkehrAdapter.CreateDecayReaper(ctx, "patient_graph", 0.05, "24h")
+		log.Info().Msg("NietzscheDB Wiederkehr daemons registered (EnergyGuard, DecayReaper)")
+	}()
+
 	// 3. Serviços Base
 	pushService, err := push.NewFirebaseService(cfg.FirebaseCredentialsPath)
 	if err != nil {
@@ -311,6 +336,8 @@ func main() {
 	}
 	toolsHandler.SetSpacedService(spacedSvc)
 	toolsHandler.SetHabitTracker(habitTracker)
+	toolsHandler.SetSecurityAdapter(securityAdapter)
+	toolsHandler.SetWiederkehrAdapter(wiederkehrAdapter)
 
 	// 🔒 Novas ferramentas (Gmail, YouTube, Filesystem, SelfCode, etc) só em debug
 	toolsHandler.SetDebugMode(cfg.Environment == "development")

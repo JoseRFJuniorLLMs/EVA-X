@@ -26,12 +26,16 @@ type PersonalityState struct {
 
 // PersonalityService gerencia o estado de personalidade via NietzscheDB
 type PersonalityService struct {
-	client *nietzscheInfra.GraphAdapter
+	client  *nietzscheInfra.GraphAdapter
+	overlay *EnergyOverlay
 }
 
 // NewPersonalityService cria um novo serviço com NietzscheDB
 func NewPersonalityService(client *nietzscheInfra.GraphAdapter) *PersonalityService {
-	return &PersonalityService{client: client}
+	return &PersonalityService{
+		client:  client,
+		overlay: NewEnergyOverlay(client),
+	}
 }
 
 // GetState recupera o estado de personalidade de um idoso do Grafo
@@ -119,10 +123,44 @@ func (p *PersonalityService) UpdateAfterConversation(ctx context.Context, idosoI
 
 	// Update topics
 	if len(topics) > 0 {
-		return p.updateFavoriteTopics(ctx, idosoID, state.FavoriteTopics, topics)
+		err = p.updateFavoriteTopics(ctx, idosoID, state.FavoriteTopics, topics)
+		if err != nil {
+			return err
+		}
+	}
+
+	// TASK 6.2: Update EVA's core personality traits (energy migration)
+	if p.overlay != nil {
+		// Map detected emotion to EVA's internal trait activation
+		trait := mapEmotionToTrait(detectedEmotion)
+		if trait != "" {
+			// Energy migration: boost the energy of the activated trait in eva_core.
+			// This allows Zaratustra to evolve dominant traits over time.
+			_ = p.overlay.UpdateTraitEnergy(ctx, trait, 0.85)
+		}
 	}
 
 	return nil
+}
+
+// mapEmotionToTrait maps patient's detected emotion to EVA's mirrored trait activation.
+func mapEmotionToTrait(emotion string) string {
+	switch emotion {
+	case "joy", "alegria":
+		return "extraversion"
+	case "anger", "raiva":
+		return "enneagram_type_8"
+	case "fear", "medo":
+		return "enneagram_type_6"
+	case "sadness", "tristeza":
+		return "enneagram_type_4"
+	case "calm", "paz":
+		return "enneagram_type_9"
+	case "confusion", "confusão":
+		return "openness"
+	default:
+		return ""
+	}
 }
 
 // updateFavoriteTopics atualiza os tópicos favoritos (mantém top 5)

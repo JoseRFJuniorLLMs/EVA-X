@@ -6,12 +6,14 @@ package memory
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"time"
 
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	"eva/internal/hippocampus/memory"
 	"eva/internal/memory/consolidation"
 	"eva/internal/memory/krylov"
+	nietzsche "nietzsche-sdk"
 
 	"github.com/rs/zerolog/log"
 )
@@ -135,7 +137,101 @@ func (o *MemoryOrchestrator) RunNightlyConsolidation(ctx context.Context) error 
 		Msg("✅ Nightly REM consolidation complete")
 
 	// Run Krylov memory consolidation
-	o.krylovManager.MemoryConsolidation()
+	o.MemoryConsolidation()
+
+	return nil
+}
+
+// MemoryConsolidation runs Krylov memory consolidation
+func (o *MemoryOrchestrator) MemoryConsolidation() {
+	if o.krylovManager != nil {
+		o.krylovManager.MemoryConsolidation()
+	}
+}
+
+// TriggerSleep initiates a Riemannian reconsolidation cycle in NietzscheDB
+func (o *MemoryOrchestrator) TriggerSleep(ctx context.Context, collection string) error {
+	if o.graphAdapter == nil || o.graphAdapter.Client() == nil {
+		return nil
+	}
+	log.Info().Str("collection", collection).Msg("💤 Triggering NietzscheDB Sleep cycle")
+	_, err := o.graphAdapter.Client().TriggerSleep(ctx, nietzsche.SleepOpts{
+		Collection: collection,
+	})
+	return err
+}
+
+// InvokeZaratustra runs the autonomous evolution engine in NietzscheDB
+func (o *MemoryOrchestrator) InvokeZaratustra(ctx context.Context, collection string) error {
+	if o.graphAdapter == nil || o.graphAdapter.Client() == nil {
+		return nil
+	}
+	log.Info().Str("collection", collection).Msg("⚡ Invoking Zaratustra evolution")
+	_, err := o.graphAdapter.Client().InvokeZaratustra(ctx, nietzsche.ZaratustraOpts{
+		Collection: collection,
+	})
+	return err
+}
+
+// CreateBackup creates a point-in-time backup of the NietzscheDB storage
+func (o *MemoryOrchestrator) CreateBackup(ctx context.Context, label string) error {
+	if o.graphAdapter == nil || o.graphAdapter.Client() == nil {
+		return nil
+	}
+	log.Info().Str("label", label).Msg("💾 Creating NietzscheDB backup")
+	_, err := o.graphAdapter.Client().CreateBackup(ctx, label)
+	return err
+}
+
+// RunDreamSimulation executes speculative exploration (DREAM FROM) on hot nodes
+func (o *MemoryOrchestrator) RunDreamSimulation(ctx context.Context, collection string) error {
+	if o.graphAdapter == nil || o.graphAdapter.Client() == nil {
+		return nil
+	}
+
+	log.Info().Str("collection", collection).Msg("💤 Starting nightly Dream Simulation")
+
+	// 1. Find hot nodes to use as dream seeds
+	// Evaluation: Energy > 0.7, top 5
+	nql := `MATCH (n) WHERE n.energy > 0.7 RETURN n.id, n.energy ORDER BY n.energy DESC LIMIT 5`
+	result, err := o.graphAdapter.ExecuteNQL(ctx, nql, nil, collection)
+	if err != nil {
+		return fmt.Errorf("failed to find dream seeds: %w", err)
+	}
+
+	for _, row := range result.ScalarRows {
+		seedID, _ := row["n.id"].(string)
+		if seedID == "" {
+			continue
+		}
+
+		log.Debug().Str("seed", seedID).Msg("🌠 Starting dream from seed")
+
+		// 2. Start speculative dream
+		dream, err := o.graphAdapter.Client().StartDream(ctx, collection, seedID, 5, 0.05)
+		if err != nil {
+			log.Error().Err(err).Str("seed", seedID).Msg("❌ Dream simulation failed")
+			continue
+		}
+
+		// 3. Evaluate dream result
+		// Heuristic: If dream produced > 2 events (anomalies), it found something interesting
+		if len(dream.Events) > 2 {
+			log.Info().
+				Str("dream_id", dream.DreamID).
+				Int("events", len(dream.Events)).
+				Msg("✅ Interesting dream detected, applying changes")
+
+			if err := o.graphAdapter.Client().ApplyDream(ctx, collection, dream.DreamID); err != nil {
+				log.Error().Err(err).Str("dream_id", dream.DreamID).Msg("❌ Failed to apply dream")
+			}
+		} else {
+			log.Debug().Str("dream_id", dream.DreamID).Msg("😴 Uninteresting dream, rejecting")
+			if err := o.graphAdapter.Client().RejectDream(ctx, collection, dream.DreamID); err != nil {
+				log.Error().Err(err).Str("dream_id", dream.DreamID).Msg("❌ Failed to reject dream")
+			}
+		}
+	}
 
 	return nil
 }

@@ -14,17 +14,18 @@ import (
 	"strings"
 	"time"
 
+	"eva/internal/brainstem/infrastructure/nietzsche"
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 )
 
 // Situation representa o contexto situacional atual do usuário
 type Situation struct {
-	Stressors     []string  `json:"stressors"`       // "luto", "hospital", "aniversario", "crise"
-	SocialContext string    `json:"social_context"`  // "sozinho", "familia", "publico"
-	TimeOfDay     string    `json:"time_of_day"`     // "madrugada", "manha", "tarde", "noite"
-	EmotionScore  float64   `json:"emotion_score"`   // -1.0 (negativo) to 1.0 (positivo)
-	Intensity     float64   `json:"intensity"`       // 0.0-1.0 (força do contexto)
-	DetectedAt    time.Time `json:"detected_at"`     // Timestamp de detecção
+	Stressors     []string  `json:"stressors"`      // "luto", "hospital", "aniversario", "crise"
+	SocialContext string    `json:"social_context"` // "sozinho", "familia", "publico"
+	TimeOfDay     string    `json:"time_of_day"`    // "madrugada", "manha", "tarde", "noite"
+	EmotionScore  float64   `json:"emotion_score"`  // -1.0 (negativo) to 1.0 (positivo)
+	Intensity     float64   `json:"intensity"`      // 0.0-1.0 (força do contexto)
+	DetectedAt    time.Time `json:"detected_at"`    // Timestamp de detecção
 }
 
 // Event representa um evento recente do usuário
@@ -38,12 +39,12 @@ type Event struct {
 // It embeds the classic rules-based Situation and adds hyperbolic/Minkowski metadata
 // from NietzscheDB's multi-manifold engine for deeper emotion analysis.
 type GeometricSituation struct {
-	Situation                        // embed classic rules-based situation
-	ManifoldType      string         `json:"manifold_type"`      // "poincare", "minkowski", "klein"
-	PoincareDepth     float64        `json:"poincare_depth"`     // 0=center(abstract), ~1=edge(specific)
-	MinkowskiCone     string         `json:"minkowski_cone"`     // "past_light_cone", "future_light_cone"
-	RiskHierarchy     []string       `json:"risk_hierarchy"`     // ancestor nodes (Poincare, more abstract)
-	CausalAntecedents []string       `json:"causal_antecedents"` // events in past cone (Minkowski)
+	Situation                  // embed classic rules-based situation
+	ManifoldType      string   `json:"manifold_type"`      // "poincare", "minkowski", "klein"
+	PoincareDepth     float64  `json:"poincare_depth"`     // 0=center(abstract), ~1=edge(specific)
+	MinkowskiCone     string   `json:"minkowski_cone"`     // "past_light_cone", "future_light_cone"
+	RiskHierarchy     []string `json:"risk_hierarchy"`     // ancestor nodes (Poincare, more abstract)
+	CausalAntecedents []string `json:"causal_antecedents"` // events in past cone (Minkowski)
 }
 
 // SituationalModulator detecta e modula contexto situacional
@@ -65,7 +66,7 @@ type Config struct {
 func NewModulator(cache *nietzscheInfra.CacheStore, config *Config) *SituationalModulator {
 	if config == nil {
 		config = &Config{
-			CacheTTL: 5 * time.Minute,
+			CacheTTL:         5 * time.Minute,
 			StressorKeywords: getDefaultStressorKeywords(),
 		}
 	}
@@ -207,6 +208,30 @@ func (m *SituationalModulator) InferGeometric(ctx context.Context, patientID str
 	}
 
 	return geo, nil
+}
+
+// ProactiveDreamSimulation starts a NietzscheDB dream cycle to foresee potential stressors.
+// It uses a patient memory as a seed and explores connected nodes to find "anomalies"
+// or high-energy patterns that might indicate a developing situation.
+func (m *SituationalModulator) ProactiveDreamSimulation(ctx context.Context, patientID string, collection string) (*nietzsche.DreamResult, error) {
+	if m.graphAdapter == nil || m.graphAdapter.Client() == nil {
+		return nil, fmt.Errorf("dream simulation: NietzscheDB adapters not configured")
+	}
+
+	// 1. Find a seed node (most recent episodic memory for this patient)
+	nql := `MATCH (n) WHERE n.idoso_id = $pid AND n.type = 'EpisodicMemory' RETURN n.id ORDER BY n.timestamp DESC LIMIT 1`
+	qr, err := m.graphAdapter.ExecuteNQL(ctx, nql, map[string]interface{}{"pid": patientID}, collection)
+	if err != nil || (qr != nil && len(qr.ScalarRows) == 0) {
+		return nil, fmt.Errorf("dream simulation: failed to find seed node: %v", err)
+	}
+
+	seedID, _ := qr.ScalarRows[0]["n.id"].(string)
+	if seedID == "" {
+		return nil, fmt.Errorf("dream simulation: empty seed node ID")
+	}
+
+	// 2. Start Dream Exploration (depth=5, noise=0.05)
+	return m.graphAdapter.Client().StartDream(ctx, collection, seedID, 5, 0.05)
 }
 
 // getPatientDepth retrieves the Poincare ball depth of a patient node.
