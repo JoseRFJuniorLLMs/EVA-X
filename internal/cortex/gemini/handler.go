@@ -17,11 +17,12 @@ import (
 )
 
 type Handler struct {
-	cfg            *config.Config
-	db             *database.DB
-	graphAdapter   *nietzscheInfra.GraphAdapter   // NietzscheDB GraphAdapter (grafo)
-	vectorAdapter  *nietzscheInfra.VectorAdapter  // NietzscheDB VectorAdapter (busca vetorial)
-	toolsClient    *ToolsClient                   // Cliente REST separado para Tools
+	cfg           *config.Config
+	db            *database.DB
+	graphAdapter  *nietzscheInfra.GraphAdapter  // NietzscheDB GraphAdapter (grafo)
+	vectorAdapter *nietzscheInfra.VectorAdapter // NietzscheDB VectorAdapter (busca vetorial)
+	toolsClient   *ToolsClient                  // Cliente REST separado para Tools
+	system2       *System2Interceptor           // Sistema 2 (Test-Time Compute) — opcional
 }
 
 func NewHandler(cfg *config.Config, db *database.DB, graphAdapter *nietzscheInfra.GraphAdapter, vectorAdapter *nietzscheInfra.VectorAdapter) *Handler {
@@ -32,6 +33,12 @@ func NewHandler(cfg *config.Config, db *database.DB, graphAdapter *nietzscheInfr
 		vectorAdapter: vectorAdapter,
 		toolsClient:   NewToolsClient(cfg),
 	}
+}
+
+// SetSystem2Interceptor habilita o raciocínio de Sistema 2 no handler.
+// Pode ser chamado após NewHandler durante o boot da aplicação.
+func (h *Handler) SetSystem2Interceptor(interceptor *System2Interceptor) {
+	h.system2 = interceptor
 }
 
 // ProcessResponse processa a resposta bruta do WebSocket do Gemini
@@ -93,6 +100,23 @@ func (h *Handler) ProcessResponse(ctx context.Context, session interface{}, resp
 				// Executar tool em goroutine via WorkerPool para não bloquear áudio
 				workerpool.BackgroundPool.Submit(ctx, func() {
 					h.executeToolAndInjectBack(ctx, session, toolName, argsJSON, currentTurnID)
+				})
+			} else if h.system2 != nil && len(text) > 10 {
+				// ── Sistema 2: Test-Time Compute ──────────────────────────────────────
+				// Intercepta a transcrição do paciente (texto puro, não-comando)
+				// e roda o loop de raciocínio oculto em background.
+				// Se o Sistema 2 gerar uma síntese, ela é injectada de volta como contexto.
+				workerpool.BackgroundPool.Submit(ctx, func() {
+					intResult := h.system2.Intercept(ctx, 0, "", "", text)
+					if intResult.System2Used && intResult.Synthesis != "" {
+						// Injectar síntese como contexto clínico para o próximo turno
+						if s, ok := session.(interface{ SendText(string) error }); ok {
+							injectMsg := "[CONTEXT CLÍNICO GERADO PELO SISTEMA 2 — USE ISSO NA SUA RESPOSTA]\n" + intResult.Synthesis
+							if err := s.SendText(injectMsg); err != nil {
+								log.Printf("[SYSTEM2] Erro ao injectar síntese: %v", err)
+							}
+						}
+					}
 				})
 			}
 
