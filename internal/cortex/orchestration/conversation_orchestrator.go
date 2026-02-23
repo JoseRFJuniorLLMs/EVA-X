@@ -4,6 +4,7 @@
 package orchestration
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
@@ -11,6 +12,7 @@ import (
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	"eva/internal/cortex/cognitive"
 	"eva/internal/cortex/ethics"
+	"eva/internal/cortex/llm/thinking"
 )
 
 // ConversationOrchestrator integra Cognitive Load + Ethical Boundaries no fluxo de conversa
@@ -18,22 +20,23 @@ type ConversationOrchestrator struct {
 	cognitiveLoader *cognitive.CognitiveLoadOrchestrator
 	ethicsEngine    *ethics.EthicalBoundaryEngine
 	db              *sql.DB
+	system2         *thinking.System2Engine // nil = Sistema 2 desativado
 }
 
 // ConversationContext contexto de uma conversa
 type ConversationContext struct {
-	PatientID             int64
-	ConversationText      string
-	UserMessage           string
-	AssistantResponse     string
-	SessionID             string
-	InteractionType       string  // therapeutic, entertainment, clinical, educational, emergency
-	DurationSeconds       int
-	EmotionalIntensity    *float64 // Opcional: vem do Affective Router
-	CognitiveComplexity   *float64 // Opcional: calculado
-	TopicsDiscussed       []string
-	LacanianSignifiers    []string
-	VoiceMetrics          *VoiceMetrics
+	PatientID           int64
+	ConversationText    string
+	UserMessage         string
+	AssistantResponse   string
+	SessionID           string
+	InteractionType     string // therapeutic, entertainment, clinical, educational, emergency
+	DurationSeconds     int
+	EmotionalIntensity  *float64 // Opcional: vem do Affective Router
+	CognitiveComplexity *float64 // Opcional: calculado
+	TopicsDiscussed     []string
+	LacanianSignifiers  []string
+	VoiceMetrics        *VoiceMetrics
 }
 
 // VoiceMetrics métricas de voz (se disponível)
@@ -50,9 +53,9 @@ type OrchestrationResult struct {
 	ToneAdjustment            string
 
 	// Restrições ativas
-	BlockedActions      []string
-	AllowedActions      []string
-	RedirectSuggestion  string
+	BlockedActions     []string
+	AllowedActions     []string
+	RedirectSuggestion string
 
 	// Alertas
 	CognitiveLoadWarning bool
@@ -61,12 +64,12 @@ type OrchestrationResult struct {
 	EthicalRiskLevel     string
 
 	// Mensagens para o paciente
-	ShouldRedirect       bool
-	RedirectionMessage   string
-	RedirectionLevel     int
+	ShouldRedirect     bool
+	RedirectionMessage string
+	RedirectionLevel   int
 
 	// Notificações
-	ShouldNotifyFamily   bool
+	ShouldNotifyFamily        bool
 	FamilyNotificationMessage string
 }
 
@@ -82,6 +85,64 @@ func NewConversationOrchestrator(
 		ethicsEngine:    ethics.NewEthicalBoundaryEngine(db, graphAdapter, notifyFunc),
 		db:              db,
 	}
+}
+
+// SetSystem2Engine habilita o raciocínio de Sistema 2 para perguntas clínicas complexas.
+// Pode ser chamado a qualquer momento — é seguro para uso concorrente.
+func (co *ConversationOrchestrator) SetSystem2Engine(e *thinking.System2Engine) {
+	co.system2 = e
+}
+
+// ProcessTurnResult contém o resultado de uma virada de conversa.
+type ProcessTurnResult struct {
+	Response    string  // resposta final (Sistema 1 ou 2)
+	System2Used bool    // true se o raciocínio oculto foi ativado
+	Dialectic   bool    // true se houve resolução dialética
+	Score       float64 // complexidade calculada pela turn
+}
+
+// ProcessTurn analisa a mensagem do paciente, decide se ativa o Sistema 2
+// e retorna a resposta final (pode ser chamado em substituição ao fluxo normal).
+//
+// patientSeedNodeID — nó do paciente no NietzscheDB para MCTS evaluation
+// patientCtx       — contexto clínico resumido do prontuário
+func (co *ConversationOrchestrator) ProcessTurn(
+	ctx context.Context,
+	patientID int64,
+	patientSeedNodeID string,
+	patientCtx string,
+	userMessage string,
+) (*ProcessTurnResult, error) {
+	assessment := thinking.AssessComplexity(userMessage)
+
+	log.Printf("[ORCHESTRATION] Pergunta do paciente %d — complexidade=%.2f system2=%v",
+		patientID, assessment.Score, assessment.NeedsSystem2)
+
+	result := &ProcessTurnResult{Score: assessment.Score}
+
+	if assessment.NeedsSystem2 && co.system2 != nil {
+		s2Result, err := co.system2.Think(
+			ctx,
+			fmt.Sprintf("%d", patientID),
+			patientSeedNodeID,
+			patientCtx,
+			userMessage,
+		)
+		if err != nil {
+			log.Printf("[ORCHESTRATION] Sistema 2 falhou — fallback Sistema 1: %v", err)
+			// Sistema 1 fallback — o caller decide o que fazer com a resposta vazia
+			result.Response = ""
+			return result, nil
+		}
+		result.Response = s2Result.Synthesis
+		result.System2Used = true
+		result.Dialectic = s2Result.Dialectic
+		return result, nil
+	}
+
+	// Sistema 1: retorna string vazia — o caller usa o fluxo Gemini normal
+	result.Response = ""
+	return result, nil
 }
 
 // BeforeConversation deve ser chamado ANTES de enviar mensagem ao Gemini
@@ -303,12 +364,12 @@ func (co *ConversationOrchestrator) GetDashboardSummary(patientID int64) (map[st
 	cogState, err := co.cognitiveLoader.GetCurrentState(patientID)
 	if err == nil {
 		summary["cognitive"] = map[string]interface{}{
-			"load_score":             cogState.CurrentLoadScore,
-			"fatigue_level":          cogState.FatigueLevel,
-			"rumination_detected":    cogState.RuminationDetected,
-			"interactions_24h":       cogState.InteractionsCount24h,
-			"therapeutic_count_24h":  cogState.TherapeuticCount24h,
-			"active_restrictions":    cogState.ActiveRestrictions,
+			"load_score":            cogState.CurrentLoadScore,
+			"fatigue_level":         cogState.FatigueLevel,
+			"rumination_detected":   cogState.RuminationDetected,
+			"interactions_24h":      cogState.InteractionsCount24h,
+			"therapeutic_count_24h": cogState.TherapeuticCount24h,
+			"active_restrictions":   cogState.ActiveRestrictions,
 		}
 	}
 
@@ -316,11 +377,11 @@ func (co *ConversationOrchestrator) GetDashboardSummary(patientID int64) (map[st
 	ethState, err := co.ethicsEngine.GetEthicalState(patientID)
 	if err == nil {
 		summary["ethical"] = map[string]interface{}{
-			"overall_risk":           ethState.OverallEthicalRisk,
-			"attachment_risk":        ethState.AttachmentRiskScore,
-			"eva_vs_human_ratio":     ethState.EvaVsHumanRatio,
-			"attachment_phrases_7d":  ethState.AttachmentPhrases7d,
-			"limit_enforcement":      ethState.LimitEnforcementLevel,
+			"overall_risk":          ethState.OverallEthicalRisk,
+			"attachment_risk":       ethState.AttachmentRiskScore,
+			"eva_vs_human_ratio":    ethState.EvaVsHumanRatio,
+			"attachment_phrases_7d": ethState.AttachmentPhrases7d,
+			"limit_enforcement":     ethState.LimitEnforcementLevel,
 		}
 	}
 
