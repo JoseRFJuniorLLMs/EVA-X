@@ -194,6 +194,34 @@ func (ga *GraphAdapter) Bfs(ctx context.Context, startID string, maxDepth uint32
 	}, col)
 }
 
+// Dijkstra finds the shortest path between two nodes using edge weights.
+func (ga *GraphAdapter) Dijkstra(ctx context.Context, startID string,
+	collection string) ([]string, []float64, error) {
+
+	col := collection
+	if col == "" {
+		col = ga.collection
+	}
+
+	return ga.client.Dijkstra(ctx, startID, nietzsche.TraversalOpts{}, col)
+}
+
+// RunAStar finds the shortest path between two nodes using A* algorithm.
+func (ga *GraphAdapter) RunAStar(ctx context.Context, startID, goalID string,
+	collection string) ([]string, error) {
+
+	col := collection
+	if col == "" {
+		col = ga.collection
+	}
+
+	res, err := ga.client.RunAStar(ctx, col, startID, goalID)
+	if err != nil {
+		return nil, err
+	}
+	return res.Path, nil
+}
+
 // BfsWithEdgeType performs BFS filtered by edge type.
 // Replaces: MATCH (a)-[:TYPE*1..N]-(b)
 //

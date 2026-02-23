@@ -13,9 +13,9 @@ EVA-Mind e o cerebro da EVA — uma IA de saude mental e acompanhamento de idoso
 EVA-Mind e um sistema de inteligencia artificial para saude, escrito em Go 1.24, que combina:
 - Voz bidirecional em tempo real via WebSocket (Gemini Live API)
 - Analise de camera e tela em tempo real para assistencia medica
-- Grafos de memoria de pacientes (Neo4j) com aprendizado Hebbiano
-- Busca semantica de memoria (Qdrant vector database)
-- Compressao Krylov (1536D -> 64D, ~97% precisao)
+- Memória Unificada de Grafo e Vetores (NietzscheDB) com aprendizado Hebbiano
+- Busca semântica vetorial Poincaré (NietzscheDB)
+- Compressão Krylov (1536D -> 64D, ~97% precisão)
 - Modelagem psicoanalitica (framework Lacaniano)
 - Sistema de personalidade (Big Five + Enneagram) com evolucao
 - Escalas clinicas (PHQ-9, GAD-7, C-SSRS) via voz
@@ -42,9 +42,7 @@ Cada diretorio mapeia para uma regiao cerebral:
 - `database/` — PostgreSQL (NewDB, queries, connection pooling 25 max open)
 - `auth/` — JWT (tokens 15min access, 7 dias refresh), bcrypt cost 14
 - `push/` — Firebase Cloud Messaging (CallKit, alertas criticos)
-- `infrastructure/graph/` — Neo4j client (ExecuteRead, ExecuteWrite, ExecuteWrite)
-- `infrastructure/vector/` — Qdrant client gRPC (CreateCollection, Upsert, Search, GetCollectionInfo)
-- `infrastructure/redis/` — Redis client (cache, sessoes)
+- `infrastructure/nietzsche/` — NietzscheDB client (gRPC, NQL, Poincaré, Diffuse)
 - `infrastructure/workerpool/` — Worker pool para background tasks
 - `logger/` — Zerolog structured logging
 - `middleware/` — Subscription middleware, feature-level access
@@ -125,9 +123,7 @@ Cada diretorio mapeia para uma regiao cerebral:
 | Banco | Versao | Uso | Porta |
 |-------|--------|-----|-------|
 | **PostgreSQL** (Cloud SQL) | 15+ | Dados estruturados, memorias episodicas, escalas clinicas | 5432 |
-| **Neo4j** (Community) | 5.x | Grafos de conhecimento, relacoes, significantes Lacanianos | 7474/7687 |
-| **Qdrant** | latest | Embeddings vetoriais, busca semantica | 6333/6334 |
-| **Redis** | 7-alpine | Cache, sessoes, estado real-time | 6379 |
+| **NietzscheDB** | latest | Substrato unificado (Grafo, Vetor, Cache), Poincaré, Diffuse | 50051/8080 |
 
 ### Dependencias Diretas (go.mod)
 | Pacote | Versao | Uso |
@@ -139,11 +135,11 @@ Cada diretorio mapeia para uma regiao cerebral:
 | github.com/gorilla/websocket | v1.5.3 | WebSocket |
 | github.com/joho/godotenv | v1.5.1 | Variaveis de ambiente |
 | github.com/lib/pq | v1.10.9 | Driver PostgreSQL |
-| github.com/neo4j/neo4j-go-driver/v5 | v5.28.4 | Driver Neo4j |
+| github.com/neo4j/neo4j-go-driver/v5 | v5.24.4 | (Legado) Driver Neo4j |
 | github.com/pgvector/pgvector-go | v0.3.0 | Extensao vetorial PostgreSQL |
 | github.com/prometheus/client_golang | v1.23.2 | Metricas Prometheus |
-| github.com/qdrant/go-client | v1.15.2 | Client Qdrant gRPC |
-| github.com/redis/go-redis/v9 | v9.17.2 | Client Redis |
+| github.com/qdrant/go-client | v1.12.2 | (Legado) Client Qdrant gRPC |
+| github.com/redis/go-redis/v9 | v9.16.2 | (Legado) Client Redis |
 | github.com/rs/zerolog | v1.34.0 | Logging estruturado |
 | github.com/twilio/twilio-go | v1.29.0 | SMS/Voz Twilio |
 | golang.org/x/crypto | v0.47.0 | Criptografia (bcrypt) |

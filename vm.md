@@ -18,9 +18,7 @@
 | **EVA-Mind API** | 8091 | Go binary (systemd) |
 | **Malaria API** | 8080 | Go binary (systemd) |
 | **Nginx** | 80 | Proxy reverso |
-| **Neo4j** | 7687 (bolt) / 7474 (browser) | Docker |
-| **Qdrant** | 6333 (REST) / 6334 (gRPC) | Docker |
-| **Redis** | 6379 | Docker |
+| **NietzscheDB** | 50051 (gRPC) / 8080 (Dashboard) | Docker |
 
 ## Databases Externos
 
@@ -76,18 +74,10 @@ ENVIRONMENT=production
 GOOGLE_API_KEY=AIzaSyBq3AqjhJ4NZv4W9ksN2IAZg-buxKBQi_I
 MODEL_ID=gemini-2.5-flash-native-audio-preview-12-2025
 
-# Neo4j (Docker local)
-NEO4J_URI=bolt://localhost:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=Debian23
-
-# Qdrant (Docker local)
-QDRANT_HOST=localhost
-QDRANT_PORT=6334
-
-# Redis (Docker local)
-REDIS_HOST=localhost
-REDIS_PORT=6379
+# NietzscheDB (Docker local ou remoto)
+NIETZSCHE_GRPC_ADDR=localhost:50051
+NIETZSCHE_ENCRYPTION_KEY=your-aes-key-here
+NIETZSCHE_RBAC_ENABLED=true
 
 # PostgreSQL (Cloud SQL)
 DATABASE_URL=postgres://postgres:Debian23%40@35.232.177.102:5432/eva-db?sslmode=disable

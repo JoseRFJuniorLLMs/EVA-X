@@ -6,20 +6,18 @@ package tools
 import (
 	"context"
 	"eva/internal/brainstem/database"
-	"sync"
-	"eva/internal/swarm"
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	"eva/internal/brainstem/oauth"
 	"eva/internal/brainstem/push"
 	"eva/internal/cortex/alert"
+	"eva/internal/cortex/llm"
+	"eva/internal/cortex/skills"
 	"eva/internal/hippocampus/habits"
 	"eva/internal/hippocampus/spaced"
 	"eva/internal/motor/actions"
-	"eva/internal/motor/email"
-	"eva/internal/cortex/llm"
-	"eva/internal/cortex/skills"
 	"eva/internal/motor/browser"
 	"eva/internal/motor/cron"
+	"eva/internal/motor/email"
 	"eva/internal/motor/filesystem"
 	"eva/internal/motor/messaging"
 	"eva/internal/motor/sandbox"
@@ -27,9 +25,11 @@ import (
 	"eva/internal/motor/smarthome"
 	"eva/internal/motor/telegram"
 	"eva/internal/motor/webhooks"
+	"eva/internal/swarm"
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -49,36 +49,38 @@ type ToolsHandler struct {
 	db                *database.DB
 	pushService       *push.FirebaseService
 	emailService      *email.EmailService
-	escalationService *alert.EscalationService        // ✅ Escalation Service
-	spacedService     *spaced.SpacedRepetitionService // ✅ Spaced Repetition
-	habitTracker      *habits.HabitTracker            // ✅ Habit Tracking
-	oauthService      *oauth.Service                  // ✅ Google OAuth (token refresh)
-	autonomousLearner WebSearchFunc                   // ✅ Web Research
-	whatsappToken     string                          // ✅ WhatsApp Meta API token
-	whatsappPhoneID   string                          // ✅ WhatsApp Phone Number ID
-	telegramService   *telegram.Service               // ✅ Telegram Bot
-	filesystemService *filesystem.Service             // ✅ Filesystem Access
-	selfcodeService   *selfcode.Service               // ✅ Self-Coding
-	mapsAPIKey        string                          // ✅ Google Maps API Key
-	sandboxService    *sandbox.Service                // ✅ Code Execution Sandbox
-	browserService    *browser.Service                // ✅ Browser Automation
-	cronService       *cron.Service                   // ✅ Scheduled Tasks
-	llmService        *llm.Service                    // ✅ Multi-LLM (Claude, GPT, DeepSeek)
-	slackService      *messaging.SlackService         // ✅ Slack
-	discordService    *messaging.DiscordService       // ✅ Discord
-	teamsService      *messaging.TeamsService         // ✅ Microsoft Teams
-	signalService     *messaging.SignalService        // ✅ Signal
-	smartHomeService  *smarthome.Service              // ✅ Smart Home (Home Assistant)
-	webhookService    *webhooks.Service               // ✅ Webhooks
-	skillsService     *skills.Service                 // ✅ Runtime Skills
-	graphAdapter      *nietzscheInfra.GraphAdapter     // ✅ NietzscheDB GraphAdapter (grafo geral)
-	evaCoreAdapter    *nietzscheInfra.GraphAdapter     // ✅ NietzscheDB GraphAdapter (grafo Core — memória pessoal EVA)
-	vectorAdapter     *nietzscheInfra.VectorAdapter   // ✅ NietzscheDB VectorAdapter (busca vetorial)
-	nietzscheClient   *nietzscheInfra.Client          // ✅ NietzscheDB gRPC (porta 50051 — grafo + vetores + cache)
-	manifoldAdapter   *nietzscheInfra.ManifoldAdapter // ✅ NietzscheDB ManifoldAdapter (Riemann/Minkowski/Klein)
-	embedFunc         EmbedFunc                       // ✅ Embedding func (text → vector para NietzscheDB)
-	debugMode         bool                            // ✅ Novas tools só habilitadas em debug
-	swarmRouter       SwarmRouter                     // ✅ Bridge para swarm orchestrator (tools sem case no switch)
+	escalationService *alert.EscalationService          // ✅ Escalation Service
+	spacedService     *spaced.SpacedRepetitionService   // ✅ Spaced Repetition
+	habitTracker      *habits.HabitTracker              // ✅ Habit Tracking
+	oauthService      *oauth.Service                    // ✅ Google OAuth (token refresh)
+	autonomousLearner WebSearchFunc                     // ✅ Web Research
+	whatsappToken     string                            // ✅ WhatsApp Meta API token
+	whatsappPhoneID   string                            // ✅ WhatsApp Phone Number ID
+	telegramService   *telegram.Service                 // ✅ Telegram Bot
+	filesystemService *filesystem.Service               // ✅ Filesystem Access
+	selfcodeService   *selfcode.Service                 // ✅ Self-Coding
+	mapsAPIKey        string                            // ✅ Google Maps API Key
+	sandboxService    *sandbox.Service                  // ✅ Code Execution Sandbox
+	browserService    *browser.Service                  // ✅ Browser Automation
+	cronService       *cron.Service                     // ✅ Scheduled Tasks
+	llmService        *llm.Service                      // ✅ Multi-LLM (Claude, GPT, DeepSeek)
+	slackService      *messaging.SlackService           // ✅ Slack
+	discordService    *messaging.DiscordService         // ✅ Discord
+	teamsService      *messaging.TeamsService           // ✅ Microsoft Teams
+	signalService     *messaging.SignalService          // ✅ Signal
+	smartHomeService  *smarthome.Service                // ✅ Smart Home (Home Assistant)
+	webhookService    *webhooks.Service                 // ✅ Webhooks
+	skillsService     *skills.Service                   // ✅ Runtime Skills
+	graphAdapter      *nietzscheInfra.GraphAdapter      // ✅ NietzscheDB GraphAdapter (grafo geral)
+	evaCoreAdapter    *nietzscheInfra.GraphAdapter      // ✅ NietzscheDB GraphAdapter (grafo Core — memória pessoal EVA)
+	vectorAdapter     *nietzscheInfra.VectorAdapter     // ✅ NietzscheDB VectorAdapter (busca vetorial)
+	nietzscheClient   *nietzscheInfra.Client            // ✅ NietzscheDB gRPC (porta 50051 — grafo + vetores + cache)
+	manifoldAdapter   *nietzscheInfra.ManifoldAdapter   // ✅ NietzscheDB ManifoldAdapter (Riemann/Minkowski/Klein)
+	embedFunc         EmbedFunc                         // ✅ Embedding func (text → vector para NietzscheDB)
+	debugMode         bool                              // ✅ Novas tools só habilitadas em debug
+	swarmRouter       SwarmRouter                       // ✅ Bridge para swarm orchestrator (tools sem case no switch)
+	securityAdapter   *nietzscheInfra.SecurityAdapter   // ✅ NietzscheDB Security (RBAC + Encryption)
+	wiederkehrAdapter *nietzscheInfra.WiederkehrAdapter // ✅ NietzscheDB Wiederkehr (Daemons)
 	NotifyFunc        func(idosoID int64, msgType string, payload interface{})
 	browserListeners  map[int64]func(msgType string, payload interface{}) // Per-session browser WS listeners
 	browserListenerMu sync.RWMutex
@@ -2740,4 +2742,12 @@ func (h *ToolsHandler) handleOpenApp(idosoID int64, args map[string]interface{})
 		"package": appInfo.pkg,
 		"message": fmt.Sprintf("Abrindo %s...", appInfo.display),
 	}, nil
+}
+
+func (h *ToolsHandler) SetSecurityAdapter(sa *nietzscheInfra.SecurityAdapter) {
+	h.securityAdapter = sa
+}
+
+func (h *ToolsHandler) SetWiederkehrAdapter(wa *nietzscheInfra.WiederkehrAdapter) {
+	h.wiederkehrAdapter = wa
 }

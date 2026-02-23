@@ -220,23 +220,16 @@ func (hk *HeatKernelDiffusion) buildTValues(maxSteps int) []float64 {
 	return tValues
 }
 
-// findShortestPath uses BFS to find a path between two nodes.
+// findShortestPath uses A* to find the optimal path between two nodes.
 func (hk *HeatKernelDiffusion) findShortestPath(ctx context.Context, startID, endID string) (Path, error) {
-	neighborIDs, err := hk.graphAdapter.Bfs(ctx, startID, 10, "")
+	nodeIDs, err := hk.graphAdapter.RunAStar(ctx, startID, endID, hk.collection)
 	if err != nil {
 		return Path{}, err
 	}
-	for i, nid := range neighborIDs {
-		if nid == endID {
-			return Path{
-				Nodes: []string{startID, endID},
-				Hops:  i + 1,
-			}, nil
-		}
-	}
+
 	return Path{
-		Nodes: []string{startID, endID},
-		Hops:  1,
+		Nodes: nodeIDs,
+		Hops:  len(nodeIDs) - 1,
 	}, nil
 }
 

@@ -174,9 +174,9 @@ func TestRecurrentPattern_ConfidenceThresholds(t *testing.T) {
 func TestRecurrentPattern_SeverityTrendAnalysis(t *testing.T) {
 	// Test pattern trend analysis for clinical relevance
 	testCases := []struct {
-		name             string
-		topic            string
-		trend            string
+		name              string
+		topic             string
+		trend             string
 		requiresAttention bool
 	}{
 		{"increasing_negative", "pensamentos suicidas", "increasing", true},
@@ -347,7 +347,7 @@ func TestPatternMiner_NoDatabase(t *testing.T) {
 	// PatternMiner should handle nil database gracefully
 	pm := NewPatternMiner(nil)
 	require.NotNil(t, pm)
-	assert.Nil(t, pm.neo4j)
+	assert.Nil(t, pm.graphAdapter)
 }
 
 func TestClinicalPatternDetection(t *testing.T) {

@@ -850,6 +850,7 @@ func (c *Client) EnsureCollections(ctx context.Context) error {
 		{"eva_core", "label"},
 		{"eva_core", "created_at"},
 		{"eva_core", "category"},
+		{"eva_core", "trait_name"},
 		// memories: vector collection with metadata filters
 		{"memories", "user_id"},
 		{"memories", "importance"},

@@ -122,6 +122,13 @@ type Config struct {
 	CDCEnabled         bool   // Whether to start CDC listener
 	BackupInterval     string // Duration string (e.g. "24h") — automated backup interval
 
+	// NietzscheDB Security (RBAC + Encryption)
+	NIETZSCHE_ENCRYPTION_KEY string
+	NIETZSCHE_RBAC_ENABLED   bool
+	NIETZSCHE_API_KEY_ADMIN  string
+	NIETZSCHE_API_KEY_WRITER string
+	NIETZSCHE_API_KEY_READER string
+
 	// Feature Flags (V2)
 	EnableGoogleSearch   bool
 	EnableCodeExecution  bool
@@ -252,6 +259,13 @@ func Load() (*Config, error) {
 		S3AccessKey:      os.Getenv("S3_ACCESS_KEY"),
 		S3SecretKey:      os.Getenv("S3_SECRET_KEY"),
 		S3ForcePathStyle: getEnvBool("S3_FORCE_PATH_STYLE", true),
+
+		// NietzscheDB Security
+		NIETZSCHE_ENCRYPTION_KEY: os.Getenv("NIETZSCHE_ENCRYPTION_KEY"),
+		NIETZSCHE_RBAC_ENABLED:   getEnvBool("NIETZSCHE_RBAC_ENABLED", false),
+		NIETZSCHE_API_KEY_ADMIN:  os.Getenv("NIETZSCHE_API_KEY_ADMIN"),
+		NIETZSCHE_API_KEY_WRITER: os.Getenv("NIETZSCHE_API_KEY_WRITER"),
+		NIETZSCHE_API_KEY_READER: os.Getenv("NIETZSCHE_API_KEY_READER"),
 
 		// Load Feature Flags (Default: false for safety/compatibility)
 		EnableGoogleSearch:   getEnvBool("ENABLE_GOOGLE_SEARCH", false),
