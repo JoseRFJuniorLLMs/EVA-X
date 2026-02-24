@@ -4,7 +4,7 @@
 package database
 
 import (
-	"database/sql"
+	"context"
 	"fmt"
 	"time"
 )
@@ -20,12 +20,31 @@ type User struct {
 	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
+func contentToUser(m map[string]interface{}) *User {
+	return &User{
+		ID:           getInt64(m, "id"),
+		Name:         getString(m, "nome"),
+		Email:        getString(m, "email"),
+		PasswordHash: getString(m, "senha_hash"),
+		Role:         getString(m, "tipo"),
+		LastLogin:    getTimePtr(m, "last_login"),
+		CreatedAt:    getTime(m, "criado_em"),
+		UpdatedAt:    getTime(m, "atualizado_em"),
+	}
+}
+
 func (db *DB) CreateUser(name, email, passwordHash, role string) error {
-	query := `
-		INSERT INTO usuarios (nome, email, senha_hash, tipo, criado_em, atualizado_em, ativo)
-		VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, true)
-	`
-	_, err := db.Conn.Exec(query, name, email, passwordHash, role)
+	ctx := context.Background()
+	now := time.Now().Format(time.RFC3339)
+	_, err := db.insertRow(ctx, "usuarios", map[string]interface{}{
+		"nome":          name,
+		"email":         email,
+		"senha_hash":    passwordHash,
+		"tipo":          role,
+		"criado_em":     now,
+		"atualizado_em": now,
+		"ativo":         true,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to create user: %w", err)
 	}
@@ -33,49 +52,34 @@ func (db *DB) CreateUser(name, email, passwordHash, role string) error {
 }
 
 func (db *DB) GetUserByEmail(email string) (*User, error) {
-	query := `
-		SELECT id, nome, email, senha_hash, tipo, NULL as last_login, criado_em, atualizado_em
-		FROM usuarios
-		WHERE email = $1
-	`
-	// Note: last_login might not exist in usuarios yet, passing NULL for now or we need to add it to schema
-	var u User
-	err := db.Conn.QueryRow(query, email).Scan(
-		&u.ID, &u.Name, &u.Email, &u.PasswordHash, &u.Role, &u.LastLogin, &u.CreatedAt, &u.UpdatedAt,
-	)
+	ctx := context.Background()
+
+	rows, err := db.queryNodesByLabel(ctx, "usuarios",
+		` AND n.email = $email`, map[string]interface{}{
+			"email": email,
+		}, 1)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil // Not found
-		}
 		return nil, fmt.Errorf("failed to get user: %w", err)
 	}
-	return &u, nil
+	if len(rows) == 0 {
+		return nil, nil // Not found
+	}
+	return contentToUser(rows[0]), nil
 }
 
 func (db *DB) GetUserByID(id int64) (*User, error) {
-	query := `
-		SELECT id, nome, email, senha_hash, tipo, NULL as last_login, criado_em, atualizado_em
-		FROM usuarios
-		WHERE id = $1
-	`
-	var u User
-	err := db.Conn.QueryRow(query, id).Scan(
-		&u.ID, &u.Name, &u.Email, &u.PasswordHash, &u.Role, &u.LastLogin, &u.CreatedAt, &u.UpdatedAt,
-	)
+	ctx := context.Background()
+	m, err := db.getNode(ctx, "usuarios", id)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil // Not found
-		}
 		return nil, fmt.Errorf("failed to get user: %w", err)
 	}
-	return &u, nil
+	if m == nil {
+		return nil, nil // Not found
+	}
+	return contentToUser(m), nil
 }
 
 func (db *DB) UpdateLastLogin(userID int64) error {
-	// Assuming there is no last_login column in usuarios yet based on the request which didn't list it.
-	// We will skip this or commented it out until confirmed.
-	// If we must implement, we might need to add it or use updated_at.
-	// query := `UPDATE usuarios SET atualizado_em = CURRENT_TIMESTAMP WHERE id = $1`
-	// _, err := db.conn.Exec(query, userID)
+	// No-op (column not confirmed in schema)
 	return nil
 }
