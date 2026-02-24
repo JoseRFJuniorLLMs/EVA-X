@@ -39,7 +39,7 @@ func (d *Distiller) DistillKnowledge(ctx context.Context, outputFile string) err
 	log.Printf("[DISTILLER] Iniciando destilação de conhecimento do motor clássico...")
 
 	// 1. Buscar todos os pacientes (os "alunos" vão aprender sobre eles)
-	qr, err := d.graphAdapter.ExecuteNQL(ctx, "MATCH (n:SyntheticPatient) RETURN n", nil, "Patient")
+	qr, err := d.graphAdapter.ExecuteNQL(ctx, "MATCH (n) RETURN n", nil, "Patient")
 	if err != nil {
 		return fmt.Errorf("erro ao buscar pacientes: %w", err)
 	}
