@@ -369,6 +369,11 @@ func (c *Client) MctsSearch(ctx context.Context, opts nietzsche.MctsOpts) (nietz
 	return c.sdk.MctsSearch(ctx, opts)
 }
 
+// CalculateFidelity computes quantum fidelity (Bloch sphere entanglement proxy) between two groups of nodes.
+func (c *Client) CalculateFidelity(ctx context.Context, opts nietzsche.FidelityOpts) (nietzsche.FidelityResult, error) {
+	return c.sdk.CalculateFidelity(ctx, opts)
+}
+
 // ── Dream System ─────────────────────────────────────────────────────────────
 
 // DreamResult holds the result of a DREAM FROM query.

@@ -127,6 +127,7 @@ func (co *ConversationOrchestrator) ProcessTurn(
 			patientSeedNodeID,
 			patientCtx,
 			userMessage,
+			nil, // quantum context — populated when patient embeddings are available
 		)
 		if err != nil {
 			log.Printf("[ORCHESTRATION] Sistema 2 falhou — fallback Sistema 1: %v", err)

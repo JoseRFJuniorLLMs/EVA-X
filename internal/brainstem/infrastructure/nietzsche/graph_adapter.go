@@ -367,6 +367,11 @@ func (ga *GraphAdapter) MctsSearch(ctx context.Context, modelName string, startN
 	})
 }
 
+// CalculateFidelity computes quantum fidelity (Bloch sphere entanglement proxy) between two groups of nodes.
+func (ga *GraphAdapter) CalculateFidelity(ctx context.Context, opts nietzsche.FidelityOpts) (nietzsche.FidelityResult, error) {
+	return ga.client.CalculateFidelity(ctx, opts)
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 // NowUnix returns current time as Unix float64.

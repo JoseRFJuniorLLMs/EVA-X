@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/joho/godotenv"
@@ -133,6 +134,11 @@ type Config struct {
 	EnableGoogleSearch   bool
 	EnableCodeExecution  bool
 	EnableContextCaching bool
+
+	// Quantum Entanglement Thresholds (NietzscheDB Schrödinger collapse)
+	QuantumEntanglementThreshold float64 // Default: 0.85 — general purpose fidelity threshold
+	QuantumStrictThreshold       float64 // Default: 0.90 — safety-critical (e.g. medication dosage)
+	QuantumRelaxedThreshold      float64 // Default: 0.65 — exploratory (e.g. psychological support)
 }
 
 func Load() (*Config, error) {
@@ -271,6 +277,11 @@ func Load() (*Config, error) {
 		EnableGoogleSearch:   getEnvBool("ENABLE_GOOGLE_SEARCH", false),
 		EnableCodeExecution:  getEnvBool("ENABLE_CODE_EXECUTION", false),
 		EnableContextCaching: getEnvBool("ENABLE_CONTEXT_CACHING", true),
+
+		// Quantum Entanglement Thresholds
+		QuantumEntanglementThreshold: getEnvFloat64("QUANTUM_ENTANGLEMENT_THRESHOLD", 0.85),
+		QuantumStrictThreshold:       getEnvFloat64("QUANTUM_STRICT_THRESHOLD", 0.90),
+		QuantumRelaxedThreshold:      getEnvFloat64("QUANTUM_RELAXED_THRESHOLD", 0.65),
 	}, nil
 }
 
@@ -310,6 +321,15 @@ func getEnvInt(key string, defaultValue int) int {
 		var intValue int
 		if _, err := fmt.Sscanf(value, "%d", &intValue); err == nil {
 			return intValue
+		}
+	}
+	return defaultValue
+}
+
+func getEnvFloat64(key string, defaultValue float64) float64 {
+	if value := os.Getenv(key); value != "" {
+		if f, err := strconv.ParseFloat(value, 64); err == nil {
+			return f
 		}
 	}
 	return defaultValue
