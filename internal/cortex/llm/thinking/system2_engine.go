@@ -72,6 +72,7 @@ type System2Result struct {
 // NietzscheEvaluator defines the NietzscheDB calls used by the System 2 Engine.
 type NietzscheEvaluator interface {
 	MctsSearch(ctx context.Context, opts nietzscheSDK.MctsOpts) (nietzscheSDK.MctsResult, error)
+	CalculateFidelity(ctx context.Context, opts nietzscheSDK.FidelityOpts) (nietzscheSDK.FidelityResult, error)
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -101,15 +102,26 @@ type System2Engine struct {
 	// timeouts
 	expansionTimeout time.Duration
 	synthesisTimeout time.Duration
+
+	// quantum fidelity threshold for hypothesis validation
+	quantumThreshold float32
 }
 
 // System2Config holds initialisation parameters.
 type System2Config struct {
-	GeminiAPIKey string
-	FastModel    string // e.g. "gemini-2.0-flash-exp"
-	SmartModel   string // e.g. "gemini-2.0-pro"
-	Collection   string // NietzscheDB collection
-	Nietzsche    NietzscheEvaluator
+	GeminiAPIKey       string
+	FastModel          string // e.g. "gemini-2.0-flash-exp"
+	SmartModel         string // e.g. "gemini-2.0-pro"
+	Collection         string // NietzscheDB collection
+	Nietzsche          NietzscheEvaluator
+	QuantumThreshold   float32 // entanglement threshold (default 0.80)
+}
+
+// QuantumContext holds optional patient embeddings for quantum fidelity validation.
+// If nil or empty, quantum validation is skipped gracefully.
+type QuantumContext struct {
+	PatientEmbeddings [][]float64 // Poincaré embeddings from patient history
+	PatientEnergies   []float32   // Arousal values for each embedding
 }
 
 // NewSystem2Engine cria e retorna um System2Engine configurado.
@@ -129,6 +141,11 @@ func NewSystem2Engine(cfg System2Config) (*System2Engine, error) {
 		smartModel = "gemini-2.0-pro-exp"
 	}
 
+	qThreshold := cfg.QuantumThreshold
+	if qThreshold == 0 {
+		qThreshold = 0.80
+	}
+
 	return &System2Engine{
 		fastClient:       conn.GenerativeModel(fastModel),
 		smartClient:      conn.GenerativeModel(smartModel),
@@ -138,6 +155,7 @@ func NewSystem2Engine(cfg System2Config) (*System2Engine, error) {
 		lenses:           defaultLenses,
 		expansionTimeout: 20 * time.Second,
 		synthesisTimeout: 30 * time.Second,
+		quantumThreshold: qThreshold,
 	}, nil
 }
 
@@ -156,12 +174,14 @@ func (e *System2Engine) Close() error {
 // seedNodeID   — nó de partida para MctsSearch (geralmente o nó do paciente)
 // patientCtx   — contexto clínico resumido do prontuário
 // userQuery    — mensagem do paciente
+// qCtx         — contexto quântico opcional (embeddings do paciente); nil para pular validação
 func (e *System2Engine) Think(
 	ctx context.Context,
 	patientID string,
 	seedNodeID string,
 	patientCtx string,
 	userQuery string,
+	qCtx *QuantumContext,
 ) (*System2Result, error) {
 	start := time.Now()
 
@@ -173,8 +193,15 @@ func (e *System2Engine) Think(
 		return nil, fmt.Errorf("system2: expansion: %w", err)
 	}
 
-	// ── Fase 2: AVALIAÇÃO via NietzscheDB ────────────────────────────────────
+	// ── Fase 2: AVALIAÇÃO via NietzscheDB (MCTS) ────────────────────────────
 	e.evaluate(ctx, seedNodeID, hypotheses)
+
+	// ── Fase 2.5: VALIDAÇÃO QUÂNTICA (Bloch Sphere Fidelity) ────────────────
+	// Se temos embeddings do paciente, validar cada hipótese com fidelidade
+	// quântica. Hipóteses com baixo emaranhamento são potenciais alucinações.
+	if qCtx != nil && len(qCtx.PatientEmbeddings) > 0 {
+		e.quantumValidate(ctx, qCtx, hypotheses)
+	}
 
 	// ── Fase 3: Selecionar melhor e detectar contradição ─────────────────────
 	best, contender := e.selectCandidates(hypotheses)
@@ -200,6 +227,75 @@ func (e *System2Engine) Think(
 
 	log.Printf("[SYSTEM2] Raciocínio concluído em %dms (dialética=%v)", result.TotalLatencyMs, dialectic)
 	return result, nil
+}
+
+// quantumValidate runs Bloch sphere fidelity checks on hypotheses that passed
+// MCTS evaluation. Blends the quantum score with the causal score (60/40 weight).
+// Hypotheses that fail the entanglement threshold are flagged as low-fidelity.
+func (e *System2Engine) quantumValidate(ctx context.Context, qCtx *QuantumContext, hypotheses []Hypothesis) {
+	patientNodes := toQuantumNodes(qCtx.PatientEmbeddings, qCtx.PatientEnergies)
+
+	for i := range hypotheses {
+		if hypotheses[i].CausalScore < 0.4 || contains(hypotheses[i].Draft, "[falhou:") {
+			continue // skip failed or weak hypotheses
+		}
+
+		// Use the hypothesis embedding as a single QuantumNode.
+		// In production, each hypothesis text would first be embedded via NietzscheDB;
+		// here we use a simple hash-based projection as a proxy for the embedding.
+		hypEmbedding := textToProxyEmbedding(hypotheses[i].Draft, len(qCtx.PatientEmbeddings[0]))
+		hypNodes := toQuantumNodes(
+			[][]float64{hypEmbedding},
+			[]float32{float32(hypotheses[i].CausalScore)}, // energy = confidence
+		)
+
+		fidelity, crossed, err := e.ValidateHypothesisQuantumly(
+			ctx, patientNodes, hypNodes, e.quantumThreshold,
+		)
+		if err != nil {
+			log.Printf("[SYSTEM2-QUANTUM] Validação quântica falhou para %s (fallback MCTS): %v",
+				hypotheses[i].ID, err)
+			continue // graceful fallback: keep MCTS score as-is
+		}
+
+		// Blend: 60% MCTS causal + 40% quantum fidelity
+		oldScore := hypotheses[i].CausalScore
+		hypotheses[i].CausalScore = oldScore*0.6 + fidelity*0.4
+
+		log.Printf("[SYSTEM2-QUANTUM] %s — fidelidade=%.3f, emaranhado=%v, score %.3f→%.3f",
+			hypotheses[i].ID, fidelity, crossed, oldScore, hypotheses[i].CausalScore)
+
+		if !crossed {
+			log.Printf("[SYSTEM2-QUANTUM] %s marcada como BAIXA FIDELIDADE (possível alucinação)",
+				hypotheses[i].ID)
+		}
+	}
+}
+
+// textToProxyEmbedding creates a deterministic proxy embedding from text.
+// This is a lightweight hash-based projection into the Poincaré ball (||x|| < 1).
+// In production, a proper embedding model should be used instead.
+func textToProxyEmbedding(text string, dim int) []float64 {
+	if dim <= 0 {
+		dim = 64
+	}
+	emb := make([]float64, dim)
+	// Simple deterministic hash spread across dimensions
+	for i, ch := range text {
+		emb[i%dim] += float64(ch) * 0.001
+	}
+	// Project into Poincaré ball (norm < 1)
+	var norm float64
+	for _, v := range emb {
+		norm += v * v
+	}
+	if norm > 0 {
+		norm = 1.0 / (1.0 + norm) // sigmoid-like compression
+		for i := range emb {
+			emb[i] *= norm
+		}
+	}
+	return emb
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -439,6 +535,51 @@ Preserve o conteúdo clínico. Máximo 3 parágrafos. NÃO diagnostique.`,
 		}
 	}
 	return text, dialectic, nil
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Quantum Fidelity Validation (Bloch Sphere)
+// ──────────────────────────────────────────────────────────────────────────────
+
+// ValidateHypothesisQuantumly checks quantum fidelity between patient history
+// and a generated hypothesis using NietzscheDB's Bloch sphere projection.
+//
+// It converts the two embedding groups to QuantumNodes, calls NietzscheDB
+// CalculateFidelity, and returns the entanglement proxy score, whether the
+// threshold was crossed, and any error encountered.
+func (e *System2Engine) ValidateHypothesisQuantumly(
+	ctx context.Context,
+	patientHistory []nietzscheSDK.QuantumNode,
+	hypothesis []nietzscheSDK.QuantumNode,
+	threshold float32,
+) (float64, bool, error) {
+	resp, err := e.nietzsche.CalculateFidelity(ctx, nietzscheSDK.FidelityOpts{
+		GroupA:                patientHistory,
+		GroupB:                hypothesis,
+		EntanglementThreshold: threshold,
+	})
+	if err != nil {
+		return 0, false, fmt.Errorf("quantum fidelity error: %w", err)
+	}
+
+	return resp.EntanglementProxy, resp.ThresholdCrossed, nil
+}
+
+// toQuantumNodes converts embeddings and energy values to nietzscheSDK.QuantumNode slices.
+// If energies is shorter than embeddings, missing entries default to 0.5.
+func toQuantumNodes(embeddings [][]float64, energies []float32) []nietzscheSDK.QuantumNode {
+	nodes := make([]nietzscheSDK.QuantumNode, len(embeddings))
+	for i, emb := range embeddings {
+		energy := float32(0.5)
+		if i < len(energies) {
+			energy = energies[i]
+		}
+		nodes[i] = nietzscheSDK.QuantumNode{
+			Embedding: emb,
+			Energy:    energy,
+		}
+	}
+	return nodes
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
