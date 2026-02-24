@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
 	"os"
 	"os/signal"
@@ -77,6 +78,7 @@ import (
 	nietzsche "nietzsche-sdk"
 
 	"github.com/gorilla/mux"
+	_ "github.com/lib/pq"
 	"github.com/rs/zerolog/log"
 )
 
@@ -180,13 +182,7 @@ func main() {
 	}
 
 	// 2. Infraestrutura (DBs)
-	db, err := database.NewDB(cfg.DatabaseURL)
-	if err != nil {
-		log.Fatal().Err(err).Msg("Falha ao conectar PostgreSQL")
-	}
-	defer db.Close()
-
-	// NietzscheDB — single unified database (graph + vector + cache)
+	// NietzscheDB — single unified database (graph + vector + cache + relational)
 	nzClient, err := nietzscheInfra.NewClient(cfg.NietzscheGRPCAddr)
 	if err != nil {
 		log.Fatal().Err(err).Msg("NietzscheDB indisponivel — banco unico obrigatorio")
@@ -196,6 +192,36 @@ func main() {
 	// Ensure all EVA collections exist (idempotent)
 	if err := nzClient.EnsureCollections(context.Background()); err != nil {
 		log.Fatal().Err(err).Msg("Falha ao criar collections no NietzscheDB")
+	}
+
+	// Legacy PostgreSQL connection (kept for packages that still use db.Conn directly)
+	// TODO: Remove once all packages are migrated to NietzscheDB
+	var legacyConn *sql.DB
+	if cfg.DatabaseURL != "" {
+		legacyDB, pgErr := sql.Open("postgres", cfg.DatabaseURL)
+		if pgErr == nil {
+			legacyDB.SetMaxOpenConns(10)
+			legacyDB.SetMaxIdleConns(2)
+			legacyDB.SetConnMaxLifetime(5 * time.Minute)
+			if pingErr := legacyDB.Ping(); pingErr == nil {
+				legacyConn = legacyDB
+				log.Info().Msg("PostgreSQL legacy connection established (backward compat)")
+			} else {
+				log.Warn().Err(pingErr).Msg("PostgreSQL unavailable — packages using db.Conn will fail")
+				legacyDB.Close()
+			}
+		} else {
+			log.Warn().Err(pgErr).Msg("PostgreSQL connection failed — packages using db.Conn will fail")
+		}
+	}
+
+	// Primary DB: NietzscheDB with optional PostgreSQL fallback
+	db := database.NewNietzscheDB(nzClient.SDK(), legacyConn)
+	defer db.Close()
+
+	// Ensure indexes for eva_mind collection
+	if err := db.EnsureIndexes(context.Background()); err != nil {
+		log.Warn().Err(err).Msg("Failed to create eva_mind indexes (non-fatal)")
 	}
 
 	// Create adapters

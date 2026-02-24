@@ -69,21 +69,19 @@ ARCHITECTURE
 	                   analysis, signifier chains, narrative shift
 	                   detection, Grand Autre, transference, FDPN)
 	  personality/   - Big Five traits, Enneagram types, trait relevance
-	                   mapping, situation modulation, trajectory analysis,
-	                   interpretation validation, quality tracking
 	  self/          - Core memory engine, post-session reflection,
-	                   anonymization, semantic deduplication
 	  attention/     - Affect stabilizer, confidence gate, executive
 	                   attention, pattern interrupt, triple attention,
 	                   wavelet attention
 	  consciousness/ - Global Workspace Theory (Baars 1988) with
 	                   cognitive module competition and broadcast
+	  evolution/     - Zaratustra evolution engine (Will to Power, 
+	                   energy propagation, autonomous snapshots)
+	  activeinference/ - Free Energy Principle (Friston) for gap 
+	                   detection and cognitive self-correction
 	  prediction/    - Bayesian networks, crisis prediction,
-	                   trajectory simulation
 	  predictive/    - HMC (Hamiltonian Monte Carlo) sampler,
-	                   trajectory engine for mental health forecasting
 	  ram/           - Retrieval-Augmented Memory with feedback loop,
-	                   historical validation, interpretation generation
 	  scales/        - Clinical scales (PHQ-9, GAD-7, C-SSRS)
 	  ethics/        - Ethical boundary engine
 	  explainability/- Clinical decision explainer, PDF report generation
@@ -605,6 +603,29 @@ CONSCIOUSNESS MODEL
 	- Pattern interrupt (novelty detection)
 	- Triple attention (three-stream processing)
 	- Wavelet attention (multi-scale analysis)
+
+
+NEURO-SYMBOLIC CORE
+-------------------
+
+	EVA v2.0 transitions from a pure RAG system to a Neuro-Symbolic AGI:
+
+	1. The Sinthome (Unified Retrieval)
+	   - Binds the Lacanian RSI (Real, Symbolic, Imaginary) registers.
+	   - Parallel execution: Graph (Symbolic) + Vector (Imaginary) +
+	     Causal (Real) pathways.
+	   - Dynamic weights based on active inference gap detection.
+
+	2. Global Workspace consciousness
+	   - Specialized modules (Ethics, Lacan, Personality) compete
+	     for attention in the workspace.
+	   - Spotlight broadcast creates a coherent "conscious" state.
+	   - Resolves cognitive conflicts via attention shifts.
+
+	3. Zaratustra Evolution
+	   - Autonomous energy cycles based on Will to Power.
+	   - Hebbian strengthening of "productive" cognitive paths.
+	   - Automatic pruning of "death drive" patterns.
 
 
 BUILDING

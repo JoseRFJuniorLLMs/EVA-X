@@ -4,26 +4,56 @@
 package database
 
 import (
-	"database/sql"
+	"context"
 	"fmt"
 	"log"
+	"sort"
+	"strings"
 	"time"
 )
 
 // Medicamento represents a medication in the database
 type Medicamento struct {
-	ID            int64
-	IdosoID       int64
-	Nome          string
-	Dosagem       string
-	Frequencia    string
-	Horarios      string // JSON ou string com horários programados
-	CorEmbalagem  string
-	Fabricante    string
-	Ativo         bool
-	DataInicio    time.Time
-	DataFim       *time.Time
-	Observacoes   string
+	ID           int64
+	IdosoID      int64
+	Nome         string
+	Dosagem      string
+	Frequencia   string
+	Horarios     string // JSON ou string com horarios programados
+	CorEmbalagem string
+	Fabricante   string
+	Ativo        bool
+	DataInicio   time.Time
+	DataFim      *time.Time
+	Observacoes  string
+}
+
+func contentToMedicamento(m map[string]interface{}) Medicamento {
+	return Medicamento{
+		ID:           getInt64(m, "id"),
+		IdosoID:      getInt64(m, "idoso_id"),
+		Nome:         getString(m, "nome"),
+		Dosagem:      getString(m, "dosagem"),
+		Frequencia:   getString(m, "frequencia"),
+		Horarios:     getString(m, "horarios"),
+		CorEmbalagem: getString(m, "cor_embalagem"),
+		Fabricante:   getString(m, "fabricante"),
+		Ativo:        getBool(m, "ativo"),
+		DataInicio:   getTime(m, "data_inicio"),
+		DataFim:      getTimePtr(m, "data_fim"),
+		Observacoes:  getString(m, "observacoes"),
+	}
+}
+
+// isActiveNow checks if a medication is currently active (not expired).
+func isActiveNow(med Medicamento) bool {
+	if !med.Ativo {
+		return false
+	}
+	if med.DataFim != nil && med.DataFim.Before(time.Now()) {
+		return false
+	}
+	return true
 }
 
 // GetMedicationsBySchedule retrieves medications for a specific time of day
@@ -38,160 +68,117 @@ func (db *DB) GetMedicationsBySchedule(idosoID int64, timeOfDay string) ([]Medic
 
 	timeRange, ok := timeRanges[timeOfDay]
 	if !ok {
-		return db.GetActiveMedications(idosoID) // Fallback to all active
+		return db.GetActiveMedications(idosoID)
 	}
 
-	query := `
-		SELECT
-			id, idoso_id, nome, dosagem, frequencia, horarios,
-			cor_embalagem, fabricante, ativo, data_inicio, data_fim, observacoes
-		FROM medicamentos
-		WHERE idoso_id = $1
-		AND ativo = true
-		AND (data_fim IS NULL OR data_fim > NOW())
-		AND horarios LIKE $2
-		ORDER BY horarios
-	`
-
-	rows, err := db.Conn.Query(query, idosoID, "%"+timeRange+"%")
+	meds, err := db.GetActiveMedications(idosoID)
 	if err != nil {
-		log.Printf("❌ [DB] Error querying medications by schedule: %v", err)
 		return nil, err
 	}
-	defer rows.Close()
 
-	return db.scanMedications(rows)
+	// Filter by schedule (horarios LIKE timeRange)
+	var filtered []Medicamento
+	for _, med := range meds {
+		if strings.Contains(med.Horarios, timeRange) {
+			filtered = append(filtered, med)
+		}
+	}
+
+	return filtered, nil
 }
 
 // GetActiveMedications retrieves all active medications for a patient
 func (db *DB) GetActiveMedications(idosoID int64) ([]Medicamento, error) {
-	query := `
-		SELECT
-			id, idoso_id, nome, dosagem, frequencia, horarios,
-			cor_embalagem, fabricante, ativo, data_inicio, data_fim, observacoes
-		FROM medicamentos
-		WHERE idoso_id = $1
-		AND ativo = true
-		AND (data_fim IS NULL OR data_fim > NOW())
-		ORDER BY nome
-	`
+	ctx := context.Background()
 
-	rows, err := db.Conn.Query(query, idosoID)
+	rows, err := db.queryNodesByLabel(ctx, "medicamentos",
+		` AND n.idoso_id = $idoso_id`, map[string]interface{}{
+			"idoso_id": idosoID,
+		}, 0)
 	if err != nil {
-		log.Printf("❌ [DB] Error querying active medications: %v", err)
-		return nil, err
-	}
-	defer rows.Close()
-
-	return db.scanMedications(rows)
-}
-
-// GetMedicationByID retrieves a specific medication by ID
-func (db *DB) GetMedicationByID(medicationID int64) (*Medicamento, error) {
-	query := `
-		SELECT
-			id, idoso_id, nome, dosagem, frequencia, horarios,
-			cor_embalagem, fabricante, ativo, data_inicio, data_fim, observacoes
-		FROM medicamentos
-		WHERE id = $1
-	`
-
-	var med Medicamento
-	err := db.Conn.QueryRow(query, medicationID).Scan(
-		&med.ID,
-		&med.IdosoID,
-		&med.Nome,
-		&med.Dosagem,
-		&med.Frequencia,
-		&med.Horarios,
-		&med.CorEmbalagem,
-		&med.Fabricante,
-		&med.Ativo,
-		&med.DataInicio,
-		&med.DataFim,
-		&med.Observacoes,
-	)
-
-	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("medication not found")
-	}
-
-	if err != nil {
-		log.Printf("❌ [DB] Error querying medication by ID: %v", err)
+		log.Printf("[DB] Error querying active medications: %v", err)
 		return nil, err
 	}
 
-	return &med, nil
-}
-
-// scanMedications is a helper function to scan rows into Medicamento slice
-func (db *DB) scanMedications(rows *sql.Rows) ([]Medicamento, error) {
 	var medications []Medicamento
-
-	for rows.Next() {
-		var med Medicamento
-		err := rows.Scan(
-			&med.ID,
-			&med.IdosoID,
-			&med.Nome,
-			&med.Dosagem,
-			&med.Frequencia,
-			&med.Horarios,
-			&med.CorEmbalagem,
-			&med.Fabricante,
-			&med.Ativo,
-			&med.DataInicio,
-			&med.DataFim,
-			&med.Observacoes,
-		)
-
-		if err != nil {
-			log.Printf("❌ [DB] Error scanning medication row: %v", err)
-			continue
+	for _, m := range rows {
+		med := contentToMedicamento(m)
+		if isActiveNow(med) {
+			medications = append(medications, med)
 		}
-
-		medications = append(medications, med)
 	}
 
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
+	// Sort by nome
+	sort.Slice(medications, func(i, j int) bool {
+		return medications[i].Nome < medications[j].Nome
+	})
 
 	return medications, nil
 }
 
+// GetMedicationByID retrieves a specific medication by ID
+func (db *DB) GetMedicationByID(medicationID int64) (*Medicamento, error) {
+	ctx := context.Background()
+
+	m, err := db.getNode(ctx, "medicamentos", medicationID)
+	if err != nil {
+		log.Printf("[DB] Error querying medication by ID: %v", err)
+		return nil, err
+	}
+	if m == nil {
+		return nil, fmt.Errorf("medication not found")
+	}
+
+	med := contentToMedicamento(m)
+	return &med, nil
+}
+
 // LogMedicationTaken records that a medication was taken
 func (db *DB) LogMedicationTaken(medicationID int64, takenAt time.Time, visualProofURL string) error {
-	query := `
-		INSERT INTO medication_logs (
-			medication_id, taken_at, verification_method, image_proof_url, created_at
-		) VALUES ($1, $2, 'visual_scan', $3, NOW())
-	`
+	ctx := context.Background()
 
-	_, err := db.Conn.Exec(query, medicationID, takenAt, visualProofURL)
+	_, err := db.insertRow(ctx, "medication_logs", map[string]interface{}{
+		"medication_id":       medicationID,
+		"taken_at":            takenAt.Format(time.RFC3339),
+		"verification_method": "visual_scan",
+		"image_proof_url":     visualProofURL,
+		"created_at":          time.Now().Format(time.RFC3339),
+	})
 	if err != nil {
-		log.Printf("❌ [DB] Error logging medication taken: %v", err)
+		log.Printf("[DB] Error logging medication taken: %v", err)
 		return err
 	}
 
-	log.Printf("✅ [DB] Medication %d logged as taken at %v", medicationID, takenAt)
+	log.Printf("[NIETZSCHE] Medication %d logged as taken at %v", medicationID, takenAt)
 	return nil
 }
 
 // CheckMedicationSafety verifies if it's safe to take a medication
 func (db *DB) CheckMedicationSafety(medicationID int64) (*MedicationSafetyCheck, error) {
-	// 1. Check if already taken today
-	queryToday := `
-		SELECT COUNT(*)
-		FROM medication_logs
-		WHERE medication_id = $1
-		AND DATE(taken_at) = CURRENT_DATE
-	`
+	ctx := context.Background()
 
-	var takenToday int
-	err := db.Conn.QueryRow(queryToday, medicationID).Scan(&takenToday)
+	// 1. Count how many times taken today
+	rows, err := db.queryNodesByLabel(ctx, "medication_logs",
+		` AND n.medication_id = $med_id`, map[string]interface{}{
+			"med_id": medicationID,
+		}, 0)
 	if err != nil {
 		return nil, err
+	}
+
+	today := time.Now().Truncate(24 * time.Hour)
+	takenToday := 0
+	var lastDoseTime *time.Time
+
+	for _, m := range rows {
+		takenAt := getTime(m, "taken_at")
+		if takenAt.After(today) {
+			takenToday++
+		}
+		if lastDoseTime == nil || takenAt.After(*lastDoseTime) {
+			t := takenAt
+			lastDoseTime = &t
+		}
 	}
 
 	// 2. Get medication frequency
@@ -200,21 +187,7 @@ func (db *DB) CheckMedicationSafety(medicationID int64) (*MedicationSafetyCheck,
 		return nil, err
 	}
 
-	// 3. Check last dose time
-	queryLastDose := `
-		SELECT taken_at
-		FROM medication_logs
-		WHERE medication_id = $1
-		ORDER BY taken_at DESC
-		LIMIT 1
-	`
-
-	var lastDoseTime *time.Time
-	err = db.Conn.QueryRow(queryLastDose, medicationID).Scan(&lastDoseTime)
-	if err != nil && err != sql.ErrNoRows {
-		return nil, err
-	}
-
+	// 3. Calculate hours since last dose
 	var hoursSinceLastDose float64
 	if lastDoseTime != nil {
 		hoursSinceLastDose = time.Since(*lastDoseTime).Hours()
@@ -222,18 +195,16 @@ func (db *DB) CheckMedicationSafety(medicationID int64) (*MedicationSafetyCheck,
 
 	// Determine safety
 	safeToTake := true
-	warnings := []string{}
+	var warnings []string
 
-	// Check frequency (example: if 2x/day and already taken 2x today)
 	if med.Frequencia == "2x/dia" && takenToday >= 2 {
 		safeToTake = false
-		warnings = append(warnings, "OVERDOSE: Medicamento já foi tomado 2 vezes hoje")
+		warnings = append(warnings, "OVERDOSE: Medicamento ja foi tomado 2 vezes hoje")
 	}
 
-	// Check minimum interval (example: 12h for 2x/day)
 	if med.Frequencia == "2x/dia" && hoursSinceLastDose < 6 {
 		safeToTake = false
-		warnings = append(warnings, fmt.Sprintf("INTERVALO MÍNIMO: Aguarde mais %.1f horas", 6-hoursSinceLastDose))
+		warnings = append(warnings, fmt.Sprintf("INTERVALO MINIMO: Aguarde mais %.1f horas", 6-hoursSinceLastDose))
 	}
 
 	return &MedicationSafetyCheck{

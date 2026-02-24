@@ -4,8 +4,10 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -28,13 +30,39 @@ type SignalingMessage struct {
 	CreatedAt time.Time
 }
 
+func contentToVideoSession(m map[string]interface{}) *VideoSession {
+	return &VideoSession{
+		ID:        getString(m, "id"),
+		SessionID: getString(m, "session_id"),
+		IdosoID:   getInt64(m, "idoso_id"),
+		Status:    getString(m, "status"),
+		SdpOffer:  getString(m, "sdp_offer"),
+		SdpAnswer: getNullString(m, "sdp_answer"),
+		CreatedAt: getTime(m, "created_em"),
+	}
+}
+
+func contentToSignalingMessage(m map[string]interface{}) SignalingMessage {
+	return SignalingMessage{
+		ID:        getInt64(m, "id"),
+		SessionID: getString(m, "session_id"),
+		Sender:    getString(m, "sender"),
+		Type:      getString(m, "type"),
+		Payload:   getString(m, "payload"),
+		CreatedAt: getTime(m, "created_at"),
+	}
+}
+
 func (db *DB) CreateVideoSession(sessionID string, idosoID int64, sdpOffer string) error {
-	query := `
-		INSERT INTO video_sessions (session_id, idoso_id, status, sdp_offer, created_em)
-		VALUES ($1, $2, 'waiting_operator', $3, CURRENT_TIMESTAMP)
-	`
-	// Usamos ExecContext para boas práticas, mas aqui com context.Background() se não vier de cima
-	_, err := db.Conn.Exec(query, sessionID, idosoID, sdpOffer)
+	ctx := context.Background()
+
+	err := db.insertRowWithID(ctx, "video_sessions", sessionID, map[string]interface{}{
+		"session_id": sessionID,
+		"idoso_id":   idosoID,
+		"status":     "waiting_operator",
+		"sdp_offer":  sdpOffer,
+		"created_em": time.Now().Format(time.RFC3339),
+	})
 	if err != nil {
 		return fmt.Errorf("failed to create video session: %w", err)
 	}
@@ -42,11 +70,15 @@ func (db *DB) CreateVideoSession(sessionID string, idosoID int64, sdpOffer strin
 }
 
 func (db *DB) CreateSignalingMessage(sessionID string, sender string, msgType string, payload string) error {
-	query := `
-		INSERT INTO signaling_messages (session_id, sender, type, payload)
-		VALUES ($1, $2, $3, $4)
-	`
-	_, err := db.Conn.Exec(query, sessionID, sender, msgType, payload)
+	ctx := context.Background()
+
+	_, err := db.insertRow(ctx, "signaling_messages", map[string]interface{}{
+		"session_id": sessionID,
+		"sender":     sender,
+		"type":       msgType,
+		"payload":    payload,
+		"created_at": time.Now().Format(time.RFC3339),
+	})
 	if err != nil {
 		return fmt.Errorf("failed to insert signaling message: %w", err)
 	}
@@ -54,100 +86,107 @@ func (db *DB) CreateSignalingMessage(sessionID string, sender string, msgType st
 }
 
 func (db *DB) GetVideoSessionAnswer(sessionID string) (string, error) {
-	query := `SELECT sdp_answer FROM video_sessions WHERE session_id = $1`
+	ctx := context.Background()
 
-	var sdpAnswer sql.NullString
-	err := db.Conn.QueryRow(query, sessionID).Scan(&sdpAnswer)
+	rows, err := db.queryNodesByLabel(ctx, "video_sessions",
+		` AND n.session_id = $sid`, map[string]interface{}{
+			"sid": sessionID,
+		}, 1)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return "", nil // Não encontrou a sessão ou não tem answer ainda
-		}
 		return "", fmt.Errorf("failed to get session answer: %w", err)
 	}
-
-	if sdpAnswer.Valid {
-		return sdpAnswer.String, nil
+	if len(rows) == 0 {
+		return "", nil
 	}
-	return "", nil
+
+	answer := getString(rows[0], "sdp_answer")
+	return answer, nil
 }
 
-// Opcional: Pegar candidatos do Operador para o Mobile
 func (db *DB) GetOperatorCandidates(sessionID string, sinceID int64) ([]SignalingMessage, error) {
-	query := `
-		SELECT id, session_id, sender, type, payload 
-		FROM signaling_messages 
-		WHERE session_id = $1 AND sender = 'operator' AND id > $2
-		ORDER BY id ASC
-	`
+	ctx := context.Background()
 
-	rows, err := db.Conn.Query(query, sessionID, sinceID)
+	rows, err := db.queryNodesByLabel(ctx, "signaling_messages",
+		` AND n.session_id = $sid AND n.sender = $sender`, map[string]interface{}{
+			"sid":    sessionID,
+			"sender": "operator",
+		}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	var msgs []SignalingMessage
-	for rows.Next() {
-		var m SignalingMessage
-		if err := rows.Scan(&m.ID, &m.SessionID, &m.Sender, &m.Type, &m.Payload); err != nil {
-			return nil, err
+	for _, m := range rows {
+		msg := contentToSignalingMessage(m)
+		if msg.ID > sinceID {
+			msgs = append(msgs, msg)
 		}
-		msgs = append(msgs, m)
 	}
+
+	// Sort by ID ASC
+	sort.Slice(msgs, func(i, j int) bool {
+		return msgs[i].ID < msgs[j].ID
+	})
+
 	return msgs, nil
 }
 
-// Retorna apenas a session para o Operador pegar o Offer
 func (db *DB) GetVideoSession(sessionID string) (*VideoSession, error) {
-	query := `SELECT id, session_id, idoso_id, status, sdp_offer, sdp_answer, created_em FROM video_sessions WHERE session_id = $1`
+	ctx := context.Background()
 
-	var s VideoSession
-	err := db.Conn.QueryRow(query, sessionID).Scan(
-		&s.ID, &s.SessionID, &s.IdosoID, &s.Status, &s.SdpOffer, &s.SdpAnswer, &s.CreatedAt,
-	)
+	rows, err := db.queryNodesByLabel(ctx, "video_sessions",
+		` AND n.session_id = $sid`, map[string]interface{}{
+			"sid": sessionID,
+		}, 1)
 	if err != nil {
 		return nil, err
 	}
-	return &s, nil
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("video session not found")
+	}
+
+	return contentToVideoSession(rows[0]), nil
 }
 
-// Atualiza a resposta (Answer) do operador e muda status para active
 func (db *DB) UpdateVideoSessionAnswer(sessionID string, sdpAnswer string) error {
-	query := `
-		UPDATE video_sessions 
-		SET sdp_answer = $1, status = 'active' 
-		WHERE session_id = $2
-	`
-	_, err := db.Conn.Exec(query, sdpAnswer, sessionID)
+	ctx := context.Background()
+
+	err := db.updateFields(ctx, "video_sessions",
+		map[string]interface{}{"session_id": sessionID},
+		map[string]interface{}{
+			"sdp_answer": sdpAnswer,
+			"status":     "active",
+		})
 	if err != nil {
 		return fmt.Errorf("failed to update video session answer: %w", err)
 	}
 	return nil
 }
 
-// Pegar candidatos do Mobile para o Operador
 func (db *DB) GetMobileCandidates(sessionID string, sinceID int64) ([]SignalingMessage, error) {
-	query := `
-		SELECT id, session_id, sender, type, payload 
-		FROM signaling_messages 
-		WHERE session_id = $1 AND sender = 'mobile' AND id > $2
-		ORDER BY id ASC
-	`
+	ctx := context.Background()
 
-	rows, err := db.Conn.Query(query, sessionID, sinceID)
+	rows, err := db.queryNodesByLabel(ctx, "signaling_messages",
+		` AND n.session_id = $sid AND n.sender = $sender`, map[string]interface{}{
+			"sid":    sessionID,
+			"sender": "mobile",
+		}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	var msgs []SignalingMessage
-	for rows.Next() {
-		var m SignalingMessage
-		if err := rows.Scan(&m.ID, &m.SessionID, &m.Sender, &m.Type, &m.Payload); err != nil {
-			return nil, err
+	for _, m := range rows {
+		msg := contentToSignalingMessage(m)
+		if msg.ID > sinceID {
+			msgs = append(msgs, msg)
 		}
-		msgs = append(msgs, m)
 	}
+
+	sort.Slice(msgs, func(i, j int) bool {
+		return msgs[i].ID < msgs[j].ID
+	})
+
 	return msgs, nil
 }
 
@@ -159,52 +198,53 @@ type VideoSessionDetail struct {
 	CreatedAt time.Time `json:"created_at"`
 	// Enriched fields from Idoso
 	Nome           string         `json:"nome"`
-	Idade          int            `json:"idade"` // Calculado ou aproximado (ano)
+	Idade          int            `json:"idade"`
 	Telefone       string         `json:"telefone"`
 	NivelCognitivo string         `json:"nivel_cognitivo"`
-	FotoUrl        string         `json:"foto_url"`   // Placeholder ou real if added later
-	Limitacoes     sql.NullString `json:"limitacoes"` // Concat de audição etc
+	FotoUrl        string         `json:"foto_url"`
+	Limitacoes     sql.NullString `json:"limitacoes"`
 }
 
-// Retorna todas as sessões aguardando atendimento COM DADOS DO IDOSO
+// GetPendingVideoSessions retorna todas as sessoes aguardando atendimento COM DADOS DO IDOSO
 func (db *DB) GetPendingVideoSessions() ([]VideoSessionDetail, error) {
-	// JOIN com idosos para pegar detalhes
-	query := `
-		SELECT 
-			vs.id, vs.session_id, vs.idoso_id, vs.status, vs.created_em,
-			i.nome, i.data_nascimento, i.telefone, i.nivel_cognitivo,
-			CASE 
-				WHEN i.limitacoes_auditivas = true THEN 'Deficiência Auditiva'
-				ELSE ''
-			END as limitacoes
-		FROM video_sessions vs
-		JOIN idosos i ON vs.idoso_id = i.id
-		WHERE vs.status = 'waiting_operator'
-		ORDER BY vs.created_em DESC
-	`
+	ctx := context.Background()
 
-	rows, err := db.Conn.Query(query)
+	// Step 1: Get waiting sessions
+	rows, err := db.queryNodesByLabel(ctx, "video_sessions",
+		` AND n.status = $status`, map[string]interface{}{
+			"status": "waiting_operator",
+		}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
+	// Sort by created_em DESC
+	sort.Slice(rows, func(i, j int) bool {
+		return getTime(rows[i], "created_em").After(getTime(rows[j], "created_em"))
+	})
+
+	// Step 2: Enrich with Idoso data (replaces the SQL JOIN)
 	var sessions []VideoSessionDetail
-	for rows.Next() {
-		var s VideoSessionDetail
-		var dataNasc time.Time
-		var limitacoes sql.NullString
-
-		if err := rows.Scan(
-			&s.ID, &s.SessionID, &s.IdosoID, &s.Status, &s.CreatedAt,
-			&s.Nome, &dataNasc, &s.Telefone, &s.NivelCognitivo, &limitacoes,
-		); err != nil {
-			return nil, err
+	for _, m := range rows {
+		s := VideoSessionDetail{
+			ID:        fmt.Sprintf("%v", m["id"]),
+			SessionID: getString(m, "session_id"),
+			IdosoID:   getInt64(m, "idoso_id"),
+			Status:    getString(m, "status"),
+			CreatedAt: getTime(m, "created_em"),
 		}
 
-		// Calcular idade simples
-		s.Idade = time.Now().Year() - dataNasc.Year()
-		s.Limitacoes = limitacoes
+		// Fetch idoso data for enrichment
+		idoso, err := db.GetIdoso(s.IdosoID)
+		if err == nil && idoso != nil {
+			s.Nome = idoso.Nome
+			s.Idade = time.Now().Year() - idoso.DataNascimento.Year()
+			s.Telefone = idoso.Telefone
+			s.NivelCognitivo = idoso.NivelCognitivo
+			if idoso.LimitacoesAuditivas.Valid && idoso.LimitacoesAuditivas.Bool {
+				s.Limitacoes = sql.NullString{String: "Deficiencia Auditiva", Valid: true}
+			}
+		}
 
 		sessions = append(sessions, s)
 	}

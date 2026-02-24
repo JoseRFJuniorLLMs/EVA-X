@@ -4,7 +4,7 @@
 package database
 
 import (
-	"database/sql"
+	"context"
 	"eva/pkg/crypto"
 	"fmt"
 	"time"
@@ -12,15 +12,15 @@ import (
 
 // SaveGoogleTokens stores OAuth tokens for an idoso
 func (db *DB) SaveGoogleTokens(idosoID int64, refreshToken, accessToken string, expiry time.Time) error {
-	query := `
-		UPDATE idosos 
-		SET google_refresh_token = $1, 
-		    google_access_token = $2, 
-		    google_token_expiry = $3
-		WHERE id = $4
-	`
+	ctx := context.Background()
 	// LGPD Art. 46: encrypt tokens at rest
-	_, err := db.Conn.Exec(query, crypto.Encrypt(refreshToken), crypto.Encrypt(accessToken), expiry, idosoID)
+	err := db.updateFields(ctx, "idosos",
+		map[string]interface{}{"id": float64(idosoID)},
+		map[string]interface{}{
+			"google_refresh_token": crypto.Encrypt(refreshToken),
+			"google_access_token":  crypto.Encrypt(accessToken),
+			"google_token_expiry":  expiry.Format(time.RFC3339),
+		})
 	if err != nil {
 		return fmt.Errorf("failed to save google tokens: %w", err)
 	}
@@ -29,37 +29,40 @@ func (db *DB) SaveGoogleTokens(idosoID int64, refreshToken, accessToken string, 
 
 // GetGoogleTokens retrieves OAuth tokens for an idoso
 func (db *DB) GetGoogleTokens(idosoID int64) (refreshToken, accessToken string, expiry time.Time, err error) {
-	query := `
-		SELECT google_refresh_token, google_access_token, google_token_expiry
-		FROM idosos
-		WHERE id = $1
-	`
-	var rt, at sql.NullString
-	var exp sql.NullTime
+	ctx := context.Background()
 
-	err = db.Conn.QueryRow(query, idosoID).Scan(&rt, &at, &exp)
+	m, err := db.getNode(ctx, "idosos", idosoID)
 	if err != nil {
 		return "", "", time.Time{}, fmt.Errorf("failed to get google tokens: %w", err)
 	}
+	if m == nil {
+		return "", "", time.Time{}, fmt.Errorf("failed to get google tokens: idoso not found")
+	}
 
-	if rt.Valid {
-		refreshToken = crypto.Decrypt(rt.String)
+	rt := getString(m, "google_refresh_token")
+	at := getString(m, "google_access_token")
+	exp := getTime(m, "google_token_expiry")
+
+	if rt != "" {
+		refreshToken = crypto.Decrypt(rt)
 	}
-	if at.Valid {
-		accessToken = crypto.Decrypt(at.String)
+	if at != "" {
+		accessToken = crypto.Decrypt(at)
 	}
-	if exp.Valid {
-		expiry = exp.Time
-	}
+	expiry = exp
 
 	return refreshToken, accessToken, expiry, nil
 }
 
 // SaveGoogleEmail stores the Google email for an idoso
 func (db *DB) SaveGoogleEmail(idosoID int64, email string) error {
-	query := `UPDATE idosos SET google_email = $1 WHERE id = $2`
+	ctx := context.Background()
 	// LGPD Art. 46: encrypt email at rest
-	_, err := db.Conn.Exec(query, crypto.Encrypt(email), idosoID)
+	err := db.updateFields(ctx, "idosos",
+		map[string]interface{}{"id": float64(idosoID)},
+		map[string]interface{}{
+			"google_email": crypto.Encrypt(email),
+		})
 	if err != nil {
 		return fmt.Errorf("failed to save google email: %w", err)
 	}
@@ -74,34 +77,60 @@ type GoogleStatus struct {
 
 // GetGoogleStatusByCPF returns Google account connection status for a CPF
 func (db *DB) GetGoogleStatusByCPF(cpf string) (*GoogleStatus, error) {
+	ctx := context.Background()
 	cpfHash := crypto.HashCPF(cpf)
-	query := `
-		SELECT COALESCE(google_email, '') AS email,
-		       CASE WHEN google_refresh_token IS NOT NULL AND google_refresh_token != '' THEN true ELSE false END AS connected
-		FROM idosos
-		WHERE cpf_hash = $1 OR cpf = $2
-		LIMIT 1
-	`
-	var status GoogleStatus
-	err := db.Conn.QueryRow(query, cpfHash, cpf).Scan(&status.Email, &status.Connected)
+
+	rows, err := db.queryNodesByLabel(ctx, "idosos",
+		` AND n.cpf_hash = $hash`, map[string]interface{}{
+			"hash": cpfHash,
+		}, 1)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get google status: %w", err)
 	}
-	status.Email = crypto.Decrypt(status.Email)
-	return &status, nil
+
+	// Fallback to stripped CPF match
+	if len(rows) == 0 {
+		allRows, err := db.queryNodesByLabel(ctx, "idosos", "", nil, 0)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get google status (fallback): %w", err)
+		}
+		strippedCPF := stripNonDigits(cpf)
+		for _, m := range allRows {
+			storedCPF := crypto.Decrypt(getString(m, "cpf"))
+			if stripNonDigits(storedCPF) == strippedCPF {
+				rows = append(rows, m)
+				break
+			}
+		}
+	}
+
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("failed to get google status: idoso not found")
+	}
+
+	m := rows[0]
+	email := getString(m, "google_email")
+	refreshToken := getString(m, "google_refresh_token")
+
+	status := &GoogleStatus{
+		Connected: refreshToken != "",
+		Email:     crypto.Decrypt(email),
+	}
+
+	return status, nil
 }
 
 // ClearGoogleTokens removes Google OAuth tokens for an idoso
 func (db *DB) ClearGoogleTokens(idosoID int64) error {
-	query := `
-		UPDATE idosos
-		SET google_refresh_token = NULL,
-		    google_access_token = NULL,
-		    google_token_expiry = NULL,
-		    google_email = NULL
-		WHERE id = $1
-	`
-	_, err := db.Conn.Exec(query, idosoID)
+	ctx := context.Background()
+	err := db.updateFields(ctx, "idosos",
+		map[string]interface{}{"id": float64(idosoID)},
+		map[string]interface{}{
+			"google_refresh_token": nil,
+			"google_access_token":  nil,
+			"google_token_expiry":  nil,
+			"google_email":         nil,
+		})
 	if err != nil {
 		return fmt.Errorf("failed to clear google tokens: %w", err)
 	}

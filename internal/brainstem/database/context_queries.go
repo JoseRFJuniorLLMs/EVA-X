@@ -4,9 +4,11 @@
 package database
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"time"
 )
 
@@ -18,52 +20,77 @@ type GeminiAnalysis struct {
 	CreatedAt time.Time       `json:"created_at"`
 }
 
-// CreateGeminiAnalysis salva uma nova análise no banco de dados
+func contentToGeminiAnalysis(m map[string]interface{}) GeminiAnalysis {
+	a := GeminiAnalysis{
+		ID:        getInt64(m, "id"),
+		IdosoID:   getInt64(m, "idoso_id"),
+		Tipo:      getString(m, "tipo"),
+		CreatedAt: getTime(m, "created_at"),
+	}
+	// conteudo may be stored as a string (JSON) or a map
+	if raw, ok := m["conteudo"]; ok && raw != nil {
+		switch v := raw.(type) {
+		case string:
+			a.Conteudo = json.RawMessage(v)
+		default:
+			if b, err := json.Marshal(v); err == nil {
+				a.Conteudo = b
+			}
+		}
+	}
+	return a
+}
+
+// CreateGeminiAnalysis salva uma nova analise no NietzscheDB
 func (db *DB) CreateGeminiAnalysis(idosoID int64, tipo string, conteudo interface{}) error {
+	ctx := context.Background()
+
 	conteudoJSON, err := json.Marshal(conteudo)
 	if err != nil {
 		return fmt.Errorf("erro ao marshalar conteudo da analise: %w", err)
 	}
 
-	query := `
-		INSERT INTO analise_gemini (idoso_id, tipo, conteudo, created_at)
-		VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
-	`
-	_, err = db.Conn.Exec(query, idosoID, tipo, conteudoJSON)
+	_, err = db.insertRow(ctx, "analise_gemini", map[string]interface{}{
+		"idoso_id":   idosoID,
+		"tipo":       tipo,
+		"conteudo":   string(conteudoJSON),
+		"created_at": time.Now().Format(time.RFC3339),
+	})
 	if err != nil {
 		return fmt.Errorf("erro ao salvar analise gemini: %w", err)
 	}
 
-	log.Printf("📥 [POSTGRES] Análise salva: Idoso=%d, Tipo=%s, Tamanho=%d bytes", idosoID, tipo, len(conteudoJSON))
+	log.Printf("[NIETZSCHE] Analise salva: Idoso=%d, Tipo=%s, Tamanho=%d bytes", idosoID, tipo, len(conteudoJSON))
 	return nil
 }
 
-// GetRecentAnalyses recupera as últimas N análises de um idoso para contexto
+// GetRecentAnalyses recupera as ultimas N analises de um idoso para contexto
 func (db *DB) GetRecentAnalyses(idosoID int64, limit int) ([]GeminiAnalysis, error) {
-	query := `
-		SELECT id, idoso_id, tipo, conteudo, created_at
-		FROM analise_gemini
-		WHERE idoso_id = $1
-		ORDER BY created_at DESC
-		LIMIT $2
-	`
-	rows, err := db.Conn.Query(query, idosoID, limit)
+	ctx := context.Background()
+
+	rows, err := db.queryNodesByLabel(ctx, "analise_gemini",
+		` AND n.idoso_id = $idoso_id`, map[string]interface{}{
+			"idoso_id": idosoID,
+		}, 0)
 	if err != nil {
 		return nil, fmt.Errorf("erro ao buscar analises recentes: %w", err)
 	}
-	defer rows.Close()
 
-	log.Printf("🔍 [POSTGRES] Buscando análises recentes: Idoso=%d, Limit=%d", idosoID, limit)
+	log.Printf("[NIETZSCHE] Buscando analises recentes: Idoso=%d, Limit=%d", idosoID, limit)
 
 	var analyses []GeminiAnalysis
-	for rows.Next() {
-		var a GeminiAnalysis
-		var conteudoBytes []byte
-		if err := rows.Scan(&a.ID, &a.IdosoID, &a.Tipo, &conteudoBytes, &a.CreatedAt); err != nil {
-			return nil, err
-		}
-		a.Conteudo = json.RawMessage(conteudoBytes)
-		analyses = append(analyses, a)
+	for _, m := range rows {
+		analyses = append(analyses, contentToGeminiAnalysis(m))
 	}
+
+	// Sort by created_at DESC
+	sort.Slice(analyses, func(i, j int) bool {
+		return analyses[i].CreatedAt.After(analyses[j].CreatedAt)
+	})
+
+	if limit > 0 && len(analyses) > limit {
+		analyses = analyses[:limit]
+	}
+
 	return analyses, nil
 }

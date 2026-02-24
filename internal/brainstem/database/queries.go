@@ -4,10 +4,12 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"eva/pkg/crypto"
 	"fmt"
 	"log"
+	"sort"
 	"time"
 )
 
@@ -33,39 +35,75 @@ type Idoso struct {
 	DeviceToken         string
 	Ativo               bool
 	NivelCognitivo      string
-	LimitacoesAuditivas sql.NullBool // ✅ Pode ser NULL
-	UsaAparelhoAuditivo sql.NullBool // ✅ Pode ser NULL
+	LimitacoesAuditivas sql.NullBool
+	UsaAparelhoAuditivo sql.NullBool
 	TomVoz              string
 	PreferenciaHorario  string
 }
 
-func (db *DB) GetPendingAgendamentos(limit int) ([]Agendamento, error) {
-	query := `
-		SELECT id, idoso_id, tipo, data_hora_agendada, data_hora_realizada, status, prioridade, dados_tarefa, max_retries, tentativas_realizadas
-		FROM agendamentos
-		WHERE status = 'agendado'
-		  AND data_hora_agendada <= $1
-		ORDER BY data_hora_agendada ASC
-		LIMIT $2
-	`
+func contentToAgendamento(m map[string]interface{}) Agendamento {
+	return Agendamento{
+		ID:                   getInt64(m, "id"),
+		IdosoID:              getInt64(m, "idoso_id"),
+		Tipo:                 getString(m, "tipo"),
+		DataHoraAgendada:     getTime(m, "data_hora_agendada"),
+		DataHoraRealizada:    getTimePtr(m, "data_hora_realizada"),
+		Status:               getString(m, "status"),
+		Prioridade:           getString(m, "prioridade"),
+		DadosTarefa:          getString(m, "dados_tarefa"),
+		MaxRetries:           int(getInt64(m, "max_retries")),
+		TentativasRealizadas: int(getInt64(m, "tentativas_realizadas")),
+	}
+}
 
-	rows, err := db.Conn.Query(query, time.Now(), limit)
+func contentToIdoso(m map[string]interface{}) *Idoso {
+	idoso := &Idoso{
+		ID:                  getInt64(m, "id"),
+		Nome:                getString(m, "nome"),
+		DataNascimento:      getTime(m, "data_nascimento"),
+		Telefone:            getString(m, "telefone"),
+		CPF:                 getString(m, "cpf"),
+		DeviceToken:         getString(m, "device_token"),
+		Ativo:               getBool(m, "ativo"),
+		NivelCognitivo:      getString(m, "nivel_cognitivo"),
+		LimitacoesAuditivas: getNullBool(m, "limitacoes_auditivas"),
+		UsaAparelhoAuditivo: getNullBool(m, "usa_aparelho_auditivo"),
+		TomVoz:              getString(m, "tom_voz"),
+		PreferenciaHorario:  getString(m, "preferencia_horario_ligacao"),
+	}
+	// LGPD Art. 46: decrypt sensitive fields
+	idoso.Nome = crypto.Decrypt(idoso.Nome)
+	idoso.CPF = crypto.Decrypt(idoso.CPF)
+	idoso.Telefone = crypto.Decrypt(idoso.Telefone)
+	return idoso
+}
+
+func (db *DB) GetPendingAgendamentos(limit int) ([]Agendamento, error) {
+	ctx := context.Background()
+	now := time.Now()
+
+	rows, err := db.queryNodesByLabel(ctx, "agendamentos",
+		` AND n.status = $status`, map[string]interface{}{
+			"status": "agendado",
+		}, 0) // fetch all matching, filter + sort in Go
 	if err != nil {
 		return nil, fmt.Errorf("failed to query agendamentos: %w", err)
 	}
-	defer rows.Close()
 
 	var agendamentos []Agendamento
-	for rows.Next() {
-		var a Agendamento
-		err := rows.Scan(
-			&a.ID, &a.IdosoID, &a.Tipo, &a.DataHoraAgendada, &a.DataHoraRealizada,
-			&a.Status, &a.Prioridade, &a.DadosTarefa, &a.MaxRetries, &a.TentativasRealizadas,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan: %w", err)
+	for _, m := range rows {
+		a := contentToAgendamento(m)
+		if !a.DataHoraAgendada.After(now) {
+			agendamentos = append(agendamentos, a)
 		}
-		agendamentos = append(agendamentos, a)
+	}
+
+	sort.Slice(agendamentos, func(i, j int) bool {
+		return agendamentos[i].DataHoraAgendada.Before(agendamentos[j].DataHoraAgendada)
+	})
+
+	if limit > 0 && len(agendamentos) > limit {
+		agendamentos = agendamentos[:limit]
 	}
 
 	return agendamentos, nil
@@ -73,122 +111,115 @@ func (db *DB) GetPendingAgendamentos(limit int) ([]Agendamento, error) {
 
 // GetPendingAgendamentosByIdoso retorna agendamentos pendentes filtrados por idoso_id
 func (db *DB) GetPendingAgendamentosByIdoso(idosoID int64, limit int) ([]Agendamento, error) {
-	query := `
-		SELECT id, idoso_id, tipo, data_hora_agendada, data_hora_realizada, status, prioridade, dados_tarefa, max_retries, tentativas_realizadas
-		FROM agendamentos
-		WHERE status = 'agendado'
-		  AND idoso_id = $1
-		  AND data_hora_agendada <= $2
-		ORDER BY data_hora_agendada ASC
-		LIMIT $3
-	`
+	ctx := context.Background()
+	now := time.Now()
 
-	rows, err := db.Conn.Query(query, idosoID, time.Now(), limit)
+	rows, err := db.queryNodesByLabel(ctx, "agendamentos",
+		` AND n.status = $status AND n.idoso_id = $idoso_id`, map[string]interface{}{
+			"status":   "agendado",
+			"idoso_id": idosoID,
+		}, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query agendamentos by idoso: %w", err)
 	}
-	defer rows.Close()
 
 	var agendamentos []Agendamento
-	for rows.Next() {
-		var a Agendamento
-		err := rows.Scan(
-			&a.ID, &a.IdosoID, &a.Tipo, &a.DataHoraAgendada, &a.DataHoraRealizada,
-			&a.Status, &a.Prioridade, &a.DadosTarefa, &a.MaxRetries, &a.TentativasRealizadas,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan: %w", err)
+	for _, m := range rows {
+		a := contentToAgendamento(m)
+		if !a.DataHoraAgendada.After(now) {
+			agendamentos = append(agendamentos, a)
 		}
-		agendamentos = append(agendamentos, a)
+	}
+
+	sort.Slice(agendamentos, func(i, j int) bool {
+		return agendamentos[i].DataHoraAgendada.Before(agendamentos[j].DataHoraAgendada)
+	})
+
+	if limit > 0 && len(agendamentos) > limit {
+		agendamentos = agendamentos[:limit]
 	}
 
 	return agendamentos, nil
 }
 
 func (db *DB) GetIdoso(id int64) (*Idoso, error) {
-	query := `
-		SELECT 
-			id, nome, data_nascimento, telefone, cpf, device_token, 
-			ativo, nivel_cognitivo, limitacoes_auditivas, usa_aparelho_auditivo, 
-			tom_voz, preferencia_horario_ligacao 
-		FROM idosos 
-		WHERE id = $1
-	`
-
-	var idoso Idoso
-	err := db.Conn.QueryRow(query, id).Scan(
-		&idoso.ID, &idoso.Nome, &idoso.DataNascimento, &idoso.Telefone, &idoso.CPF, &idoso.DeviceToken,
-		&idoso.Ativo, &idoso.NivelCognitivo, &idoso.LimitacoesAuditivas, &idoso.UsaAparelhoAuditivo,
-		&idoso.TomVoz, &idoso.PreferenciaHorario,
-	)
+	ctx := context.Background()
+	m, err := db.getNode(ctx, "idosos", id)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("idoso not found")
-		}
 		return nil, fmt.Errorf("failed to query: %w", err)
 	}
-
-	// LGPD Art. 46: decrypt sensitive fields
-	idoso.Nome = crypto.Decrypt(idoso.Nome)
-	idoso.CPF = crypto.Decrypt(idoso.CPF)
-	idoso.Telefone = crypto.Decrypt(idoso.Telefone)
-
-	return &idoso, nil
+	if m == nil {
+		return nil, fmt.Errorf("idoso not found")
+	}
+	return contentToIdoso(m), nil
 }
 
 func (db *DB) UpdateAgendamentoStatus(id int64, status string) error {
-	query := `UPDATE agendamentos SET status = $1, atualizado_em = CURRENT_TIMESTAMP WHERE id = $2`
-
-	result, err := db.Conn.Exec(query, status, id)
+	ctx := context.Background()
+	err := db.updateFields(ctx, "agendamentos",
+		map[string]interface{}{"id": float64(id)},
+		map[string]interface{}{
+			"status":        status,
+			"atualizado_em": time.Now().Format(time.RFC3339),
+		})
 	if err != nil {
 		return fmt.Errorf("failed to update: %w", err)
 	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to get rows affected: %w", err)
-	}
-
-	if rowsAffected == 0 {
-		return fmt.Errorf("agendamento not found")
-	}
-
 	return nil
 }
 
 func (db *DB) GetIdosoByCPF(cpf string) (*Idoso, error) {
-	// LGPD Art. 46: lookup via cpf_hash (SHA-256), fallback to plaintext for migration
+	ctx := context.Background()
+
+	// LGPD Art. 46: lookup via cpf_hash (SHA-256)
 	cpfHash := crypto.HashCPF(cpf)
 
-	query := `
-		SELECT id, cpf, ativo
-		FROM idosos
-		WHERE (cpf_hash = $1
-		   OR regexp_replace(cpf, '\D', '', 'g') = regexp_replace($2, '\D', '', 'g'))
-		  AND ativo = true
-		LIMIT 1
-	`
-
-	var idoso Idoso
-	err := db.Conn.QueryRow(query, cpfHash, cpf).Scan(
-		&idoso.ID,
-		&idoso.CPF,
-		&idoso.Ativo,
-	)
-
+	rows, err := db.queryNodesByLabel(ctx, "idosos",
+		` AND n.cpf_hash = $hash`, map[string]interface{}{
+			"hash": cpfHash,
+		}, 1)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("idoso nao encontrado ou inativo")
-		}
 		return nil, fmt.Errorf("erro ao consultar CPF: %w", err)
 	}
 
-	idoso.CPF = crypto.Decrypt(idoso.CPF)
+	// Filter active only in Go (NQL boolean matching may vary)
+	filtered := rows[:0]
+	for _, m := range rows {
+		if getBool(m, "ativo") {
+			filtered = append(filtered, m)
+		}
+	}
+	rows = filtered
+
+	// Fallback: query all active idosos and match stripped CPF digits
+	if len(rows) == 0 {
+		allRows, err := db.queryNodesByLabel(ctx, "idosos", "", nil, 0)
+		if err != nil {
+			return nil, fmt.Errorf("erro ao consultar CPF (fallback): %w", err)
+		}
+		strippedCPF := stripNonDigits(cpf)
+		for _, m := range allRows {
+			if !getBool(m, "ativo") {
+				continue
+			}
+			storedCPF := crypto.Decrypt(getString(m, "cpf"))
+			if stripNonDigits(storedCPF) == strippedCPF {
+				rows = append(rows, m)
+				break
+			}
+		}
+	}
+
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("idoso nao encontrado ou inativo")
+	}
+
+	idoso := contentToIdoso(rows[0])
 
 	maskedCPF := "***"
 	if len(cpf) >= 3 {
 		maskedCPF = "***" + cpf[len(cpf)-3:]
 	}
-	log.Printf("[POSTGRES] CPF consultado: %s -> ID: %d", maskedCPF, idoso.ID)
-	return &idoso, nil
+	log.Printf("[NIETZSCHE] CPF consultado: %s -> ID: %d", maskedCPF, idoso.ID)
+	return idoso, nil
 }
