@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -52,8 +53,12 @@ func NewThinkingClient(apiKey string) (*ThinkingClient, error) {
 		return nil, fmt.Errorf("erro ao criar cliente Gemini: %w", err)
 	}
 
-	// Usar modelo Gemini 2.0 Flash Thinking Experimental
-	model := client.GenerativeModel("gemini-2.0-flash-thinking-exp-1219")
+	// Usar modelo Gemini 2.5 Flash (substitui o exp-1219 descontinuado)
+	modelName := os.Getenv("GEMINI_MODEL_FAST")
+	if modelName == "" {
+		modelName = "gemini-2.5-flash"
+	}
+	model := client.GenerativeModel(modelName)
 
 	return &ThinkingClient{
 		client: client,
