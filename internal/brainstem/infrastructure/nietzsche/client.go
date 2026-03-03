@@ -217,10 +217,17 @@ func (c *Client) InsertWithEmbedding(ctx context.Context, collection string, id 
 // Performs KNN search via NietzscheDB gRPC for vector retrieval.
 func (c *Client) KnnSearch(ctx context.Context, collection string,
 	queryVector []float64, k uint32) ([]nietzsche.KnnResult, error) {
+	return c.KnnSearchFiltered(ctx, collection, queryVector, k, nil)
+}
+
+// KnnSearchFiltered performs a KNN search with server-side metadata filters.
+// Filters use AND semantics. Pass nil for unfiltered search.
+func (c *Client) KnnSearchFiltered(ctx context.Context, collection string,
+	queryVector []float64, k uint32, filters []nietzsche.KnnFilter) ([]nietzsche.KnnResult, error) {
 
 	log := logger.Nietzsche()
 
-	results, err := c.sdk.KnnSearch(ctx, queryVector, k, collection)
+	results, err := c.sdk.KnnSearchFiltered(ctx, queryVector, k, collection, filters)
 	if err != nil {
 		log.Error().Err(err).
 			Str("collection", collection).
@@ -239,7 +246,35 @@ func (c *Client) KnnSearch(ctx context.Context, collection string,
 // ── Graph Operations ────────────────────────────────────────────────────────
 
 // InsertNode creates a new node in NietzscheDB.
+// Custom node types (e.g. "Person") are normalized to "Semantic" with a
+// node_label content field injected automatically.
 func (c *Client) InsertNode(ctx context.Context, opts nietzsche.InsertNodeOpts) (nietzsche.NodeResult, error) {
+	normalized, isCustom := NormalizeNodeType(opts.NodeType)
+	if isCustom {
+		log := logger.Nietzsche()
+		log.Debug().
+			Str("original_type", opts.NodeType).
+			Str("normalized_type", normalized).
+			Msg("InsertNode: custom type normalized to Semantic + node_label")
+
+		originalType := opts.NodeType
+		opts.NodeType = normalized
+
+		// Inject node_label into content (Content is interface{})
+		switch c := opts.Content.(type) {
+		case map[string]interface{}:
+			c["node_label"] = originalType
+			opts.Content = c
+		case nil:
+			opts.Content = map[string]interface{}{"node_label": originalType}
+		default:
+			// Content is a struct or other type — wrap in map
+			opts.Content = map[string]interface{}{
+				"node_label": originalType,
+				"_data":      c,
+			}
+		}
+	}
 	return c.sdk.InsertNode(ctx, opts)
 }
 
@@ -266,7 +301,32 @@ func (c *Client) UpdateEnergy(ctx context.Context, nodeID string, energy float32
 // ── MERGE (upsert) ─────────────────────────────────────────────────────────
 
 // MergeNode finds a node by type + match keys, or creates one (MERGE semantics).
+// Custom node types (e.g. "Person") are normalized to "Semantic" with node_label
+// injected into MatchKeys and OnCreateSet automatically.
 func (c *Client) MergeNode(ctx context.Context, opts nietzsche.MergeNodeOpts) (*nietzsche.MergeNodeResult, error) {
+	normalized, isCustom := NormalizeNodeType(opts.NodeType)
+	if isCustom {
+		log := logger.Nietzsche()
+		log.Debug().
+			Str("original_type", opts.NodeType).
+			Str("normalized_type", normalized).
+			Msg("MergeNode: custom type normalized to Semantic + node_label")
+
+		originalType := opts.NodeType
+		opts.NodeType = normalized
+
+		// Inject node_label into MatchKeys so MERGE can find the right node
+		if opts.MatchKeys == nil {
+			opts.MatchKeys = make(map[string]interface{})
+		}
+		opts.MatchKeys["node_label"] = originalType
+
+		// Inject node_label into OnCreateSet so new nodes get the label
+		if opts.OnCreateSet == nil {
+			opts.OnCreateSet = make(map[string]interface{})
+		}
+		opts.OnCreateSet["node_label"] = originalType
+	}
 	return c.sdk.MergeNode(ctx, opts)
 }
 
@@ -300,22 +360,42 @@ func (c *Client) DropDaemon(ctx context.Context, collection, label string) error
 // ── NQL Query ───────────────────────────────────────────────────────────────
 
 // Query executes an NQL (Nietzsche Query Language) query.
+// Custom node type labels (e.g. Person, Zettel) are transparently rewritten
+// to Semantic + node_label filter via RewriteNQL.
 func (c *Client) Query(ctx context.Context, nql string,
 	params map[string]interface{}, collection string) (*nietzsche.QueryResult, error) {
 
 	log := logger.Nietzsche()
 
-	result, err := c.sdk.Query(ctx, nql, params, collection)
+	// Transparently rewrite custom types → Semantic + node_label WHERE
+	rewritten := RewriteNQL(nql)
+	if rewritten != nql {
+		log.Debug().
+			Str("original", nql).
+			Str("rewritten", rewritten).
+			Msg("NQL rewriter transformed custom types")
+	}
+
+	result, err := c.sdk.Query(ctx, rewritten, params, collection)
 	if err != nil {
 		log.Error().Err(err).
-			Str("nql", nql).
+			Str("nql", rewritten).
+			Str("original_nql", nql).
 			Str("collection", collection).
 			Msg("NietzscheDB NQL query failed")
 		return nil, fmt.Errorf("nietzsche query: %w", err)
 	}
 
+	// Check result-level error (server returned OK but query had semantic error)
+	if result.Error != "" {
+		log.Warn().
+			Str("nql", rewritten).
+			Str("error", result.Error).
+			Msg("NietzscheDB NQL query returned error")
+	}
+
 	log.Debug().
-		Str("nql", nql).
+		Str("nql", rewritten).
 		Int("nodes", len(result.Nodes)).
 		Int("pairs", len(result.NodePairs)).
 		Msg("NietzscheDB NQL query completed")
@@ -545,8 +625,8 @@ func (c *Client) GetSensory(ctx context.Context, nodeID, collection string) (*ni
 
 // Reconstruct reconstructs a sensory latent vector.
 // Quality can be "full", "degraded", or "best_available".
-func (c *Client) Reconstruct(ctx context.Context, nodeID string, quality string) (*nietzsche.ReconstructResult, error) {
-	return c.sdk.Reconstruct(ctx, nodeID, quality)
+func (c *Client) Reconstruct(ctx context.Context, nodeID string, quality string, collection string) (*nietzsche.ReconstructResult, error) {
+	return c.sdk.Reconstruct(ctx, nodeID, quality, collection)
 }
 
 // ── Graph Algorithms ────────────────────────────────────────────────────────
@@ -769,6 +849,41 @@ func (c *Client) DegradeSensory(ctx context.Context, nodeID, collection string) 
 func (c *Client) Search(ctx context.Context, collection string, query string, limit int) ([]map[string]interface{}, error) {
 	log := logger.Nietzsche()
 
+	// Use FullTextSearch when a query is provided; fall back to NQL scan otherwise.
+	if query != "" {
+		ftsResults, ftsErr := c.FullTextSearch(ctx, query, collection, uint32(limit))
+		if ftsErr == nil {
+			var results []map[string]interface{}
+			for _, r := range ftsResults {
+				node, err := c.GetNode(ctx, r.NodeID, collection)
+				if err != nil || !node.Found {
+					continue
+				}
+				item := map[string]interface{}{
+					"id":        node.ID,
+					"node_type": node.NodeType,
+					"energy":    node.Energy,
+				}
+				if node.Content != nil {
+					for k, v := range node.Content {
+						item[k] = v
+					}
+				}
+				results = append(results, item)
+			}
+			if results == nil {
+				results = []map[string]interface{}{}
+			}
+			log.Info().
+				Str("collection", collection).
+				Str("query", query).
+				Int("results", len(results)).
+				Msg("NietzscheDB search completed (FTS)")
+			return results, nil
+		}
+		log.Warn().Err(ftsErr).Msg("FTS unavailable, falling back to NQL scan")
+	}
+
 	nql := fmt.Sprintf("MATCH (n) RETURN n LIMIT %d", limit)
 	result, err := c.sdk.Query(ctx, nql, nil, collection)
 	if err != nil {
@@ -825,6 +940,8 @@ func DefaultCollections() []nietzsche.CollectionConfig {
 		// Graph collections (poincare — hyperbolic hierarchy)
 		{Name: "patient_graph", Dim: 3072, Metric: "poincare"},
 		{Name: "eva_core", Dim: 3072, Metric: "poincare"},
+		// Main EVA mind collection (graph + vector hybrid)
+		{Name: "eva_mind", Dim: 3072, Metric: "poincare"},
 		// Cache collection (key-value TTL cache, not vector storage)
 		{Name: "eva_cache", Dim: 2, Metric: "cosine"},
 	}
@@ -863,12 +980,14 @@ func (c *Client) EnsureCollections(ctx context.Context) error {
 	indexes := []struct{ collection, field string }{
 		// patient_graph: graph queries filter heavily by these fields
 		{"patient_graph", "node_type"},
+		{"patient_graph", "node_label"},
 		{"patient_graph", "patient_id"},
 		{"patient_graph", "created_at"},
 		{"patient_graph", "label"},
 		{"patient_graph", "importance"},
 		// eva_core: EVA's self-model graph
 		{"eva_core", "node_type"},
+		{"eva_core", "node_label"},
 		{"eva_core", "label"},
 		{"eva_core", "created_at"},
 		{"eva_core", "category"},
@@ -880,6 +999,11 @@ func (c *Client) EnsureCollections(ctx context.Context) error {
 		// eva_self_knowledge: introspection queries
 		{"eva_self_knowledge", "category"},
 		{"eva_self_knowledge", "created_at"},
+		// eva_mind: main EVA collection
+		{"eva_mind", "node_label"},
+		{"eva_mind", "node_type"},
+		{"eva_mind", "created_at"},
+		{"eva_mind", "patient_id"},
 	}
 	for _, idx := range indexes {
 		if err := c.CreateIndex(ctx, idx.collection, idx.field); err != nil {

@@ -7,10 +7,23 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"eva/internal/brainstem/logger"
 )
+
+// sqlIdentifierRe validates SQL identifiers (table/column names).
+// Allows only alphanumeric chars and underscores, 1-64 chars.
+var sqlIdentifierRe = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]{0,63}$`)
+
+// validateIdentifier checks if a string is a safe SQL identifier.
+func validateIdentifier(name, context string) error {
+	if !sqlIdentifierRe.MatchString(name) {
+		return fmt.Errorf("%s: invalid SQL identifier %q (must match [a-zA-Z_][a-zA-Z0-9_]{0,63})", context, name)
+	}
+	return nil
+}
 
 // SqlAdapter provides a high-level interface for EVA services to use
 // NietzscheDB's embedded Swartz SQL engine (GlueSQL on RocksDB).
@@ -54,8 +67,11 @@ func (s *SqlAdapter) CreateTable(ctx context.Context, ddl string) error {
 	return nil
 }
 
-// DropTable drops a SQL table.
+// DropTable drops a SQL table. Table name is validated to prevent injection.
 func (s *SqlAdapter) DropTable(ctx context.Context, tableName string) error {
+	if err := validateIdentifier(tableName, "SqlAdapter.DropTable"); err != nil {
+		return err
+	}
 	sql := fmt.Sprintf("DROP TABLE %s", tableName)
 	_, err := s.client.SqlExec(ctx, sql, s.collection)
 	if err != nil {
@@ -72,6 +88,16 @@ func (s *SqlAdapter) DropTable(ctx context.Context, tableName string) error {
 func (s *SqlAdapter) Insert(ctx context.Context, table string, columns []string, values []interface{}) error {
 	if len(columns) != len(values) {
 		return fmt.Errorf("SqlAdapter.Insert: columns(%d) and values(%d) length mismatch", len(columns), len(values))
+	}
+
+	// Validate table and column names to prevent SQL injection
+	if err := validateIdentifier(table, "SqlAdapter.Insert table"); err != nil {
+		return err
+	}
+	for _, col := range columns {
+		if err := validateIdentifier(col, "SqlAdapter.Insert column"); err != nil {
+			return err
+		}
 	}
 
 	// Build INSERT INTO table (col1, col2) VALUES (val1, val2)

@@ -45,7 +45,20 @@ func GenerateToken(userID int64, role string, secretKey string) (string, error) 
 	return token.SignedString([]byte(secretKey))
 }
 
-// GenerateRefreshToken gera um refresh token de longa duração
+// RefreshSecretSuffix is appended to the base JWT secret to derive a separate
+// signing key for refresh tokens. This prevents a leaked access-token secret
+// from being used to forge refresh tokens and vice-versa.
+// TODO(C3): migrate to a fully independent REFRESH_JWT_SECRET env var.
+const RefreshSecretSuffix = "-refresh"
+
+// deriveRefreshSecret returns a refresh-specific signing key.
+func deriveRefreshSecret(baseSecret string) string {
+	return baseSecret + RefreshSecretSuffix
+}
+
+// GenerateRefreshToken gera um refresh token de longa duração.
+// Uses a derived key (baseSecret + "-refresh") so access and refresh tokens
+// are not interchangeable.
 func GenerateRefreshToken(userID int64, secretKey string) (string, error) {
 	claims := &RefreshTokenClaims{
 		UserID: userID,
@@ -55,13 +68,15 @@ func GenerateRefreshToken(userID int64, secretKey string) (string, error) {
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString([]byte(secretKey))
+	return token.SignedString([]byte(deriveRefreshSecret(secretKey)))
 }
 
-// ValidateRefreshToken valida um refresh token
+// ValidateRefreshToken valida um refresh token.
+// Uses the same derived key as GenerateRefreshToken.
 func ValidateRefreshToken(tokenString string, secretKey string) (*RefreshTokenClaims, error) {
+	derived := deriveRefreshSecret(secretKey)
 	token, err := jwt.ParseWithClaims(tokenString, &RefreshTokenClaims{}, func(token *jwt.Token) (interface{}, error) {
-		return []byte(secretKey), nil
+		return []byte(derived), nil
 	})
 
 	if err != nil {

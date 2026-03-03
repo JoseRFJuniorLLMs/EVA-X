@@ -7,11 +7,27 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"eva/pkg/models"
 )
 
+// ErrNoPostgres is returned when a legacy PostgreSQL method is called but db.Conn is nil.
+// This happens when DATABASE_URL is not configured (NietzscheDB-only mode).
+var ErrNoPostgres = errors.New("legacy PostgreSQL not configured (DATABASE_URL empty)")
+
+// requireConn returns ErrNoPostgres if the legacy PostgreSQL connection is nil.
+func (db *DB) requireConn() error {
+	if db.Conn == nil {
+		return ErrNoPostgres
+	}
+	return nil
+}
+
 // GetIdosoByID recupera os dados do idoso e do familiar principal
 func (db *DB) GetIdosoByID(ctx context.Context, id int) (*models.CallContext, error) {
+	if err := db.requireConn(); err != nil {
+		return nil, err
+	}
 	query := `
 		SELECT 
 			id,
@@ -45,6 +61,9 @@ func (db *DB) GetIdosoByID(ctx context.Context, id int) (*models.CallContext, er
 
 // GetCallContext recupera o contexto completo para uma chamada (Join Agendamentos + Idosos)
 func (db *DB) GetCallContext(ctx context.Context, agendamentoID int) (*models.CallContext, error) {
+	if err := db.requireConn(); err != nil {
+		return nil, err
+	}
 	query := `
         SELECT 
             a.id,
@@ -111,6 +130,9 @@ func (db *DB) GetCallContext(ctx context.Context, agendamentoID int) (*models.Ca
 
 // AcquireLock tenta obter um lock consultivo do Postgres para evitar processamento duplicado
 func (db *DB) AcquireLock(ctx context.Context, lockID int) (bool, error) {
+	if err := db.requireConn(); err != nil {
+		return false, err
+	}
 	var acquired bool
 	query := "SELECT pg_try_advisory_lock($1)"
 	err := db.Conn.QueryRowContext(ctx, query, lockID).Scan(&acquired)
@@ -119,6 +141,9 @@ func (db *DB) AcquireLock(ctx context.Context, lockID int) (bool, error) {
 
 // ReleaseLock libera o lock consultivo
 func (db *DB) ReleaseLock(ctx context.Context, lockID int) (bool, error) {
+	if err := db.requireConn(); err != nil {
+		return false, err
+	}
 	var released bool
 	query := "SELECT pg_advisory_unlock($1)"
 	err := db.Conn.QueryRowContext(ctx, query, lockID).Scan(&released)
@@ -127,6 +152,9 @@ func (db *DB) ReleaseLock(ctx context.Context, lockID int) (bool, error) {
 
 // GetSystemSetting busca uma configuração pela chave na tabela configuracoes_sistema
 func (db *DB) GetSystemSetting(ctx context.Context, key string) (string, error) {
+	if err := db.requireConn(); err != nil {
+		return "", err
+	}
 	var value string
 	query := `SELECT valor FROM configuracoes_sistema WHERE chave = $1 AND ativa = true`
 	err := db.Conn.QueryRowContext(ctx, query, key).Scan(&value)
@@ -138,6 +166,9 @@ func (db *DB) GetSystemSetting(ctx context.Context, key string) (string, error) 
 
 // GetPendingCalls busca agendamentos prontos para execução
 func (db *DB) GetPendingCalls(ctx context.Context) ([]models.Agendamento, error) {
+	if err := db.requireConn(); err != nil {
+		return nil, err
+	}
 	query := `
         SELECT 
             a.id,
@@ -207,6 +238,9 @@ func (db *DB) GetPendingCalls(ctx context.Context) ([]models.Agendamento, error)
 }
 
 func (db *DB) UpdateCallStatus(ctx context.Context, agendamentoID int, status string, retryInMinutes int) error {
+	if err := db.requireConn(); err != nil {
+		return err
+	}
 	var query string
 	var err error
 
@@ -225,12 +259,18 @@ func (db *DB) UpdateCallStatus(ctx context.Context, agendamentoID int, status st
 }
 
 func (db *DB) IncrementAttempts(ctx context.Context, agendamentoID int) error {
+	if err := db.requireConn(); err != nil {
+		return err
+	}
 	query := `UPDATE agendamentos SET tentativas_realizadas = tentativas_realizadas + 1, atualizado_em = NOW() WHERE id = $1`
 	_, err := db.Conn.ExecContext(ctx, query, agendamentoID)
 	return err
 }
 
 func (db *DB) SaveSessionHandle(ctx context.Context, agendamentoID int, handle string, checkpoint map[string]interface{}) error {
+	if err := db.requireConn(); err != nil {
+		return err
+	}
 	cpRaw, _ := json.Marshal(checkpoint)
 	query := `UPDATE agendamentos SET gemini_session_handle = $1, ultima_interacao_estado = $2, session_expires_at = NOW() + INTERVAL '2 hours', atualizado_em = NOW() WHERE id = $3`
 	_, err := db.Conn.ExecContext(ctx, query, handle, cpRaw, agendamentoID)

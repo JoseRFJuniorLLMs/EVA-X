@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"log"
 	"strings"
+
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 // changeVoice troca a voz da EVA em tempo real
@@ -162,7 +165,7 @@ func detectVoiceChangeCommand(text string) (bool, string) {
 			for _, voiceName := range voiceNames {
 				if strings.Contains(textLower, voiceName) {
 					// Capitalize primeira letra
-					return true, strings.Title(voiceName)
+					return true, cases.Title(language.English).String(voiceName)
 				}
 			}
 

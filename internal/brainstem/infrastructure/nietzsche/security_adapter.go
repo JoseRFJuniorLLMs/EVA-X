@@ -442,6 +442,8 @@ func (c *apiKeyCredentials) GetRequestMetadata(_ context.Context, _ ...string) (
 }
 
 // RequireTransportSecurity returns false for insecure connections (same-host / VPN).
+// TODO(C4): Enable TLS for gRPC when NietzscheDB is accessed over untrusted networks.
+// Current setup is same-host (localhost / VPN), so plaintext is acceptable.
 // In production with external traffic, this should return true to require TLS.
 func (c *apiKeyCredentials) RequireTransportSecurity() bool {
 	return false
@@ -453,6 +455,8 @@ func (c *apiKeyCredentials) RequireTransportSecurity() bool {
 // If RBAC is disabled or no API key is configured for the role, returns
 // only insecure transport credentials (backward compatible).
 func (sa *SecurityAdapter) GRPCDialOptions(role Role) []grpc.DialOption {
+	// TODO(C4): Replace insecure credentials with TLS when gRPC crosses network boundaries.
+	// Currently safe: NietzscheDB runs on the same host (localhost:50051).
 	opts := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	}

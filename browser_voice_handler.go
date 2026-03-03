@@ -39,10 +39,26 @@ import (
 // automaticamente sem fechar o WebSocket do browser. O browser recebe
 // {"type":"status","text":"reconnecting"} e depois {"type":"status","text":"ready"}.
 
-// browserWSUpgrader permite conexoes de browsers (CORS flexivel)
+// browserWSUpgrader permite conexoes de browsers com verificacao de origem
 var browserWSUpgrader = gws.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
-		return true // Browser clients de qualquer origem
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true // Permitir conexões sem Origin (ex: apps mobile, curl)
+		}
+		allowedOrigins := []string{
+			"https://eva-ia.org",
+			"https://www.eva-ia.org",
+			"https://app.eva-ia.org",
+			"http://localhost:3000",
+			"http://localhost:8080",
+		}
+		for _, allowed := range allowedOrigins {
+			if origin == allowed {
+				return true
+			}
+		}
+		return false
 	},
 }
 
@@ -135,16 +151,20 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 			idosoID = idoso.ID
 		}
 
-		creatorSvc := personality.NewCreatorProfileService(s.db.Conn)
-		profile, err := creatorSvc.LoadCreatorProfile(ctx)
-		if err != nil {
-			log.Warn().Err(err).Msg("[BROWSER] Falha ao carregar perfil do criador")
-		} else {
-			clientContext = creatorSvc.GenerateSystemPrompt(profile)
-		}
+		if s.db.Conn != nil {
+			creatorSvc := personality.NewCreatorProfileService(s.db.Conn)
+			profile, err := creatorSvc.LoadCreatorProfile(ctx)
+			if err != nil {
+				log.Warn().Err(err).Msg("[BROWSER] Falha ao carregar perfil do criador")
+			} else {
+				clientContext = creatorSvc.GenerateSystemPrompt(profile)
+			}
 
-		debugMode := lacan.NewDebugMode(s.db.Conn)
-		clientContext += "\n" + debugMode.BuildDebugPromptSection(ctx)
+			debugMode := lacan.NewDebugMode(s.db.Conn)
+			clientContext += "\n" + debugMode.BuildDebugPromptSection(ctx)
+		} else {
+			log.Warn().Msg("[BROWSER] db.Conn nil — skipping creator profile and debug mode (no PostgreSQL)")
+		}
 
 	} else if clientCPF != "" && s.db != nil {
 		idoso, err := s.db.GetIdosoByCPF(clientCPF)
@@ -159,12 +179,13 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 				log.Info().Str("session", sessionID).Str("nome", fullIdoso.Nome).Int64("id", fullIdoso.ID).Msg("[BROWSER] Pessoa carregada")
 			}
 
-			rows, err := s.db.Conn.Query(`
+			if s.db.Conn == nil {
+				log.Warn().Msg("[BROWSER] db.Conn nil — skipping agendamentos query (no PostgreSQL)")
+			} else if rows, err := s.db.Conn.Query(`
 				SELECT tipo, dados_tarefa, status, data_hora_agendada
 				FROM agendamentos
 				WHERE idoso_id = $1 AND status IN ('agendado','ativo','pendente','nao_atendido','aguardando_retry')
-				ORDER BY data_hora_agendada ASC LIMIT 20`, idoso.ID)
-			if err == nil {
+				ORDER BY data_hora_agendada ASC LIMIT 20`, idoso.ID); err == nil {
 				defer rows.Close()
 				var medsInfo strings.Builder
 				count := 0
@@ -389,6 +410,7 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 	var currentGen int64 = 1    // geracao atual (incrementada a cada reconexao)
 	var reconnecting atomic.Bool // true enquanto reconexao em progresso
 	var responseAccum strings.Builder
+	var responseAccumMu sync.Mutex // protege responseAccum contra acessos concorrentes
 
 	// sigChan recebe sinais das goroutines para o loop principal
 	// Buffer 4: captura sinais de goroutines mortas sem bloquear
@@ -432,7 +454,9 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 					writeMu.Lock()
 					conn.WriteJSON(browserMessage{Type: "status", Text: "interrupted"})
 					writeMu.Unlock()
+					responseAccumMu.Lock()
 					responseAccum.Reset()
+					responseAccumMu.Unlock()
 					continue
 				}
 
@@ -440,10 +464,16 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 					writeMu.Lock()
 					conn.WriteJSON(browserMessage{Type: "status", Text: "turn_complete"})
 					writeMu.Unlock()
+					responseAccumMu.Lock()
 					if s.evaMemory != nil && responseAccum.Len() > 0 {
-						go s.evaMemory.StoreTurn(ctx, sessionID, "assistant", responseAccum.String())
+						go func(t string) {
+							storeCtx, storeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+							defer storeCancel()
+							s.evaMemory.StoreTurn(storeCtx, sessionID, "assistant", t)
+						}(responseAccum.String())
 					}
 					responseAccum.Reset()
+					responseAccumMu.Unlock()
 					continue
 				}
 
@@ -453,7 +483,11 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 						conn.WriteJSON(browserMessage{Type: "text", Text: text, Data: "user"})
 						writeMu.Unlock()
 						if s.evaMemory != nil {
-							go s.evaMemory.StoreTurn(ctx, sessionID, "user", text)
+							go func(t string) {
+								storeCtx, storeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+								defer storeCancel()
+								s.evaMemory.StoreTurn(storeCtx, sessionID, "user", t)
+							}(text)
 						}
 
 						// --- Tool Detection & Execution ---
@@ -537,7 +571,9 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 						writeMu.Lock()
 						conn.WriteJSON(browserMessage{Type: "text", Text: text})
 						writeMu.Unlock()
+						responseAccumMu.Lock()
 						responseAccum.WriteString(text)
+						responseAccumMu.Unlock()
 					}
 				}
 
@@ -642,7 +678,11 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 			case "text":
 				if msg.Text != "" {
 					if s.evaMemory != nil {
-						go s.evaMemory.StoreTurn(ctx, sessionID, "user", msg.Text)
+						go func(text string) {
+							storeCtx, storeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+							defer storeCancel()
+							s.evaMemory.StoreTurn(storeCtx, sessionID, "user", text)
+						}(msg.Text)
 					}
 					// NAO chamar SendText — gemini native-audio rejeita client_content
 				// com close 1008 "policy violation". Texto salvo em memoria apenas.

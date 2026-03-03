@@ -117,7 +117,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 	// Get claims from context (set by middleware)
-	claims, ok := r.Context().Value("user").(*Claims)
+	claims, ok := r.Context().Value(UserContextKey).(*Claims)
 	if !ok {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return

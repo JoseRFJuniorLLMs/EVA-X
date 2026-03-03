@@ -80,6 +80,8 @@ func (db *DB) GetUserByID(id int64) (*User, error) {
 }
 
 func (db *DB) UpdateLastLogin(userID int64) error {
-	// No-op (column not confirmed in schema)
+	// TODO(D2): This is a no-op — either implement with a real NietzscheDB upsert
+	// to track last_login timestamp, or remove this method and its caller in
+	// internal/brainstem/auth/handlers.go:104.
 	return nil
 }

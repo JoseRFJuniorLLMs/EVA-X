@@ -6,7 +6,6 @@ package nietzsche
 import (
 	"context"
 	"fmt"
-	"math"
 
 	"eva/internal/brainstem/logger"
 
@@ -37,78 +36,42 @@ type VectorSearchResult struct {
 	Payload map[string]interface{}
 }
 
-// Search performs KNN vector search in a collection.
-// Performs KNN search via NietzscheDB gRPC.
-// Vectors are float32 from Gemini embeddings, converted to float64 for NietzscheDB.
-//
-// NOTE: user_id filtering is done post-KNN (client-side) because the Go SDK's
-// KnnSearch does not yet expose the proto's pushed-down metadata filters
-// (KnnFilter.MatchFilter / KnnFilter.RangeFilter). The proto supports it
-// (pb.KnnRequest.Filters), but the SDK wrapper skips the field.
-// TODO: When the Go SDK exposes KnnSearch filters, pass user_id as a
-// KnnFilterMatch{Field: "user_id", Value: fmt.Sprint(userID)} to avoid
-// over-fetching and post-filtering. See Task 2 / nietzsche-sdk query.go.
+// Search performs KNN vector search in a collection with optional user_id filtering.
+// Uses server-side pushed-down KnnFilter for user_id when specified, eliminating
+// the old 2x over-fetch + client-side post-filter pattern.
+// Results include hydrated Payload from GetNode (needed by most callers).
 func (va *VectorAdapter) Search(ctx context.Context, collection string,
 	vector []float32, limit int, userID int64) ([]VectorSearchResult, error) {
 
 	log := logger.Nietzsche()
 
-	// If user_id filter is needed, try server-side filtered search first
-	if userID > 0 {
-		filtered, err := va.SearchFiltered(ctx, collection, vector, limit, map[string]string{
-			"user_id": fmt.Sprintf("%d", userID),
-		})
-		if err == nil && len(filtered) > 0 {
-			return filtered, nil
-		}
-		// Fall through to post-filter path on error
-		if err != nil {
-			log.Debug().Err(err).Msg("filtered search unavailable, falling back to post-filter")
-		}
-	}
-
-	// float32 -> float64 (lossless)
 	vec64 := float32ToFloat64(vector)
 
-	results, err := va.client.KnnSearch(ctx, collection, vec64, uint32(limit*2))
+	// Build server-side filters — user_id pushed down to KNN index
+	var filters []nietzsche.KnnFilter
+	if userID > 0 {
+		filters = append(filters, nietzsche.KnnMatchFilter("user_id", fmt.Sprintf("%d", userID)))
+	}
+
+	// Single RPC with pushed-down filter (no 2x over-fetch needed)
+	results, err := va.client.KnnSearchFiltered(ctx, collection, vec64, uint32(limit), filters)
 	if err != nil {
 		log.Error().Err(err).Str("collection", collection).Msg("vector search failed")
 		return nil, fmt.Errorf("vector search %s: %w", collection, err)
 	}
 
-	// Fetch node content for each result and filter by user_id if needed
-	var out []VectorSearchResult
+	// Hydrate node content for each result (callers depend on .Payload)
+	out := make([]VectorSearchResult, 0, len(results))
 	for _, r := range results {
 		node, err := va.client.GetNode(ctx, r.ID, collection)
 		if err != nil || !node.Found {
 			continue
 		}
-
-		// Filter by user_id if specified (NietzscheDB payload filter)
-		if userID > 0 {
-			if uid, ok := node.Content["user_id"]; ok {
-				switch v := uid.(type) {
-				case float64:
-					if int64(v) != userID {
-						continue
-					}
-				case int64:
-					if v != userID {
-						continue
-					}
-				}
-			}
-		}
-
 		out = append(out, VectorSearchResult{
 			ID:      r.ID,
 			Score:   r.Distance,
 			Payload: node.Content,
 		})
-
-		if len(out) >= limit {
-			break
-		}
 	}
 
 	log.Debug().
@@ -118,63 +81,40 @@ func (va *VectorAdapter) Search(ctx context.Context, collection string,
 	return out, nil
 }
 
-// SearchFiltered performs KNN search with server-side metadata pre-filtering.
-// Uses NQL MATCH with WHERE clauses to filter before KNN ranking, avoiding
-// the inefficient post-filter pattern in Search().
-//
-// This is a workaround until the Go SDK exposes KnnSearch pushed-down filters
-// (proto field: KnnRequest.filters with KnnFilterMatch/KnnFilterRange).
-// When the SDK adds filter support, this method should delegate to the SDK's
-// filtered KnnSearch for better performance (single RPC, index pushdown).
+// SearchFiltered performs KNN search with arbitrary server-side metadata pre-filters.
+// Each filter entry maps a content field name to an exact-match value string.
+// Uses a single gRPC KnnSearchFiltered call with pushed-down metadata filters.
 func (va *VectorAdapter) SearchFiltered(ctx context.Context, collection string,
 	vector []float32, limit int, filters map[string]string) ([]VectorSearchResult, error) {
 
 	log := logger.Nietzsche()
 
-	// Build NQL WHERE clause from metadata filters
-	var whereClauses []string
-	params := make(map[string]interface{})
-	i := 0
+	vec64 := float32ToFloat64(vector)
+
+	// Convert map filters to SDK KnnFilter slice
+	var knnFilters []nietzsche.KnnFilter
 	for field, value := range filters {
-		paramName := fmt.Sprintf("f%d", i)
-		whereClauses = append(whereClauses, fmt.Sprintf("n.%s = $%s", field, paramName))
-		params[paramName] = value
-		i++
+		knnFilters = append(knnFilters, nietzsche.KnnMatchFilter(field, value))
 	}
 
-	if len(whereClauses) == 0 {
-		return nil, fmt.Errorf("SearchFiltered requires at least one filter")
-	}
-
-	// NQL query: filter first, then return nodes (caller re-ranks by vector distance)
-	nql := fmt.Sprintf("MATCH (n) WHERE %s RETURN n LIMIT %d",
-		joinStrings(whereClauses, " AND "), limit*2)
-
-	result, err := va.client.Query(ctx, nql, params, collection)
+	results, err := va.client.KnnSearchFiltered(ctx, collection, vec64, uint32(limit), knnFilters)
 	if err != nil {
-		log.Error().Err(err).Str("collection", collection).Msg("filtered search NQL failed")
+		log.Error().Err(err).Str("collection", collection).Msg("filtered search failed")
 		return nil, fmt.Errorf("filtered search %s: %w", collection, err)
 	}
 
-	// Convert to VectorSearchResult and compute distance from query vector
-	vec64 := float32ToFloat64(vector)
-	var out []VectorSearchResult
-	for _, node := range result.Nodes {
-		score := 0.0
-		if len(node.Embedding) > 0 && len(vec64) > 0 {
-			score = cosineSimilarity(vec64, node.Embedding)
+	// Hydrate node content
+	out := make([]VectorSearchResult, 0, len(results))
+	for _, r := range results {
+		node, err := va.client.GetNode(ctx, r.ID, collection)
+		if err != nil || !node.Found {
+			continue
 		}
 		out = append(out, VectorSearchResult{
-			ID:      node.ID,
-			Score:   score,
+			ID:      r.ID,
+			Score:   r.Distance,
 			Payload: node.Content,
 		})
-	}
-
-	// Sort by score descending and limit
-	sortByScoreDesc(out)
-	if len(out) > limit {
-		out = out[:limit]
 	}
 
 	log.Debug().
@@ -183,46 +123,6 @@ func (va *VectorAdapter) SearchFiltered(ctx context.Context, collection string,
 		Int("results", len(out)).
 		Msg("filtered search completed")
 	return out, nil
-}
-
-// joinStrings joins a slice of strings with a separator.
-func joinStrings(parts []string, sep string) string {
-	result := ""
-	for i, p := range parts {
-		if i > 0 {
-			result += sep
-		}
-		result += p
-	}
-	return result
-}
-
-// cosineSimilarity computes cosine similarity between two float64 vectors.
-func cosineSimilarity(a, b []float64) float64 {
-	if len(a) != len(b) || len(a) == 0 {
-		return 0
-	}
-	var dot, normA, normB float64
-	for i := range a {
-		dot += a[i] * b[i]
-		normA += a[i] * a[i]
-		normB += b[i] * b[i]
-	}
-	if normA == 0 || normB == 0 {
-		return 0
-	}
-	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
-}
-
-// sortByScoreDesc sorts VectorSearchResults by Score in descending order.
-func sortByScoreDesc(results []VectorSearchResult) {
-	for i := 0; i < len(results); i++ {
-		for j := i + 1; j < len(results); j++ {
-			if results[j].Score > results[i].Score {
-				results[i], results[j] = results[j], results[i]
-			}
-		}
-	}
 }
 
 // Upsert inserts or updates a vector node in a collection.
@@ -356,7 +256,7 @@ func (va *VectorAdapter) HybridSearch(ctx context.Context, collection string,
 }
 
 // GetNodeByID retrieves a node's full content by ID from a collection.
-// Used to hydrate Memory objects without going through PostgreSQL.
+// Used to hydrate Memory objects without going through NietzscheDB.
 func (va *VectorAdapter) GetNodeByID(ctx context.Context, collection, id string) (map[string]interface{}, bool, error) {
 	result, err := va.client.GetNode(ctx, id, collection)
 	if err != nil {

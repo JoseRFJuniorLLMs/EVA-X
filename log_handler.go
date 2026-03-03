@@ -7,8 +7,10 @@ import (
 	"bufio"
 	"context"
 	"net/http"
+	"os"
 	"os/exec"
 	"strconv"
+	"sync"
 	"time"
 
 	gws "github.com/gorilla/websocket"
@@ -17,7 +19,23 @@ import (
 
 var logWSUpgrader = gws.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
-		return true
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true // Permitir conexões sem Origin (ex: apps mobile, curl)
+		}
+		allowedOrigins := []string{
+			"https://eva-ia.org",
+			"https://www.eva-ia.org",
+			"https://app.eva-ia.org",
+			"http://localhost:3000",
+			"http://localhost:8080",
+		}
+		for _, allowed := range allowedOrigins {
+			if origin == allowed {
+				return true
+			}
+		}
+		return false
 	},
 }
 
@@ -27,6 +45,19 @@ type logMessage struct {
 }
 
 func (s *SignalingServer) handleLogStream(w http.ResponseWriter, r *http.Request) {
+	// Auth: require EVA_LOGS_TOKEN via query param ?token=...
+	expectedToken := os.Getenv("EVA_LOGS_TOKEN")
+	if expectedToken == "" {
+		log.Error().Msg("[LogStream] EVA_LOGS_TOKEN not set — endpoint disabled")
+		http.Error(w, "log stream disabled: token not configured", http.StatusForbidden)
+		return
+	}
+	if r.URL.Query().Get("token") != expectedToken {
+		log.Warn().Str("ip", r.RemoteAddr).Msg("[LogStream] Unauthorized access attempt")
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	conn, err := logWSUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Error().Err(err).Msg("Log WS upgrade failed")
@@ -67,7 +98,12 @@ func (s *SignalingServer) handleLogStream(w http.ResponseWriter, r *http.Request
 	}
 
 	log.Info().Msg("Log stream session started")
+
+	var wsMu sync.Mutex // protege escritas concorrentes no WebSocket
+
+	wsMu.Lock()
 	conn.WriteJSON(logMessage{Type: "status", Data: "connected"})
+	wsMu.Unlock()
 
 	// Goroutine: read from client (detect disconnect)
 	go func() {
@@ -89,7 +125,10 @@ func (s *SignalingServer) handleLogStream(w http.ResponseWriter, r *http.Request
 			case <-ctx.Done():
 				return
 			case <-pingTicker.C:
-				if err := conn.WriteMessage(gws.PingMessage, nil); err != nil {
+				wsMu.Lock()
+				err := conn.WriteMessage(gws.PingMessage, nil)
+				wsMu.Unlock()
+				if err != nil {
 					cancel()
 					return
 				}
@@ -106,7 +145,10 @@ func (s *SignalingServer) handleLogStream(w http.ResponseWriter, r *http.Request
 			return
 		default:
 			line := scanner.Text()
-			if err := conn.WriteJSON(logMessage{Type: "log", Data: line}); err != nil {
+			wsMu.Lock()
+			err := conn.WriteJSON(logMessage{Type: "log", Data: line})
+			wsMu.Unlock()
+			if err != nil {
 				cmd.Process.Kill()
 				return
 			}

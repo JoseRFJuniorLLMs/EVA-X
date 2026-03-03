@@ -27,10 +27,10 @@ func (s *SignalingServer) handleCreateVideoSession(w http.ResponseWriter, r *htt
 		return
 	}
 
-	// ⚠️ Como o fluxo REST não tem auth ainda, vamos fixar ou pegar de algum header.
-	// Para o MVP, vamos assumir IdosoID = 1 se não vier, ou confiar no Mobile enviando.
+	// Reject if IdosoID not provided (never default to admin)
 	if req.IdosoID == 0 {
-		req.IdosoID = 1 // Default fallback
+		http.Error(w, `{"error":"idoso_id is required and must be > 0"}`, http.StatusBadRequest)
+		return
 	}
 
 	log.Printf("🎥 Criando Sessão de Vídeo: %s (Idoso: %d)", req.SessionID, req.IdosoID)

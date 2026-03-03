@@ -48,10 +48,10 @@ func (s *SignalingServer) handleToolExecute(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// 3. Use creator's idoso_id if not provided
+	// 3. Reject if idoso_id not provided (never default to admin)
 	if req.IdosoID == 0 {
-		// Default to creator's ID (will be resolved from CPF in production)
-		req.IdosoID = 1
+		http.Error(w, `{"error":"idoso_id is required and must be > 0"}`, http.StatusBadRequest)
+		return
 	}
 
 	// 4. Execute tool

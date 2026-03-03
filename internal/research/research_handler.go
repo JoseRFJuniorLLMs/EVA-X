@@ -6,6 +6,8 @@ package research
 import (
 	"encoding/json"
 	"net/http"
+	"path/filepath"
+	"strings"
 
 	"github.com/gorilla/mux"
 )
@@ -72,7 +74,16 @@ func exportDatasetHandler(engine *ResearchEngine) http.HandlerFunc {
 		if req.FilePath == "" {
 			req.FilePath = "/tmp/eva_research_" + id + ".csv"
 		}
-		if err := engine.ExportDatasetToCSV(id, req.FilePath); err != nil {
+
+		// Security: validate file path to prevent path traversal (E27)
+		const allowedDir = "/tmp"
+		cleanPath := filepath.Clean(req.FilePath)
+		if !strings.HasPrefix(cleanPath, allowedDir+string(filepath.Separator)) && cleanPath != allowedDir {
+			writeResearchErr(w, http.StatusBadRequest, "file_path must be within "+allowedDir)
+			return
+		}
+
+		if err := engine.ExportDatasetToCSV(id, cleanPath); err != nil {
 			writeResearchErr(w, http.StatusInternalServerError, "Falha ao exportar: "+err.Error())
 			return
 		}

@@ -194,28 +194,11 @@ func main() {
 		log.Fatal().Err(err).Msg("Falha ao criar collections no NietzscheDB")
 	}
 
-	// Legacy PostgreSQL connection (kept for packages that still use db.Conn directly)
-	// TODO: Remove once all packages are migrated to NietzscheDB
+	// Legacy PostgreSQL connection REMOVED — all data lives in NietzscheDB.
+	// Modules that still reference db.Conn receive nil and must handle it gracefully.
 	var legacyConn *sql.DB
-	if cfg.DatabaseURL != "" {
-		legacyDB, pgErr := sql.Open("postgres", cfg.DatabaseURL)
-		if pgErr == nil {
-			legacyDB.SetMaxOpenConns(10)
-			legacyDB.SetMaxIdleConns(2)
-			legacyDB.SetConnMaxLifetime(5 * time.Minute)
-			if pingErr := legacyDB.Ping(); pingErr == nil {
-				legacyConn = legacyDB
-				log.Info().Msg("PostgreSQL legacy connection established (backward compat)")
-			} else {
-				log.Warn().Err(pingErr).Msg("PostgreSQL unavailable — packages using db.Conn will fail")
-				legacyDB.Close()
-			}
-		} else {
-			log.Warn().Err(pgErr).Msg("PostgreSQL connection failed — packages using db.Conn will fail")
-		}
-	}
 
-	// Primary DB: NietzscheDB with optional PostgreSQL fallback
+	// Primary DB: NietzscheDB with optional NietzscheDB fallback
 	db := database.NewNietzscheDB(nzClient.SDK(), legacyConn)
 	defer db.Close()
 
@@ -227,9 +210,8 @@ func main() {
 	// Create adapters
 	graphAdapter := nietzscheInfra.NewGraphAdapter(nzClient, "patient_graph")
 	vectorAdapter := nietzscheInfra.NewVectorAdapter(nzClient)
-	audioBuffer := nietzscheInfra.NewAudioBuffer(nzClient)
+	// audioBuffer and algoAdapter removed — created but never used (D1)
 	evaGraphAdapter := nietzscheInfra.NewGraphAdapter(nzClient, "eva_core")
-	algoAdapter := nietzscheInfra.NewAlgoAdapter(nzClient)
 	manifoldAdapter := nietzscheInfra.NewManifoldAdapter(nzClient)
 	backupService := nietzscheInfra.NewBackupService(nzClient, 24*time.Hour)
 	cdcListener := nietzscheInfra.NewCDCListener(nzClient)
@@ -357,6 +339,7 @@ func main() {
 	// 7.5 Tools Handler (120+ tools — medicamentos, alarmes, jogos, GTD, etc)
 	toolsHandler := tools.NewToolsHandler(db, pushService, emailSvc)
 	toolsHandler.SetNietzscheClient(nzClient)
+	toolsHandler.SetManifoldAdapter(manifoldAdapter)
 	if embedSvc != nil {
 		toolsHandler.SetEmbedFunc(embedSvc.GenerateEmbedding)
 	}
@@ -694,8 +677,9 @@ func main() {
 	authHandler := auth.NewHandler(db, cfg)
 	api.HandleFunc("/auth/login", authHandler.Login).Methods("POST")
 
-	// Mobile API (EVA-Mobile)
+	// Mobile API (EVA-Mobile) — protected by JWT auth
 	v1 := api.PathPrefix("/v1").Subrouter()
+	v1.Use(auth.AuthMiddleware(cfg.JWTSecret))
 	v1.HandleFunc("/idosos/by-cpf/{cpf}", server.handleGetIdosoByCpf).Methods("GET")
 	v1.HandleFunc("/idosos/{id}", server.handleGetIdoso).Methods("GET")
 	v1.HandleFunc("/idosos/sync-token-by-cpf", server.handleSyncTokenByCpf).Methods("PATCH")
@@ -747,8 +731,18 @@ func main() {
 	integration.RegisterFHIRRoutes(router, fhirHandler)
 	log.Info().Msg("🏥 FHIR R4 endpoints registrados em /api/v1/fhir")
 
-	// Prometheus metrics
-	router.Handle("/metrics", monitoring.PrometheusHandler())
+	// Prometheus metrics (protected by bearer token)
+	router.Handle("/metrics", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token := os.Getenv("EVA_METRICS_TOKEN")
+		if token != "" {
+			auth := r.Header.Get("Authorization")
+			if auth != "Bearer "+token {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
+		monitoring.PrometheusHandler().ServeHTTP(w, r)
+	}))
 	log.Info().Msg("📊 Prometheus metrics registrado em /metrics")
 
 	// Tool Execution REST endpoint (para MCP stdio server)
@@ -840,11 +834,7 @@ func main() {
 		Handler: router,
 	}
 
-	// NietzscheDB services — use _ to suppress unused until wired to handlers
-	_ = audioBuffer
-	_ = algoAdapter
-	_ = manifoldAdapter
-	_ = cacheAdapter
+	// cacheAdapter is used by embedSvc.SetCacheAdapter — no suppression needed
 
 	// NietzscheDB Backup Service (daily automated backups)
 	go func() {

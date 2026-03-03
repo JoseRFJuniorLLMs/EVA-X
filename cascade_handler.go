@@ -16,7 +16,8 @@ import (
 // handleVideoCascade gerencia a cascata de notificações para chamada de vídeo
 // Prioridades: 1=Família, 2=Cuidador, 3=Médico
 // Tenta 5x cada nível antes de escalar
-func (s *SignalingServer) handleVideoCascade(idosoID int64, sessionID string) {
+// ctx controls the goroutine lifetime — returns early if the context is cancelled.
+func (s *SignalingServer) handleVideoCascade(ctx context.Context, idosoID int64, sessionID string) {
 	log.Printf("🌊 Iniciando cascata de vídeo para idoso %d, sessão %s", idosoID, sessionID)
 
 	// Buscar todos os cuidadores ativos ordenados por prioridade
@@ -116,7 +117,12 @@ func (s *SignalingServer) handleVideoCascade(idosoID int64, sessionID string) {
 			}
 
 			// Aguardar 30 segundos antes de verificar se alguém atendeu
-			time.Sleep(30 * time.Second)
+			select {
+			case <-ctx.Done():
+				log.Printf("⚠️ Cascade cancelled for session %s: %v", sessionID, ctx.Err())
+				return
+			case <-time.After(30 * time.Second):
+			}
 
 			// Verificar se a sessão foi aceita (status mudou para 'active')
 			session, err := s.db.GetVideoSession(sessionID)
@@ -175,11 +181,20 @@ func (s *SignalingServer) escalateToEmergency(idosoID int64, sessionID, reason s
 	log.Printf("Motivo: %s", reason)
 
 	// Registrar no banco de dados
+	if s.db == nil {
+		log.Printf("❌ Database nil — não é possível registrar alerta de emergência")
+		return
+	}
+	conn := s.db.GetConnection()
+	if conn == nil {
+		log.Printf("❌ Conexão nil — não é possível registrar alerta de emergência")
+		return
+	}
 	alertQuery := `
 		INSERT INTO alertas (idoso_id, tipo, severidade, mensagem, destinatarios, criado_em)
 		VALUES ($1, 'video_emergency', 'critica', $2, '[]', NOW())
 	`
-	_, err := s.db.GetConnection().Exec(alertQuery, idosoID, fmt.Sprintf("Emergência de vídeo: %s (Sessão: %s)", reason, sessionID))
+	_, err := conn.Exec(alertQuery, idosoID, fmt.Sprintf("Emergência de vídeo: %s (Sessão: %s)", reason, sessionID))
 	if err != nil {
 		log.Printf("❌ Erro ao registrar alerta de emergência: %v", err)
 	}
