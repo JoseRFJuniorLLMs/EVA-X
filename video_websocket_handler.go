@@ -40,9 +40,11 @@ type VideoSession struct {
 	SessionID     string
 	MobileConn    *websocket.Conn
 	AttendantConn *websocket.Conn
-	SDPOffer      string // ✅ Store Offer for late-joining attendants
+	SDPOffer      string // Store Offer for late-joining attendants
 	PatientData   map[string]interface{}
+	CreatedAt     time.Time // E26: track creation time for expiry
 	mu            sync.RWMutex
+	writeMu       sync.Mutex // protects WebSocket write operations (gorilla is not thread-safe for concurrent writes)
 }
 
 // AttendantConnection stores metadata about a connected attendant
@@ -125,10 +127,42 @@ type VideoSessionManager struct {
 	mu            sync.RWMutex
 }
 
+const videoSessionTTL = 30 * time.Minute // E26: sessions expire after 30 minutes
+
 func NewVideoSessionManager() *VideoSessionManager {
-	return &VideoSessionManager{
+	vsm := &VideoSessionManager{
 		sessions:      make(map[string]*VideoSession),
 		attendantPool: NewAttendantPool(),
+	}
+
+	// E26: background goroutine to reap expired sessions (prevents memory leak)
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			vsm.reapExpiredSessions()
+		}
+	}()
+
+	return vsm
+}
+
+// reapExpiredSessions removes sessions older than videoSessionTTL with no active connections.
+func (vsm *VideoSessionManager) reapExpiredSessions() {
+	vsm.mu.Lock()
+	defer vsm.mu.Unlock()
+
+	now := time.Now()
+	for id, session := range vsm.sessions {
+		session.mu.RLock()
+		idle := session.MobileConn == nil && session.AttendantConn == nil
+		expired := now.Sub(session.CreatedAt) > videoSessionTTL
+		session.mu.RUnlock()
+
+		if idle && expired {
+			delete(vsm.sessions, id)
+			log.Printf("Video session expired and reaped: %s (age: %v)", id, now.Sub(session.CreatedAt))
+		}
 	}
 }
 
@@ -140,8 +174,9 @@ func (vsm *VideoSessionManager) CreateSession(sessionID, sdpOffer string) {
 	vsm.sessions[sessionID] = &VideoSession{
 		SessionID: sessionID,
 		SDPOffer:  sdpOffer,
+		CreatedAt: time.Now(),
 	}
-	log.Printf("✅ Video Session created with SDP Offer: %s", sessionID)
+	log.Printf("Video Session created with SDP Offer: %s", sessionID)
 }
 
 // GetPendingSessions returns a list of active sessions waiting for an attendant
@@ -185,6 +220,7 @@ func (vsm *VideoSessionManager) RegisterClient(sessionID string, conn *websocket
 	if !exists {
 		session = &VideoSession{
 			SessionID: sessionID,
+			CreatedAt: time.Now(),
 		}
 		vsm.sessions[sessionID] = session
 	}
@@ -286,7 +322,10 @@ func (vsm *VideoSessionManager) RouteSignal(sessionID string, senderConn *websoc
 	}
 
 	log.Printf("➡️ Routing %s to target for session: %s", payload["type"], sessionID)
-	return targetConn.WriteJSON(message)
+	session.writeMu.Lock()
+	err := targetConn.WriteJSON(message)
+	session.writeMu.Unlock()
+	return err
 }
 
 // UnregisterClient removes a client from a session or attendant pool
@@ -399,6 +438,7 @@ func HandleVideoWebSocket(vsm *VideoSessionManager) http.HandlerFunc {
 						vsm.sessions[sessionID] = &VideoSession{
 							SessionID:   sessionID,
 							PatientData: patientData,
+							CreatedAt:   time.Now(),
 						}
 					}
 					vsm.mu.Unlock()

@@ -4,6 +4,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -221,7 +223,7 @@ func Load() (*Config, error) {
 		GoogleOAuthClientID:     os.Getenv("GOOGLE_OAUTH_CLIENT_ID"),
 		GoogleOAuthClientSecret: os.Getenv("GOOGLE_OAUTH_CLIENT_SECRET"),
 		GoogleOAuthRedirectURL:  getEnvWithDefault("GOOGLE_OAUTH_REDIRECT_URL", "https://eva-mind.com/oauth/callback"),
-		OAuthStateSecret:        getEnvWithDefault("OAUTH_STATE_SECRET", "eva-oauth-state-secret-2026"),
+		OAuthStateSecret:        getEnvRequiredOrRandom("OAUTH_STATE_SECRET"),
 		FrontendBaseURL:         getEnvWithDefault("FRONTEND_BASE_URL", "http://localhost:3000"),
 
 		// WhatsApp (Meta Graph API)
@@ -288,9 +290,25 @@ func Load() (*Config, error) {
 func getEnvRequired(key string) string {
 	value := os.Getenv(key)
 	if value == "" {
-		log.Printf("⚠️ AVISO: %s não configurado. Usando valor vazio — configure antes de ir para produção!", key)
+		log.Fatalf("FATAL: %s não configurado. Esta variável é obrigatória — configure antes de iniciar.", key)
 	}
 	return value
+}
+
+// getEnvRequiredOrRandom returns the env var or generates a cryptographically
+// random 32-byte hex string. Used for secrets that MUST not be hardcoded but
+// where the feature might be disabled (e.g. OAuth routes commented out).
+func getEnvRequiredOrRandom(key string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		log.Fatalf("FATAL: cannot generate random secret for %s: %v", key, err)
+	}
+	secret := hex.EncodeToString(b)
+	log.Printf("⚠️ %s não configurado — gerado aleatoriamente. Configure via env var em produção!", key)
+	return secret
 }
 
 func getEnvWithDefault(key, defaultValue string) string {
@@ -338,7 +356,11 @@ func getEnvFloat64(key string, defaultValue float64) float64 {
 // Validate valida se todas as configurações obrigatórias estão presentes
 func (c *Config) Validate() error {
 	if c.DatabaseURL == "" {
-		return fmt.Errorf("DATABASE_URL is required")
+		log.Println("⚠️  DATABASE_URL não configurado — módulos legados PostgreSQL desabilitados")
+	}
+
+	if c.NietzscheGRPCAddr == "" {
+		return fmt.Errorf("NIETZSCHE_GRPC_ADDR is required (primary database)")
 	}
 
 	if c.GoogleAPIKey == "" {
@@ -346,7 +368,7 @@ func (c *Config) Validate() error {
 	}
 
 	if c.FirebaseCredentialsPath == "" {
-		return fmt.Errorf("FIREBASE_CREDENTIALS_PATH is required")
+		log.Println("⚠️  FIREBASE_CREDENTIALS_PATH não configurado — push notifications desabilitadas")
 	}
 
 	// Verificar se fallbacks estão habilitados mas sem credenciais

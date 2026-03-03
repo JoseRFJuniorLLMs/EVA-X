@@ -33,7 +33,7 @@ type DB struct {
 	nz   *nietzsche.NietzscheClient // NietzscheDB gRPC client (primary)
 }
 
-// NewDB creates a DB backed by PostgreSQL (legacy constructor).
+// NewDB creates a DB backed by NietzscheDB (legacy constructor).
 func NewDB(connectionString string) (*DB, error) {
 	conn, err := sql.Open("postgres", connectionString)
 	if err != nil {
@@ -73,7 +73,7 @@ func (db *DB) GetConnection() *sql.DB {
 
 // ── NietzscheDB internal helpers ──────────────────────────────────────
 
-// nodeID computes the deterministic UUID v5 for a migrated PostgreSQL row.
+// nodeID computes the deterministic UUID v5 for a migrated NietzscheDB row.
 // Key format matches the pg-to-nietzsche migration tool: "eva_mind:table:pgID".
 func nodeID(table string, pgID interface{}) string {
 	key := fmt.Sprintf("%s:%s:%v", evaMindCollection, table, pgID)
@@ -88,7 +88,7 @@ func (db *DB) nqlQuery(ctx context.Context, nql string, params map[string]interf
 	return db.nz.Query(ctx, nql, params, evaMindCollection)
 }
 
-// getNode retrieves a single node by its original PostgreSQL table + ID.
+// getNode retrieves a single node by its original NietzscheDB table + ID.
 func (db *DB) getNode(ctx context.Context, table string, pgID interface{}) (map[string]interface{}, error) {
 	if db.nz == nil {
 		return nil, fmt.Errorf("NietzscheDB not initialized")
@@ -160,9 +160,9 @@ func (db *DB) queryNodesByLabel(ctx context.Context, label string, extraWhere st
 	if params == nil {
 		params = map[string]interface{}{}
 	}
-	params["_label"] = label
+	params["nlabel"] = label
 
-	nql := fmt.Sprintf(`MATCH (n) WHERE n.node_label = $_label%s RETURN n`, extraWhere)
+	nql := fmt.Sprintf(`MATCH (n) WHERE n.node_label = $nlabel%s RETURN n`, extraWhere)
 	if limit > 0 {
 		nql += fmt.Sprintf(" LIMIT %d", limit)
 	}

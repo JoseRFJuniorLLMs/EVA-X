@@ -271,7 +271,7 @@ func (sa *SensoryAdapter) RetrieveSensory(ctx context.Context, collection, nodeI
 func (sa *SensoryAdapter) ReconstructFull(ctx context.Context, nodeID string) ([]byte, error) {
 	log := logger.Nietzsche()
 
-	result, err := sa.client.Reconstruct(ctx, nodeID, "full")
+	result, err := sa.client.Reconstruct(ctx, nodeID, "full", "")
 	if err != nil {
 		log.Error().Err(err).
 			Str("node_id", nodeID).

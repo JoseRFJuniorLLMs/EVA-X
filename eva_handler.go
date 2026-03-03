@@ -20,7 +20,23 @@ import (
 // evaWSUpgrader permite conexoes do browser para /ws/eva
 var evaWSUpgrader = gws.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
-		return true
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true // Permitir conexões sem Origin (ex: apps mobile, curl)
+		}
+		allowedOrigins := []string{
+			"https://eva-ia.org",
+			"https://www.eva-ia.org",
+			"https://app.eva-ia.org",
+			"http://localhost:3000",
+			"http://localhost:8080",
+		}
+		for _, allowed := range allowedOrigins {
+			if origin == allowed {
+				return true
+			}
+		}
+		return false
 	},
 }
 
@@ -195,7 +211,11 @@ func (s *SignalingServer) handleEvaChat(w http.ResponseWriter, r *http.Request) 
 					if responseAccum.Len() > 0 {
 						turn := responseAccum.String()
 						if s.evaMemory != nil {
-							go s.evaMemory.StoreTurn(ctx, sessionID, "assistant", turn)
+							go func(t string) {
+								storeCtx, storeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+								defer storeCancel()
+								s.evaMemory.StoreTurn(storeCtx, sessionID, "assistant", t)
+							}(turn)
 						}
 						transcriptMu.Lock()
 						transcriptAccum.WriteString("EVA: " + turn + "\n")
@@ -264,7 +284,11 @@ func (s *SignalingServer) handleEvaChat(w http.ResponseWriter, r *http.Request) 
 				if msg.Type == "text" && msg.Text != "" {
 					// Salvar mensagem do usuario no NietzscheDB legado + acumular transcript
 					if s.evaMemory != nil {
-						go s.evaMemory.StoreTurn(ctx, sessionID, "user", msg.Text)
+						go func(text string) {
+							storeCtx, storeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+							defer storeCancel()
+							s.evaMemory.StoreTurn(storeCtx, sessionID, "user", text)
+						}(msg.Text)
 					}
 					transcriptMu.Lock()
 					transcriptAccum.WriteString("Usuario: " + msg.Text + "\n")
@@ -285,7 +309,11 @@ func (s *SignalingServer) handleEvaChat(w http.ResponseWriter, r *http.Request) 
 
 	// Processar fim de sessao no CoreMemoryEngine (reflexao + memorias pessoais)
 	if s.coreMemory != nil {
+		transcriptMu.Lock()
 		transcript := transcriptAccum.String()
+		evaResponsesCopy := make([]string, len(evaResponses))
+		copy(evaResponsesCopy, evaResponses)
+		transcriptMu.Unlock()
 		if transcript != "" {
 			duration := time.Since(sessionStart).Minutes()
 			go func() {
@@ -293,7 +321,7 @@ func (s *SignalingServer) handleEvaChat(w http.ResponseWriter, r *http.Request) 
 					SessionID:       sessionID,
 					Transcript:      transcript,
 					DurationMinutes: duration,
-					EVAResponses:    evaResponses,
+					EVAResponses:    evaResponsesCopy,
 					Timestamp:       sessionStart,
 				}
 				bgCtx := context.Background()

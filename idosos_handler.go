@@ -45,6 +45,7 @@ func (s *SignalingServer) handleGetIdosoByCpf(w http.ResponseWriter, r *http.Req
 	err := row.Scan(&idoso.ID, &idoso.Nome, &idoso.CPF, &idoso.Telefone,
 		&idoso.DataNascimento, &idoso.Endereco, &idoso.DeviceToken, &idoso.Ativo)
 	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 		w.Write([]byte(`{"error":"CPF not found"}`))
 		return

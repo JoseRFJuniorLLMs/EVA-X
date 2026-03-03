@@ -13,6 +13,14 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// maskCPF returns first 3 chars + "***" for logging, safe for short strings
+func maskCPF(cpf string) string {
+	if len(cpf) >= 3 {
+		return cpf[:3] + "***"
+	}
+	return cpf + "***"
+}
+
 type Handler struct {
 	service         *Service
 	db              *database.DB
@@ -56,7 +64,7 @@ func (h *Handler) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 	})
 
 	authURL := h.service.GetAuthURL(state)
-	log.Info().Str("cpf", cpf[:3]+"***").Msg("[OAUTH] Redirecionando para Google OAuth")
+	log.Info().Str("cpf", maskCPF(cpf)).Msg("[OAUTH] Redirecionando para Google OAuth")
 	http.Redirect(w, r, authURL, http.StatusTemporaryRedirect)
 }
 
@@ -96,7 +104,7 @@ func (h *Handler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	// Lookup idoso by CPF to save tokens
 	idoso, err := h.db.GetIdosoByCPF(cpf)
 	if err != nil {
-		log.Error().Err(err).Str("cpf", cpf[:3]+"***").Msg("[OAUTH] Idoso nao encontrado")
+		log.Error().Err(err).Str("cpf", maskCPF(cpf)).Msg("[OAUTH] Idoso nao encontrado")
 		http.Error(w, "User not found", http.StatusNotFound)
 		return
 	}
@@ -171,7 +179,7 @@ func (h *Handler) HandleGoogleStatus(w http.ResponseWriter, r *http.Request) {
 
 	status, err := h.db.GetGoogleStatusByCPF(cpf)
 	if err != nil {
-		log.Warn().Err(err).Str("cpf", cpf[:3]+"***").Msg("[OAUTH] Status nao encontrado")
+		log.Warn().Err(err).Str("cpf", maskCPF(cpf)).Msg("[OAUTH] Status nao encontrado")
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"connected": false,
@@ -201,7 +209,7 @@ func (h *Handler) HandleGoogleDisconnect(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	log.Info().Str("cpf", cpf[:3]+"***").Msg("[OAUTH] Google desconectado")
+	log.Info().Str("cpf", maskCPF(cpf)).Msg("[OAUTH] Google desconectado")
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{

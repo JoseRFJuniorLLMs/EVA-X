@@ -103,8 +103,14 @@ func (s *Service) askClaude(p *Provider, prompt string) (*Response, error) {
 		},
 	}
 
-	jsonBody, _ := json.Marshal(body)
-	req, _ := http.NewRequest("POST", p.BaseURL+"/v1/messages", bytes.NewBuffer(jsonBody))
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("claude request marshal error: %v", err)
+	}
+	req, err := http.NewRequest("POST", p.BaseURL+"/v1/messages", bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("claude request creation error: %v", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", p.APIKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
@@ -131,7 +137,9 @@ func (s *Service) askClaude(p *Provider, prompt string) (*Response, error) {
 			OutputTokens int `json:"output_tokens"`
 		} `json:"usage"`
 	}
-	json.Unmarshal(respBody, &result)
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("claude response parse error: %v", err)
+	}
 
 	text := ""
 	if len(result.Content) > 0 {
@@ -167,14 +175,20 @@ func (s *Service) askOpenAICompatible(p *Provider, prompt string) (*Response, er
 		},
 	}
 
-	jsonBody, _ := json.Marshal(body)
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("%s request marshal error: %v", p.Name, err)
+	}
 
 	apiURL := p.BaseURL
 	if !strings.HasSuffix(apiURL, "/chat/completions") {
 		apiURL = strings.TrimSuffix(apiURL, "/") + "/v1/chat/completions"
 	}
 
-	req, _ := http.NewRequest("POST", apiURL, bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("%s request creation error: %v", p.Name, err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+p.APIKey)
 
@@ -202,7 +216,9 @@ func (s *Service) askOpenAICompatible(p *Provider, prompt string) (*Response, er
 			TotalTokens int `json:"total_tokens"`
 		} `json:"usage"`
 	}
-	json.Unmarshal(respBody, &result)
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("%s response parse error: %v", p.Name, err)
+	}
 
 	text := ""
 	if len(result.Choices) > 0 {

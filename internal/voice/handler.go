@@ -139,6 +139,9 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
+	// Mutex para serializar escritas WebSocket (gorilla/websocket não é thread-safe)
+	var writeMu sync.Mutex
+
 	// Estado local da sessão de áudio
 	audioSess := &AudioSession{
 		SessionID:    agIDStr,
@@ -192,11 +195,6 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 				}
 
 				if len(audioData) > 0 {
-					// Conversão Otimizada PCM -> MuLaw (Twilio)
-					// TODO: Implementar conversor otimizado reverso se necessário.
-					// Por enquanto, assumimos que o GeminiHandler já tratou ou usamos lib externa.
-					// Aqui apenas encodamos Base64 para o WebSocket
-
 					payload := base64.StdEncoding.EncodeToString(audioData)
 					msg := map[string]interface{}{
 						"event":     "media",
@@ -206,7 +204,10 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 						},
 					}
 
-					if err := conn.WriteJSON(msg); err != nil {
+					writeMu.Lock()
+					err := conn.WriteJSON(msg)
+					writeMu.Unlock()
+					if err != nil {
 						return
 					}
 				}
@@ -245,7 +246,7 @@ func (h *Handler) HandleMediaStream(w http.ResponseWriter, r *http.Request) {
 
 							// Incrementa TurnID se silêncio foi quebrado (VAD simples)
 							// Na prática, o Gemini faz VAD, mas aqui marcamos atividade
-							atomic.StoreUint64(&audioSess.TurnID, audioSess.TurnID+1)
+							atomic.AddUint64(&audioSess.TurnID, 1)
 
 							// Processamento DSP Otimizado
 							pcmData := processAudioChunk(data)

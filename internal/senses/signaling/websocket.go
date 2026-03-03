@@ -61,7 +61,23 @@ type AudioAnalysisResult struct {
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
-		return true
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true // Permitir conexões sem Origin (ex: apps mobile, curl)
+		}
+		allowedOrigins := []string{
+			"https://eva-ia.org",
+			"https://www.eva-ia.org",
+			"https://app.eva-ia.org",
+			"http://localhost:3000",
+			"http://localhost:8080",
+		}
+		for _, allowed := range allowedOrigins {
+			if origin == allowed {
+				return true
+			}
+		}
+		return false
 	},
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
@@ -360,7 +376,7 @@ func NewSignalingServer(
 	// ============================================================================
 
 	// ✅ Cognitive Load Orchestrator (Gerencia carga cognitiva, detecta ruminação)
-	server.cacheStore = nietzscheInfra.NewCacheStore(nietzscheClient)
+	server.cacheStore = nietzscheInfra.NewCacheStore(context.Background(), nietzscheClient)
 	server.cognitiveOrchestrator = cognitive.NewCognitiveLoadOrchestrator(db, server.cacheStore)
 	log.Println("🧠 Signaling: CognitiveLoadOrchestrator initialized (Carga Cognitiva + Ruminação)")
 
@@ -403,7 +419,7 @@ func NewSignalingServer(
 	}
 
 	// ✅ NOVO: Inicializar AudioBuffer + AudioAnalysis (NietzscheDB backed)
-	server.audioBuffer = nietzscheInfra.NewAudioBuffer(nietzscheClient)
+	server.audioBuffer = nietzscheInfra.NewAudioBuffer(context.Background(), nietzscheClient)
 	server.audioAnalysis = knowledge.NewAudioAnalysisService(cfg, server.audioBuffer, ctxService)
 	log.Printf("✅ NietzscheDB AudioBuffer + Audio Analysis inicializado")
 
@@ -849,7 +865,7 @@ func (s *SignalingServer) handleGeminiResponse(session *WebSocketSession, respon
 					defer cancel()
 					reasoning, err := knowledgeSvc.AnalyzeGraphContext(ctx, idosoID, userText)
 					if err == nil && reasoning != "" {
-						log.Printf("💡 [NEO4J] Insight gerado: %s", reasoning)
+						log.Printf("💡 [GRAPH] Insight gerado: %s", reasoning)
 						session.SetPendingInsight(reasoning)
 					}
 				})

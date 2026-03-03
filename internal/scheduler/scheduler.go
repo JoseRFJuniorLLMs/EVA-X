@@ -150,7 +150,11 @@ func handleAgendamento(ctx context.Context, ag models.Agendamento, db *database.
 		// Se token inválido, limpar
 		if push.IsInvalidTokenError(err) {
 			l.Warn().Msg("Device token inválido - limpando")
-			db.Conn.ExecContext(ctx, "UPDATE idosos SET device_token = NULL, device_token_valido = false WHERE id = $1", ag.IdosoID)
+			if db.Conn != nil {
+				db.Conn.ExecContext(ctx, "UPDATE idosos SET device_token = NULL, device_token_valido = false WHERE id = $1", ag.IdosoID)
+			} else {
+				l.Warn().Msg("db.Conn nil — não foi possível limpar device_token (no PostgreSQL)")
+			}
 		}
 
 		// Verifica se atingiu limite para escalonar

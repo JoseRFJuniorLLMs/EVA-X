@@ -15,6 +15,9 @@ import (
 	"firebase.google.com/go/v4/messaging"
 )
 
+// errNoDB is returned when a DeviceTokenManager method is called without a PostgreSQL connection.
+var errNoDB = fmt.Errorf("DeviceTokenManager: database not configured (push notifications disabled)")
+
 // DeviceTokenManager gerencia tokens de dispositivos para push notifications
 type DeviceTokenManager struct {
 	db          *sql.DB
@@ -47,6 +50,10 @@ type RegisterDeviceTokenResponse struct {
 
 // HandleRegisterDeviceToken endpoint HTTP para registro de token
 func (dtm *DeviceTokenManager) HandleRegisterDeviceToken(w http.ResponseWriter, r *http.Request) {
+	if dtm.db == nil {
+		http.Error(w, "Push notifications not available (database not configured)", http.StatusServiceUnavailable)
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -148,6 +155,9 @@ func (dtm *DeviceTokenManager) SaveDeviceToken(
 	appVersion string,
 	deviceModel string,
 ) (int64, error) {
+	if dtm.db == nil {
+		return 0, errNoDB
+	}
 	// Verificar se token já existe
 	var existingID int64
 	err := dtm.db.QueryRow(`
@@ -196,6 +206,9 @@ func (dtm *DeviceTokenManager) SaveDeviceToken(
 
 // GetDeviceTokens recupera todos os tokens ativos de um idoso
 func (dtm *DeviceTokenManager) GetDeviceTokens(idosoID int64) ([]string, error) {
+	if dtm.db == nil {
+		return nil, errNoDB
+	}
 	rows, err := dtm.db.Query(`
 		SELECT token
 		FROM device_tokens
@@ -223,6 +236,9 @@ func (dtm *DeviceTokenManager) GetDeviceTokens(idosoID int64) ([]string, error) 
 
 // GetDeviceTokensByCPF recupera tokens por CPF
 func (dtm *DeviceTokenManager) GetDeviceTokensByCPF(cpf string) ([]string, error) {
+	if dtm.db == nil {
+		return nil, errNoDB
+	}
 	rows, err := dtm.db.Query(`
 		SELECT dt.token
 		FROM device_tokens dt
@@ -252,8 +268,8 @@ func (dtm *DeviceTokenManager) GetDeviceTokensByCPF(cpf string) ([]string, error
 // ValidateFirebaseToken valida se o token é válido no Firebase
 func (dtm *DeviceTokenManager) ValidateFirebaseToken(token string) bool {
 	if dtm.pushService == nil || dtm.pushService.client == nil {
-		log.Printf("⚠️ Firebase client não inicializado")
-		return true // Permitir por enquanto se Firebase não estiver configurado
+		log.Printf("⚠️ Firebase client não inicializado — rejeitando token (fail-closed, M9)")
+		return false // M9: fail-closed — reject tokens when Firebase is not configured
 	}
 
 	// Criar mensagem de teste seca (dry-run)
@@ -281,6 +297,9 @@ func (dtm *DeviceTokenManager) ValidateFirebaseToken(token string) bool {
 
 // DeactivateToken desativa um token (usuário fez logout, etc.)
 func (dtm *DeviceTokenManager) DeactivateToken(token string) error {
+	if dtm.db == nil {
+		return errNoDB
+	}
 	result, err := dtm.db.Exec(`
 		UPDATE device_tokens
 		SET is_active = false
@@ -302,6 +321,10 @@ func (dtm *DeviceTokenManager) DeactivateToken(token string) error {
 
 // CleanupExpiredTokens remove tokens que não foram usados há muito tempo
 func (dtm *DeviceTokenManager) CleanupExpiredTokens(ctx context.Context) {
+	if dtm.db == nil {
+		log.Printf("⚠️ Token cleanup disabled (database not configured)")
+		return
+	}
 	ticker := time.NewTicker(24 * time.Hour)
 	defer ticker.Stop()
 
@@ -317,6 +340,9 @@ func (dtm *DeviceTokenManager) CleanupExpiredTokens(ctx context.Context) {
 }
 
 func (dtm *DeviceTokenManager) performCleanup() {
+	if dtm.db == nil {
+		return
+	}
 	// Desativar tokens não usados há mais de 90 dias
 	result, err := dtm.db.Exec(`
 		UPDATE device_tokens

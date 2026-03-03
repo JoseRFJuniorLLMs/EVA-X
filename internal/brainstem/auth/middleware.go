@@ -9,6 +9,12 @@ import (
 	"strings"
 )
 
+// contextKey is a private type for context keys to avoid collisions with other packages.
+type contextKey string
+
+// UserContextKey is the key used to store user claims in the request context.
+const UserContextKey contextKey = "user"
+
 func AuthMiddleware(secretKey string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -27,7 +33,7 @@ func AuthMiddleware(secretKey string) func(http.Handler) http.Handler {
 				return
 			}
 
-			ctx := context.WithValue(r.Context(), "user", claims)
+			ctx := context.WithValue(r.Context(), UserContextKey, claims)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

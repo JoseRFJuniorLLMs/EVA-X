@@ -1,7 +1,7 @@
 // Copyright (C) 2025-2026 Jose R F Junior <web2ajax@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// tridb_benchmark.go - Benchmark comparativo: Neo4j vs Qdrant vs NietzscheDB
+// tridb_benchmark.go - Benchmark comparativo: NietzscheDB vs NietzscheDB vs NietzscheDB
 // Mede Recall@K, MRR, Precision@K e latência (P50/P95/P99)
 // usando o mesmo dataset sintético de 20 memórias + 20 queries
 package benchmark
@@ -19,9 +19,8 @@ import (
 type BackendType string
 
 const (
-	BackendNeo4j      BackendType = "neo4j"
-	BackendQdrant     BackendType = "qdrant"
-	BackendNietzsche  BackendType = "nietzschedb"
+	BackendNietzscheDB BackendType = "NietzscheDB"
+	BackendNietzsche   BackendType = "nietzschedb"
 )
 
 // BackendAdapter interface que todo backend de benchmark deve implementar

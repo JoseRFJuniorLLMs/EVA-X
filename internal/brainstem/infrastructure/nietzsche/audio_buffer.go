@@ -40,12 +40,13 @@ type audioSession struct {
 
 // NewAudioBuffer creates an audio buffer backed by NietzscheDB.
 // If client is nil, operates in in-memory-only mode (legacy behavior).
-func NewAudioBuffer(client *Client) *AudioBuffer {
+// The provided context controls the lifetime of the background cleanup goroutine.
+func NewAudioBuffer(ctx context.Context, client *Client) *AudioBuffer {
 	ab := &AudioBuffer{
 		client:   client,
 		sessions: make(map[string]*audioSession),
 	}
-	go ab.cleanupLoop()
+	go ab.cleanupLoop(ctx)
 	return ab
 }
 
@@ -170,19 +171,25 @@ func (ab *AudioBuffer) GetFullAudio(ctx context.Context, sessionID string, clear
 }
 
 // cleanupLoop removes expired in-memory sessions every 5 minutes.
-func (ab *AudioBuffer) cleanupLoop() {
+// It exits when ctx is cancelled, preventing goroutine leaks.
+func (ab *AudioBuffer) cleanupLoop(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		ab.mu.Lock()
-		now := time.Now()
-		for id, sess := range ab.sessions {
-			if now.Sub(sess.createdAt) > audioSessionTTL {
-				delete(ab.sessions, id)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			ab.mu.Lock()
+			now := time.Now()
+			for id, sess := range ab.sessions {
+				if now.Sub(sess.createdAt) > audioSessionTTL {
+					delete(ab.sessions, id)
+				}
 			}
+			ab.mu.Unlock()
 		}
-		ab.mu.Unlock()
 	}
 }
 
@@ -216,12 +223,13 @@ type cacheItem struct {
 
 // NewCacheStore creates a cache store backed by NietzscheDB.
 // If client is nil, operates in in-memory-only mode (legacy behavior).
-func NewCacheStore(client *Client) *CacheStore {
+// The provided context controls the lifetime of the background cleanup goroutine.
+func NewCacheStore(ctx context.Context, client *Client) *CacheStore {
 	cs := &CacheStore{
 		client: client,
 		items:  make(map[string]*cacheItem),
 	}
-	go cs.cleanupLoop()
+	go cs.cleanupLoop(ctx)
 	return cs
 }
 
@@ -281,18 +289,23 @@ func (cs *CacheStore) Close() error {
 	return nil
 }
 
-func (cs *CacheStore) cleanupLoop() {
+func (cs *CacheStore) cleanupLoop(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		cs.mu.Lock()
-		now := time.Now()
-		for k, item := range cs.items {
-			if now.After(item.expiresAt) {
-				delete(cs.items, k)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cs.mu.Lock()
+			now := time.Now()
+			for k, item := range cs.items {
+				if now.After(item.expiresAt) {
+					delete(cs.items, k)
+				}
 			}
+			cs.mu.Unlock()
 		}
-		cs.mu.Unlock()
 	}
 }
