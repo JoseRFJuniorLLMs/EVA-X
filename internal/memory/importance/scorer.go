@@ -5,20 +5,23 @@ package importance
 
 import (
 	"context"
-	"database/sql"
+	"fmt"
 	"math"
+	"sort"
 	"time"
+
+	"eva/internal/brainstem/database"
 
 	"github.com/rs/zerolog/log"
 )
 
 // Scorer calculates importance scores for memories
 type Scorer struct {
-	db *sql.DB
+	db *database.DB
 }
 
 // NewScorer creates a new importance scorer
-func NewScorer(db *sql.DB) *Scorer {
+func NewScorer(db *database.DB) *Scorer {
 	return &Scorer{db: db}
 }
 
@@ -43,30 +46,38 @@ type MemoryImportance struct {
 func (s *Scorer) CalculateImportance(ctx context.Context, memoryID int64) (*MemoryImportance, error) {
 	factors := ImportanceFactors{}
 
-	// 1. Frequency: How often this memory was accessed
-	var accessCount int
-	err := s.db.QueryRowContext(ctx, `
-		SELECT COUNT(*) 
-		FROM memory_access_log 
-		WHERE memory_id = $1 
-		AND accessed_at > NOW() - INTERVAL '30 days'
-	`, memoryID).Scan(&accessCount)
+	// 1. Frequency: How often this memory was accessed (last 30 days)
+	thirtyDaysAgo := time.Now().AddDate(0, 0, -30)
+	accessLogs, err := s.db.QueryByLabel(ctx, "memory_access_log",
+		" AND n.memory_id = $mid",
+		map[string]interface{}{"mid": memoryID}, 0)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query access log: %w", err)
+	}
 
-	if err != nil && err != sql.ErrNoRows {
-		return nil, err
+	accessCount := 0
+	for _, row := range accessLogs {
+		accessedAt := database.GetTime(row, "accessed_at")
+		if !accessedAt.Before(thirtyDaysAgo) {
+			accessCount++
+		}
 	}
 
 	// Normalize: 0 accesses = 0, 10+ accesses = 1.0
 	factors.Frequency = math.Min(float64(accessCount)/10.0, 1.0)
 
 	// 2. Recency: How recent is this memory
-	var createdAt time.Time
-	err = s.db.QueryRowContext(ctx, `
-		SELECT created_at FROM memories WHERE id = $1
-	`, memoryID).Scan(&createdAt)
-
+	memory, err := s.db.GetNodeByID(ctx, "memories", memoryID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get memory %d: %w", memoryID, err)
+	}
+	if memory == nil {
+		return nil, fmt.Errorf("memory %d not found", memoryID)
+	}
+
+	createdAt := database.GetTime(memory, "created_at")
+	if createdAt.IsZero() {
+		createdAt = time.Now() // fallback
 	}
 
 	daysSinceCreation := time.Since(createdAt).Hours() / 24.0
@@ -79,16 +90,7 @@ func (s *Scorer) CalculateImportance(ctx context.Context, memoryID int64) (*Memo
 	factors.GraphCentrality = 0.5
 
 	// 4. Emotional Intensity: Extract from metadata
-	var emotionalIntensity float64
-	err = s.db.QueryRowContext(ctx, `
-		SELECT COALESCE(metadata->>'emotional_intensity', '0')::float
-		FROM memories WHERE id = $1
-	`, memoryID).Scan(&emotionalIntensity)
-
-	if err != nil && err != sql.ErrNoRows {
-		return nil, err
-	}
-
+	emotionalIntensity := database.GetFloat64(memory, "emotional_intensity")
 	factors.EmotionalIntensity = math.Min(emotionalIntensity, 1.0)
 
 	// 5. Goal Relevance: How relevant to patient's current goals
@@ -125,57 +127,70 @@ func (s *Scorer) BatchCalculateImportance(ctx context.Context, memoryIDs []int64
 
 // UpdateImportanceScores updates importance scores in database
 func (s *Scorer) UpdateImportanceScores(ctx context.Context, scores []*MemoryImportance) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	stmt, err := tx.PrepareContext(ctx, `
-		UPDATE memories 
-		SET importance_score = $1,
-		    importance_updated_at = NOW()
-		WHERE id = $2
-	`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
+	now := time.Now().Format(time.RFC3339)
 
 	for _, score := range scores {
-		_, err = stmt.ExecContext(ctx, score.Score, score.MemoryID)
+		err := s.db.Update(ctx, "memories",
+			map[string]interface{}{"id": score.MemoryID},
+			map[string]interface{}{
+				"importance_score":      score.Score,
+				"importance_updated_at": now,
+			})
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to update importance for memory %d: %w", score.MemoryID, err)
 		}
 	}
 
-	return tx.Commit()
+	return nil
 }
 
 // GetLowImportanceMemories returns memories with low importance scores
 func (s *Scorer) GetLowImportanceMemories(ctx context.Context, threshold float64, limit int) ([]int64, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id 
-		FROM memories 
-		WHERE importance_score < $1
-		AND created_at < NOW() - INTERVAL '7 days'
-		ORDER BY importance_score ASC
-		LIMIT $2
-	`, threshold, limit)
+	sevenDaysAgo := time.Now().AddDate(0, 0, -7)
 
+	rows, err := s.db.QueryByLabel(ctx, "memories", "", nil, 0)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to query memories: %w", err)
 	}
-	defer rows.Close()
 
-	var memoryIDs []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
+	// Filter and collect qualifying memories
+	type scoredMemory struct {
+		id    int64
+		score float64
+	}
+	var candidates []scoredMemory
+
+	for _, row := range rows {
+		score := database.GetFloat64(row, "importance_score")
+		if score >= threshold {
+			continue
 		}
-		memoryIDs = append(memoryIDs, id)
+
+		createdAt := database.GetTime(row, "created_at")
+		if createdAt.IsZero() || !createdAt.Before(sevenDaysAgo) {
+			continue
+		}
+
+		candidates = append(candidates, scoredMemory{
+			id:    database.GetInt64(row, "id"),
+			score: score,
+		})
 	}
 
-	return memoryIDs, rows.Err()
+	// Sort by score ascending
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].score < candidates[j].score
+	})
+
+	// Apply limit
+	if limit > 0 && len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+
+	memoryIDs := make([]int64, len(candidates))
+	for i, c := range candidates {
+		memoryIDs[i] = c.id
+	}
+
+	return memoryIDs, nil
 }

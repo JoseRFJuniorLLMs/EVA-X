@@ -154,20 +154,16 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 			idosoID = idoso.ID
 		}
 
-		if s.db.Conn != nil {
-			creatorSvc := personality.NewCreatorProfileService(s.db.Conn)
-			profile, err := creatorSvc.LoadCreatorProfile(ctx)
-			if err != nil {
-				log.Warn().Err(err).Msg("[BROWSER] Falha ao carregar perfil do criador")
-			} else {
-				clientContext = creatorSvc.GenerateSystemPrompt(profile)
-			}
-
-			debugMode := lacan.NewDebugMode(s.db.Conn)
-			clientContext += "\n" + debugMode.BuildDebugPromptSection(ctx)
+		creatorSvc := personality.NewCreatorProfileService(s.db)
+		profile, err := creatorSvc.LoadCreatorProfile(ctx)
+		if err != nil {
+			log.Warn().Err(err).Msg("[BROWSER] Falha ao carregar perfil do criador")
 		} else {
-			log.Warn().Msg("[BROWSER] db.Conn nil — skipping creator profile and debug mode (no PostgreSQL)")
+			clientContext = creatorSvc.GenerateSystemPrompt(profile)
 		}
+
+		debugMode := lacan.NewDebugMode(s.db)
+		clientContext += "\n" + debugMode.BuildDebugPromptSection(ctx)
 
 	} else if clientCPF != "" && s.db != nil {
 		idoso, err := s.db.GetIdosoByCPF(clientCPF)
@@ -182,32 +178,15 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 				log.Info().Str("session", sessionID).Str("nome", fullIdoso.Nome).Int64("id", fullIdoso.ID).Msg("[BROWSER] Pessoa carregada")
 			}
 
-			if s.db.Conn == nil {
-				log.Warn().Msg("[BROWSER] db.Conn nil — skipping agendamentos query (no PostgreSQL)")
-			} else if rows, err := s.db.Conn.Query(`
-				SELECT tipo, dados_tarefa, status, data_hora_agendada
-				FROM agendamentos
-				WHERE idoso_id = $1 AND status IN ('agendado','ativo','pendente','nao_atendido','aguardando_retry')
-				ORDER BY data_hora_agendada ASC LIMIT 20`, idoso.ID); err == nil {
-				defer rows.Close()
+			if agendamentos, err := s.db.GetPendingAgendamentosByIdoso(idoso.ID, 20); err == nil && len(agendamentos) > 0 {
 				var medsInfo strings.Builder
-				count := 0
-				for rows.Next() {
-					var tipo, dados, status string
-					var dataHora time.Time
-					if err := rows.Scan(&tipo, &dados, &status, &dataHora); err == nil {
-						if count == 0 {
-							medsInfo.WriteString("\n\n[MEDICAMENTOS E AGENDAMENTOS]")
-						}
-						medsInfo.WriteString(fmt.Sprintf("\n- %s: %s (Status: %s, Hora: %s)",
-							tipo, dados, status, dataHora.Format("02/01 15:04")))
-						count++
-					}
+				medsInfo.WriteString("\n\n[MEDICAMENTOS E AGENDAMENTOS]")
+				for _, ag := range agendamentos {
+					medsInfo.WriteString(fmt.Sprintf("\n- %s: %s (Status: %s, Hora: %s)",
+						ag.Tipo, ag.DadosTarefa, ag.Status, ag.DataHoraAgendada.Format("02/01 15:04")))
 				}
-				if count > 0 {
-					clientContext += medsInfo.String()
-					log.Info().Str("session", sessionID).Int("count", count).Msg("[BROWSER] Agendamentos carregados")
-				}
+				clientContext += medsInfo.String()
+				log.Info().Str("session", sessionID).Int("count", len(agendamentos)).Msg("[BROWSER] Agendamentos carregados")
 			}
 		}
 	}

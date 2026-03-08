@@ -5,17 +5,18 @@ package lacan
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
 	"runtime"
 	"strings"
 	"time"
+
+	"eva/internal/brainstem/database"
 )
 
 // AlertSystem gerencia alertas proativos para o Arquiteto
 type AlertSystem struct {
-	db                 *sql.DB
+	db                 *database.DB
 	memoryInvestigator *MemoryInvestigator
 	lastCheck          time.Time
 	alerts             []Alert
@@ -46,7 +47,7 @@ type AlertSummary struct {
 }
 
 // NewAlertSystem cria novo sistema de alertas
-func NewAlertSystem(db *sql.DB, memInvestigator *MemoryInvestigator) *AlertSystem {
+func NewAlertSystem(db *database.DB, memInvestigator *MemoryInvestigator) *AlertSystem {
 	return &AlertSystem{
 		db:                 db,
 		memoryInvestigator: memInvestigator,
@@ -139,16 +140,23 @@ func (a *AlertSystem) checkMemoryAlerts(ctx context.Context) {
 			map[string]interface{}{"count": integrity.MemoriasDuplicadas})
 	}
 
-	// Verificar se há memórias recentes
-	var recentCount int64
-	a.db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM episodic_memories
-		WHERE timestamp >= CURRENT_DATE
-	`).Scan(&recentCount)
+	// Verificar se há memórias recentes (today)
+	today := time.Now()
+	todayStart := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, today.Location())
 
-	if recentCount == 0 {
-		a.addAlert("info", "memoria", "Sem memórias hoje",
-			"Nenhuma memória foi criada hoje. Sistema pode estar ocioso.", nil)
+	allMemories, err := a.db.QueryByLabel(ctx, "EpisodicMemory", "", nil, 0)
+	if err == nil {
+		recentCount := int64(0)
+		for _, row := range allMemories {
+			ts := database.GetTime(row, "timestamp")
+			if !ts.Before(todayStart) {
+				recentCount++
+			}
+		}
+		if recentCount == 0 {
+			a.addAlert("info", "memoria", "Sem memórias hoje",
+				"Nenhuma memória foi criada hoje. Sistema pode estar ocioso.", nil)
+		}
 	}
 }
 
@@ -184,24 +192,33 @@ func (a *AlertSystem) checkSystemAlerts(ctx context.Context) {
 			map[string]interface{}{"goroutines": goroutines})
 	}
 
-	// Verificar conexão com banco
-	if err := a.db.PingContext(ctx); err != nil {
+	// NietzscheDB doesn't have a Ping method, so we check by attempting a count query
+	_, err := a.db.Count(ctx, "Idoso", "", nil)
+	if err != nil {
 		a.addAlert("critical", "sistema", "Banco de dados indisponível",
 			fmt.Sprintf("Erro de conexão: %v", err), nil)
 	}
 
-	// Verificar erros recentes
-	var errorCount int64
-	a.db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM analise_gemini
-		WHERE conteudo::text ILIKE '%error%'
-		AND created_at >= CURRENT_TIMESTAMP - INTERVAL '1 hour'
-	`).Scan(&errorCount)
-
-	if errorCount > 10 {
-		a.addAlert("warning", "sistema", "Muitos erros recentes",
-			fmt.Sprintf("%d erros na última hora", errorCount),
-			map[string]interface{}{"error_count": errorCount})
+	// Verificar erros recentes in analysis records
+	analyses, err := a.db.QueryByLabel(ctx, "AnaliseGemini", "", nil, 0)
+	if err == nil {
+		oneHourAgo := time.Now().Add(-1 * time.Hour)
+		errorCount := int64(0)
+		for _, row := range analyses {
+			createdAt := database.GetTime(row, "created_at")
+			if createdAt.Before(oneHourAgo) {
+				continue
+			}
+			conteudo := strings.ToLower(database.GetString(row, "conteudo"))
+			if strings.Contains(conteudo, "error") {
+				errorCount++
+			}
+		}
+		if errorCount > 10 {
+			a.addAlert("warning", "sistema", "Muitos erros recentes",
+				fmt.Sprintf("%d erros na última hora", errorCount),
+				map[string]interface{}{"error_count": errorCount})
+		}
 	}
 }
 
@@ -210,19 +227,38 @@ func (a *AlertSystem) checkSystemAlerts(ctx context.Context) {
 // ═══════════════════════════════════════════════════════════
 
 func (a *AlertSystem) checkPatientAlerts(ctx context.Context) {
+	// Buscar pacientes ativos
+	patients, err := a.db.QueryByLabel(ctx, "Idoso", " AND n.ativo = $ativo", map[string]interface{}{"ativo": true}, 0)
+	if err != nil {
+		return
+	}
+
+	// Buscar todas as análises
+	analyses, _ := a.db.QueryByLabel(ctx, "AnaliseGemini", "", nil, 0)
+
+	// Build map of last interaction per patient
+	lastInteraction := make(map[int64]time.Time)
+	for _, an := range analyses {
+		idosoID := database.GetInt64(an, "idoso_id")
+		createdAt := database.GetTime(an, "created_at")
+		if last, exists := lastInteraction[idosoID]; !exists || createdAt.After(last) {
+			lastInteraction[idosoID] = createdAt
+		}
+	}
+
 	// Pacientes sem interação recente (mais de 7 dias)
-	var inactiveCount int64
-	a.db.QueryRowContext(ctx, `
-		SELECT COUNT(DISTINCT i.id)
-		FROM idosos i
-		LEFT JOIN (
-			SELECT idoso_id, MAX(created_at) as last_interaction
-			FROM analise_gemini
-			GROUP BY idoso_id
-		) ag ON i.id = ag.idoso_id
-		WHERE i.ativo = true
-		AND (ag.last_interaction IS NULL OR ag.last_interaction < CURRENT_DATE - INTERVAL '7 days')
-	`).Scan(&inactiveCount)
+	sevenDaysAgo := time.Now().AddDate(0, 0, -7)
+	inactiveCount := int64(0)
+	for _, patient := range patients {
+		patientID := database.GetInt64(patient, "pg_id")
+		if patientID == 0 {
+			patientID = database.GetInt64(patient, "id")
+		}
+		last, exists := lastInteraction[patientID]
+		if !exists || last.Before(sevenDaysAgo) {
+			inactiveCount++
+		}
+	}
 
 	if inactiveCount > 0 {
 		a.addAlert("warning", "paciente", "Pacientes inativos",
@@ -231,26 +267,50 @@ func (a *AlertSystem) checkPatientAlerts(ctx context.Context) {
 	}
 
 	// Pacientes com muitas emoções negativas recentes
-	rows, err := a.db.QueryContext(ctx, `
-		SELECT i.id, i.nome, COUNT(*) as negative_count
-		FROM episodic_memories em
-		JOIN idosos i ON em.idoso_id = i.id
-		WHERE em.emotion IN ('triste', 'ansioso', 'irritado', 'preocupado', 'frustrado', 'deprimido')
-		AND em.timestamp >= CURRENT_DATE - INTERVAL '3 days'
-		GROUP BY i.id, i.nome
-		HAVING COUNT(*) >= 5
-	`)
-	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var id int64
-			var nome string
-			var count int64
-			if rows.Scan(&id, &nome, &count) == nil {
-				a.addAlert("warning", "paciente", "Paciente com emoções negativas",
-					fmt.Sprintf("%s teve %d interações com emoções negativas nos últimos 3 dias", nome, count),
-					map[string]interface{}{"idoso_id": id, "nome": nome, "count": count})
+	allMemories, err := a.db.QueryByLabel(ctx, "EpisodicMemory", "", nil, 0)
+	if err != nil {
+		return
+	}
+
+	negativeEmotions := map[string]bool{
+		"triste": true, "ansioso": true, "irritado": true,
+		"preocupado": true, "frustrado": true, "deprimido": true,
+	}
+	threeDaysAgo := time.Now().AddDate(0, 0, -3)
+
+	// Count negative emotions per patient in last 3 days
+	negativeByPatient := make(map[int64]int64)
+	for _, mem := range allMemories {
+		ts := database.GetTime(mem, "timestamp")
+		if ts.Before(threeDaysAgo) {
+			continue
+		}
+		emotion := database.GetString(mem, "emotion")
+		if negativeEmotions[emotion] {
+			idosoID := database.GetInt64(mem, "idoso_id")
+			negativeByPatient[idosoID]++
+		}
+	}
+
+	// Build patient name lookup
+	patientNames := make(map[int64]string)
+	for _, p := range patients {
+		pid := database.GetInt64(p, "pg_id")
+		if pid == 0 {
+			pid = database.GetInt64(p, "id")
+		}
+		patientNames[pid] = database.GetString(p, "nome")
+	}
+
+	for idosoID, count := range negativeByPatient {
+		if count >= 5 {
+			nome := patientNames[idosoID]
+			if nome == "" {
+				nome = fmt.Sprintf("ID %d", idosoID)
 			}
+			a.addAlert("warning", "paciente", "Paciente com emoções negativas",
+				fmt.Sprintf("%s teve %d interações com emoções negativas nos últimos 3 dias", nome, count),
+				map[string]interface{}{"idoso_id": idosoID, "nome": nome, "count": count})
 		}
 	}
 }
@@ -260,30 +320,43 @@ func (a *AlertSystem) checkPatientAlerts(ctx context.Context) {
 // ═══════════════════════════════════════════════════════════
 
 func (a *AlertSystem) checkMedicationAlerts(ctx context.Context) {
-	// Medicamentos não confirmados nas últimas 24h
-	var missedCount int64
-	a.db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM agendamentos
-		WHERE tipo = 'medicamento'
-		AND status = 'agendado'
-		AND data_hora_agendada < CURRENT_TIMESTAMP - INTERVAL '2 hours'
-		AND data_hora_agendada >= CURRENT_DATE
-	`).Scan(&missedCount)
+	// Buscar agendamentos de medicamentos
+	agendamentos, err := a.db.QueryByLabel(ctx, "Agendamento",
+		" AND n.tipo = $tipo",
+		map[string]interface{}{"tipo": "medicamento"}, 0)
+	if err != nil {
+		return
+	}
+
+	now := time.Now()
+	twoHoursAgo := now.Add(-2 * time.Hour)
+	twoHoursLater := now.Add(2 * time.Hour)
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+
+	missedCount := int64(0)
+	upcomingCount := int64(0)
+
+	for _, ag := range agendamentos {
+		status := database.GetString(ag, "status")
+		dataHora := database.GetTime(ag, "data_hora_agendada")
+
+		// Medicamentos não confirmados (agendados, atrasados 2+ horas, today)
+		if status == "agendado" && dataHora.Before(twoHoursAgo) && !dataHora.Before(today) {
+			missedCount++
+		}
+
+		// Medicamentos para as próximas 2 horas
+		if (status == "agendado" || status == "ativo") &&
+			!dataHora.Before(now) && dataHora.Before(twoHoursLater) {
+			upcomingCount++
+		}
+	}
 
 	if missedCount > 0 {
 		a.addAlert("critical", "medicamento", "Medicamentos não confirmados",
 			fmt.Sprintf("%d medicamentos agendados não foram confirmados (atrasados 2+ horas)", missedCount),
 			map[string]interface{}{"missed_count": missedCount})
 	}
-
-	// Medicamentos para as próximas 2 horas
-	var upcomingCount int64
-	a.db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM agendamentos
-		WHERE tipo = 'medicamento'
-		AND status IN ('agendado', 'ativo')
-		AND data_hora_agendada BETWEEN CURRENT_TIMESTAMP AND CURRENT_TIMESTAMP + INTERVAL '2 hours'
-	`).Scan(&upcomingCount)
 
 	if upcomingCount > 0 {
 		a.addAlert("info", "medicamento", "Medicamentos próximos",
@@ -292,13 +365,28 @@ func (a *AlertSystem) checkMedicationAlerts(ctx context.Context) {
 	}
 
 	// Pacientes sem medicamentos cadastrados (mas ativos)
-	var noMedCount int64
-	a.db.QueryRowContext(ctx, `
-		SELECT COUNT(DISTINCT i.id)
-		FROM idosos i
-		LEFT JOIN agendamentos ag ON i.id = ag.idoso_id AND ag.tipo = 'medicamento'
-		WHERE i.ativo = true AND ag.id IS NULL
-	`).Scan(&noMedCount)
+	patients, err := a.db.QueryByLabel(ctx, "Idoso", " AND n.ativo = $ativo", map[string]interface{}{"ativo": true}, 0)
+	if err != nil {
+		return
+	}
+
+	// Build set of patient IDs that have medication agendamentos
+	patientsWithMeds := make(map[int64]bool)
+	for _, ag := range agendamentos {
+		idosoID := database.GetInt64(ag, "idoso_id")
+		patientsWithMeds[idosoID] = true
+	}
+
+	noMedCount := int64(0)
+	for _, patient := range patients {
+		patientID := database.GetInt64(patient, "pg_id")
+		if patientID == 0 {
+			patientID = database.GetInt64(patient, "id")
+		}
+		if !patientsWithMeds[patientID] {
+			noMedCount++
+		}
+	}
 
 	if noMedCount > 0 {
 		a.addAlert("info", "medicamento", "Pacientes sem medicamentos",

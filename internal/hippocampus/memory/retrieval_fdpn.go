@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"log"
 	"strings"
+
+	"eva/internal/brainstem/database"
 )
 
 // RetrieveHybridWithFDPN busca memórias usando NietzscheDB + FDPN boost
@@ -136,47 +138,38 @@ func (r *RetrievalService) RetrieveHybridWithFDPN(ctx context.Context, idosoID i
 		}
 	}
 
-	// 7. Hidratar com dados do Postgres
+	// 7. Hidratar com dados do NietzscheDB
 	if len(memoryIDs) == 0 {
 		return []*SearchResult{}, nil
 	}
 
-	queryIDs := make([]string, len(memoryIDs))
-	args := make([]interface{}, len(memoryIDs))
-	for i, id := range memoryIDs {
-		queryIDs[i] = fmt.Sprintf("$%d", i+1)
-		args[i] = id
-	}
-
-	sqlQuery := fmt.Sprintf(`
-		SELECT id, idoso_id, timestamp, speaker, content, emotion,
-		       importance, topics, session_id, event_date, is_atomic
-		FROM episodic_memories
-		WHERE id IN (%s)
-	`, strings.Join(queryIDs, ","))
-
-	rows, err := r.db.QueryContext(ctx, sqlQuery, args...)
-	if err != nil {
-		return nil, fmt.Errorf("erro ao hidratar memórias: %w", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		mem := &Memory{}
-		var topics string
-
-		err := rows.Scan(
-			&mem.ID, &mem.IdosoID, &mem.Timestamp, &mem.Speaker, &mem.Content,
-			&mem.Emotion, &mem.Importance, &topics, &mem.SessionID,
-			&mem.EventDate, &mem.IsAtomic,
-		)
-		if err != nil {
-			log.Printf("⚠️ [RETRIEVAL+FDPN] Erro scan: %v", err)
+	// Hidratar memórias por ID via NietzscheDB
+	for _, memID := range memoryIDs {
+		row, err := r.db.GetNodeByID(ctx, "episodic_memories", memID)
+		if err != nil || row == nil {
+			log.Printf("⚠️ [RETRIEVAL+FDPN] Erro ao buscar memória %d: %v", memID, err)
 			continue
 		}
 
-		if topics != "" {
-			mem.Topics = strings.Split(topics, ",")
+		mem := &Memory{
+			ID:         database.GetInt64(row, "pg_id"),
+			IdosoID:    database.GetInt64(row, "idoso_id"),
+			Timestamp:  database.GetTime(row, "timestamp"),
+			Speaker:    database.GetString(row, "speaker"),
+			Content:    database.GetString(row, "content"),
+			Emotion:    database.GetString(row, "emotion"),
+			Importance: database.GetFloat64(row, "importance"),
+			SessionID:  database.GetString(row, "session_id"),
+			EventDate:  database.GetTime(row, "event_date"),
+			IsAtomic:   database.GetBool(row, "is_atomic"),
+		}
+		if mem.ID == 0 {
+			mem.ID = memID
+		}
+
+		topicsStr := database.GetString(row, "topics")
+		if topicsStr != "" {
+			mem.Topics = strings.Split(topicsStr, ",")
 		}
 
 		if result, exists := resultsMap[mem.ID]; exists {

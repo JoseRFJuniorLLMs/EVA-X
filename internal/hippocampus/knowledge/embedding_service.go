@@ -83,6 +83,11 @@ func (e *EmbeddingService) ensureCollection(ctx context.Context) error {
 	return nil
 }
 
+// Dimension returns the embedding dimension (3072 for gemini-embedding-001).
+func (e *EmbeddingService) Dimension() int {
+	return 3072
+}
+
 // GenerateEmbedding gera embedding usando Gemini API
 // PERFORMANCE FIX: Usa cache para evitar chamadas repetidas (90% reducao)
 func (e *EmbeddingService) GenerateEmbedding(ctx context.Context, text string) ([]float32, error) {

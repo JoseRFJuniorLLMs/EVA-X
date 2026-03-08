@@ -4,6 +4,7 @@
 package vision
 
 import (
+	"context"
 	"encoding/json"
 	"eva/internal/brainstem/database"
 	"fmt"
@@ -220,45 +221,33 @@ func (h *WebSocketMedicationHandler) logVisualScan(
 	result *IdentificationResult,
 	sessionID string,
 ) error {
+	ctx := context.Background()
 
-	// Create log entry in medication_visual_logs table
-	query := `
-		INSERT INTO medication_visual_logs (
-			patient_id, session_id, scan_status, confidence_score,
-			gemini_model_used, created_at
-		) VALUES ($1, $2, 'success', $3, 'gemini-2.0-flash-exp', NOW())
-	`
-
-	_, err := h.db.Conn.Exec(query, idosoID, sessionID, result.Confidence)
+	// Create log entry in medication_visual_logs
+	visualLogID, err := h.db.Insert(ctx, "medication_visual_logs", map[string]interface{}{
+		"patient_id":       idosoID,
+		"session_id":       sessionID,
+		"scan_status":      "success",
+		"confidence_score": result.Confidence,
+		"gemini_model_used": "gemini-2.0-flash-exp",
+		"created_at":       time.Now(),
+	})
 	if err != nil {
 		return err
 	}
 
 	// Create identification entry if matched
 	if result.MatchedMedication != nil {
-		queryIdent := `
-			INSERT INTO medication_identifications (
-				visual_log_id, medication_name, dosage, pharmaceutical_form,
-				pill_color, manufacturer, confidence, created_at
-			) SELECT
-				id, $2, $3, $4, $5, $6, $7, NOW()
-			FROM medication_visual_logs
-			WHERE session_id = $1
-			ORDER BY created_at DESC
-			LIMIT 1
-		`
-
-		_, err = h.db.Conn.Exec(
-			queryIdent,
-			sessionID,
-			result.MedicationName,
-			result.Dosage,
-			result.PharmaceuticalForm,
-			result.Color,
-			result.Manufacturer,
-			result.Confidence,
-		)
-
+		_, err = h.db.Insert(ctx, "medication_identifications", map[string]interface{}{
+			"visual_log_id":       visualLogID,
+			"medication_name":     result.MedicationName,
+			"dosage":              result.Dosage,
+			"pharmaceutical_form": result.PharmaceuticalForm,
+			"pill_color":          result.Color,
+			"manufacturer":        result.Manufacturer,
+			"confidence":          result.Confidence,
+			"created_at":          time.Now(),
+		})
 		if err != nil {
 			log.Printf("⚠️ Erro ao criar identification entry: %v", err)
 		}

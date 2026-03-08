@@ -6,14 +6,15 @@ package zettelkasten
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
+	"eva/internal/brainstem/database"
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 )
 
@@ -25,7 +26,7 @@ import (
 
 // ZettelService gerencia o sistema de notas interconectadas
 type ZettelService struct {
-	db           *sql.DB
+	db           *database.DB
 	graphAdapter *nietzscheInfra.GraphAdapter
 	extractor    *EntityExtractor
 }
@@ -92,17 +93,12 @@ type ZettelLink struct {
 }
 
 // NewZettelService cria novo servico
-func NewZettelService(db *sql.DB, graphAdapter *nietzscheInfra.GraphAdapter) *ZettelService {
-	svc := &ZettelService{
+func NewZettelService(db *database.DB, graphAdapter *nietzscheInfra.GraphAdapter) *ZettelService {
+	return &ZettelService{
 		db:           db,
 		graphAdapter: graphAdapter,
 		extractor:    NewEntityExtractor(),
 	}
-
-	// Criar tabelas se nao existirem
-	svc.ensureTables()
-
-	return svc
 }
 
 // ============================================================================
@@ -241,31 +237,61 @@ func (zs *ZettelService) Search(ctx context.Context, idosoID int64, query string
 		limit = 10
 	}
 
-	sqlQuery := `
-		SELECT id, title, content, zettel_type, source, entities, tags,
-		       linked_zettels, metadata, created_at, updated_at, access_count
-		FROM zettels
-		WHERE idoso_id = $1
-		  AND (
-		    title ILIKE '%' || $2 || '%'
-		    OR content ILIKE '%' || $2 || '%'
-		    OR $2 = ANY(tags)
-		    OR entities::text ILIKE '%' || $2 || '%'
-		  )
-		ORDER BY
-		  CASE WHEN title ILIKE '%' || $2 || '%' THEN 0 ELSE 1 END,
-		  access_count DESC,
-		  created_at DESC
-		LIMIT $3
-	`
-
-	rows, err := zs.db.QueryContext(ctx, sqlQuery, idosoID, query, limit)
+	// Query all zettels for this idoso, then filter in Go (NQL doesn't support ILIKE)
+	rows, err := zs.db.QueryByLabel(ctx, "zettels",
+		` AND n.idoso_id = $idoso_id`, map[string]interface{}{
+			"idoso_id": idosoID,
+		}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	return zs.scanZettels(rows)
+	queryLower := strings.ToLower(query)
+	var zettels []*Zettel
+
+	for _, m := range rows {
+		title := database.GetString(m, "title")
+		content := database.GetString(m, "content")
+		entitiesStr := database.GetString(m, "entities")
+
+		titleMatch := strings.Contains(strings.ToLower(title), queryLower)
+		contentMatch := strings.Contains(strings.ToLower(content), queryLower)
+		entityMatch := strings.Contains(strings.ToLower(entitiesStr), queryLower)
+
+		// Check tags
+		tagMatch := false
+		tags := getStringSlice(m, "tags")
+		for _, t := range tags {
+			if strings.EqualFold(t, query) {
+				tagMatch = true
+				break
+			}
+		}
+
+		if titleMatch || contentMatch || tagMatch || entityMatch {
+			z := contentToZettel(m)
+			zettels = append(zettels, z)
+		}
+	}
+
+	// Sort: title matches first, then by access_count DESC, then created_at DESC
+	sort.Slice(zettels, func(i, j int) bool {
+		iTitle := strings.Contains(strings.ToLower(zettels[i].Title), queryLower)
+		jTitle := strings.Contains(strings.ToLower(zettels[j].Title), queryLower)
+		if iTitle != jTitle {
+			return iTitle
+		}
+		if zettels[i].AccessCount != zettels[j].AccessCount {
+			return zettels[i].AccessCount > zettels[j].AccessCount
+		}
+		return zettels[i].CreatedAt.After(zettels[j].CreatedAt)
+	})
+
+	if len(zettels) > limit {
+		zettels = zettels[:limit]
+	}
+
+	return zettels, nil
 }
 
 // GetRelated busca zettels relacionados a um zettel especifico
@@ -279,59 +305,95 @@ func (zs *ZettelService) GetRelated(ctx context.Context, zettelID string, depth 
 		return zs.getRelatedFromGraph(ctx, zettelID, depth)
 	}
 
-	// Fallback para NietzscheDB
-	return zs.getRelatedFromSQL(ctx, zettelID)
+	// Fallback: query links from NietzscheDB
+	return zs.getRelatedFromLinks(ctx, zettelID)
 }
 
 // GetByPerson busca zettels que mencionam uma pessoa
 func (zs *ZettelService) GetByPerson(ctx context.Context, idosoID int64, personName string) ([]*Zettel, error) {
-	query := `
-		SELECT id, title, content, zettel_type, source, entities, tags,
-		       linked_zettels, metadata, created_at, updated_at, access_count
-		FROM zettels
-		WHERE idoso_id = $1
-		  AND (
-		    entities @> $2::jsonb
-		    OR content ILIKE '%' || $3 || '%'
-		  )
-		ORDER BY created_at DESC
-	`
-
-	entityFilter := fmt.Sprintf(`[{"type":"person","value":"%s"}]`, personName)
-
-	rows, err := zs.db.QueryContext(ctx, query, idosoID, entityFilter, personName)
+	rows, err := zs.db.QueryByLabel(ctx, "zettels",
+		` AND n.idoso_id = $idoso_id`, map[string]interface{}{
+			"idoso_id": idosoID,
+		}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	return zs.scanZettels(rows)
+	personLower := strings.ToLower(personName)
+	var zettels []*Zettel
+
+	for _, m := range rows {
+		// Check entities for person match
+		entityMatch := false
+		entities := getEntitiesFromContent(m)
+		for _, e := range entities {
+			if e.Type == "person" && strings.EqualFold(e.Value, personName) {
+				entityMatch = true
+				break
+			}
+		}
+
+		// Check content for person name mention
+		content := database.GetString(m, "content")
+		contentMatch := strings.Contains(strings.ToLower(content), personLower)
+
+		if entityMatch || contentMatch {
+			z := contentToZettel(m)
+			zettels = append(zettels, z)
+		}
+	}
+
+	// Sort by created_at DESC
+	sort.Slice(zettels, func(i, j int) bool {
+		return zettels[i].CreatedAt.After(zettels[j].CreatedAt)
+	})
+
+	return zettels, nil
 }
 
 // GetByPlace busca zettels sobre um lugar
 func (zs *ZettelService) GetByPlace(ctx context.Context, idosoID int64, placeName string) ([]*Zettel, error) {
-	query := `
-		SELECT id, title, content, zettel_type, source, entities, tags,
-		       linked_zettels, metadata, created_at, updated_at, access_count
-		FROM zettels
-		WHERE idoso_id = $1
-		  AND (
-		    zettel_type = 'place'
-		    OR entities @> $2::jsonb
-		    OR content ILIKE '%' || $3 || '%'
-		  )
-		ORDER BY created_at DESC
-	`
-
-	entityFilter := fmt.Sprintf(`[{"type":"place","value":"%s"}]`, placeName)
-
-	rows, err := zs.db.QueryContext(ctx, query, idosoID, entityFilter, placeName)
+	rows, err := zs.db.QueryByLabel(ctx, "zettels",
+		` AND n.idoso_id = $idoso_id`, map[string]interface{}{
+			"idoso_id": idosoID,
+		}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	return zs.scanZettels(rows)
+	placeLower := strings.ToLower(placeName)
+	var zettels []*Zettel
+
+	for _, m := range rows {
+		zettelType := database.GetString(m, "zettel_type")
+		typeMatch := zettelType == "place"
+
+		// Check entities for place match
+		entityMatch := false
+		entities := getEntitiesFromContent(m)
+		for _, e := range entities {
+			if e.Type == "place" && strings.EqualFold(e.Value, placeName) {
+				entityMatch = true
+				break
+			}
+		}
+
+		// Check content for place name mention
+		content := database.GetString(m, "content")
+		contentMatch := strings.Contains(strings.ToLower(content), placeLower)
+
+		if typeMatch || entityMatch || contentMatch {
+			z := contentToZettel(m)
+			zettels = append(zettels, z)
+		}
+	}
+
+	// Sort by created_at DESC
+	sort.Slice(zettels, func(i, j int) bool {
+		return zettels[i].CreatedAt.After(zettels[j].CreatedAt)
+	})
+
+	return zettels, nil
 }
 
 // GetContextForConversation busca zettels relevantes para o contexto atual
@@ -615,80 +677,50 @@ func (zs *ZettelService) getColorForType(t ZettelType) string {
 }
 
 // ============================================================================
-// PERSISTENCIA
+// PERSISTENCIA - NietzscheDB
 // ============================================================================
-
-func (zs *ZettelService) ensureTables() {
-	query := `
-		CREATE TABLE IF NOT EXISTS zettels (
-			id VARCHAR(32) PRIMARY KEY,
-			idoso_id BIGINT NOT NULL REFERENCES idosos(id),
-			title VARCHAR(255) NOT NULL,
-			content TEXT NOT NULL,
-			zettel_type VARCHAR(50) NOT NULL,
-			source JSONB NOT NULL,
-			entities JSONB DEFAULT '[]',
-			tags TEXT[] DEFAULT '{}',
-			linked_zettels TEXT[] DEFAULT '{}',
-			metadata JSONB DEFAULT '{}',
-			created_at TIMESTAMP DEFAULT NOW(),
-			updated_at TIMESTAMP DEFAULT NOW(),
-			access_count INT DEFAULT 0,
-			last_accessed TIMESTAMP
-		);
-
-		CREATE INDEX IF NOT EXISTS idx_zettels_idoso ON zettels(idoso_id);
-		CREATE INDEX IF NOT EXISTS idx_zettels_type ON zettels(zettel_type);
-		CREATE INDEX IF NOT EXISTS idx_zettels_tags ON zettels USING GIN(tags);
-		CREATE INDEX IF NOT EXISTS idx_zettels_entities ON zettels USING GIN(entities);
-		CREATE INDEX IF NOT EXISTS idx_zettels_content ON zettels USING GIN(to_tsvector('portuguese', content));
-
-		CREATE TABLE IF NOT EXISTS zettel_links (
-			id SERIAL PRIMARY KEY,
-			from_id VARCHAR(32) REFERENCES zettels(id),
-			to_id VARCHAR(32) REFERENCES zettels(id),
-			link_type VARCHAR(50) NOT NULL,
-			strength DECIMAL(3,2) DEFAULT 0.5,
-			context TEXT,
-			created_at TIMESTAMP DEFAULT NOW(),
-			bidirectional BOOLEAN DEFAULT true,
-			UNIQUE(from_id, to_id, link_type)
-		);
-
-		CREATE INDEX IF NOT EXISTS idx_links_from ON zettel_links(from_id);
-		CREATE INDEX IF NOT EXISTS idx_links_to ON zettel_links(to_id);
-	`
-
-	_, err := zs.db.Exec(query)
-	if err != nil {
-		log.Printf("[ZETTEL] Erro ao criar tabelas: %v", err)
-	}
-}
 
 func (zs *ZettelService) saveZettel(ctx context.Context, z *Zettel) error {
 	sourceJSON, _ := json.Marshal(z.Source)
 	entitiesJSON, _ := json.Marshal(z.Entities)
 	metadataJSON, _ := json.Marshal(z.Metadata)
+	tagsJSON, _ := json.Marshal(z.Tags)
+	linkedJSON, _ := json.Marshal(z.LinkedZettels)
 
-	query := `
-		INSERT INTO zettels (id, idoso_id, title, content, zettel_type, source, entities, tags, metadata, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-		ON CONFLICT (id) DO UPDATE SET
-			title = $3,
-			content = $4,
-			entities = $7,
-			tags = $8,
-			metadata = $9,
-			updated_at = $11
-	`
+	content := map[string]interface{}{
+		"id":              z.ID,
+		"idoso_id":        z.IdosoID,
+		"title":           z.Title,
+		"content":         z.Content,
+		"zettel_type":     string(z.ZettelType),
+		"source":          string(sourceJSON),
+		"entities":        string(entitiesJSON),
+		"tags":            string(tagsJSON),
+		"linked_zettels":  string(linkedJSON),
+		"metadata":        string(metadataJSON),
+		"created_at":      z.CreatedAt.Format(time.RFC3339),
+		"updated_at":      z.UpdatedAt.Format(time.RFC3339),
+		"access_count":    z.AccessCount,
+	}
 
-	_, err := zs.db.ExecContext(ctx, query,
-		z.ID, z.IdosoID, z.Title, z.Content, z.ZettelType,
-		sourceJSON, entitiesJSON, z.Tags, metadataJSON,
-		z.CreatedAt, z.UpdatedAt,
-	)
+	// Try to get existing node first (upsert logic)
+	existing, err := zs.db.GetNodeByID(ctx, "zettels", z.ID)
+	if err == nil && existing != nil {
+		// Update existing zettel
+		return zs.db.Update(ctx, "zettels",
+			map[string]interface{}{"id": z.ID},
+			map[string]interface{}{
+				"title":      z.Title,
+				"content":    z.Content,
+				"entities":   string(entitiesJSON),
+				"tags":       string(tagsJSON),
+				"metadata":   string(metadataJSON),
+				"updated_at": z.UpdatedAt.Format(time.RFC3339),
+			})
+	}
 
-	return err
+	// Insert new zettel
+	return zs.db.InsertWithID(ctx, "zettels", z.ID, content)
 }
 
 // saveToGraph saves a zettel and its entities to NietzscheDB graph
@@ -758,29 +790,84 @@ func (zs *ZettelService) findAndCreateLinks(ctx context.Context, z *Zettel) []Ze
 
 	// Buscar zettels com entidades em comum
 	for _, entity := range z.Entities {
-		query := `
-			SELECT id, entities
-			FROM zettels
-			WHERE idoso_id = $1 AND id != $2
-			  AND entities @> $3::jsonb
-		`
-		entityFilter := fmt.Sprintf(`[{"type":"%s","value":"%s"}]`, entity.Type, entity.Value)
-
-		rows, err := zs.db.QueryContext(ctx, query, z.IdosoID, z.ID, entityFilter)
+		rows, err := zs.db.QueryByLabel(ctx, "zettels",
+			` AND n.idoso_id = $idoso_id`, map[string]interface{}{
+				"idoso_id": z.IdosoID,
+			}, 0)
 		if err != nil {
 			continue
 		}
 
-		for rows.Next() {
-			var relatedID string
-			var entitiesJSON []byte
-			if rows.Scan(&relatedID, &entitiesJSON) == nil {
+		for _, m := range rows {
+			relatedID := database.GetString(m, "id")
+			if relatedID == z.ID {
+				continue
+			}
+
+			// Check if this zettel contains the same entity
+			relatedEntities := getEntitiesFromContent(m)
+			found := false
+			for _, re := range relatedEntities {
+				if re.Type == entity.Type && strings.EqualFold(re.Value, entity.Value) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				continue
+			}
+
+			link := ZettelLink{
+				FromID:        z.ID,
+				ToID:          relatedID,
+				LinkType:      "shares_entity",
+				Strength:      0.7,
+				Context:       fmt.Sprintf("Compartilham: %s (%s)", entity.Value, entity.Type),
+				CreatedAt:     time.Now(),
+				Bidirectional: true,
+			}
+			zs.saveLink(ctx, link)
+			links = append(links, link)
+		}
+	}
+
+	// Buscar zettels com tags em comum
+	if len(z.Tags) > 0 {
+		rows, err := zs.db.QueryByLabel(ctx, "zettels",
+			` AND n.idoso_id = $idoso_id`, map[string]interface{}{
+				"idoso_id": z.IdosoID,
+			}, 0)
+		if err == nil {
+			zTagSet := make(map[string]bool)
+			for _, t := range z.Tags {
+				zTagSet[t] = true
+			}
+
+			for _, m := range rows {
+				relatedID := database.GetString(m, "id")
+				if relatedID == z.ID {
+					continue
+				}
+
+				// Check for overlapping tags
+				relatedTags := getStringSlice(m, "tags")
+				hasCommon := false
+				for _, rt := range relatedTags {
+					if zTagSet[rt] {
+						hasCommon = true
+						break
+					}
+				}
+				if !hasCommon {
+					continue
+				}
+
 				link := ZettelLink{
 					FromID:        z.ID,
 					ToID:          relatedID,
-					LinkType:      "shares_entity",
-					Strength:      0.7,
-					Context:       fmt.Sprintf("Compartilham: %s (%s)", entity.Value, entity.Type),
+					LinkType:      "related_topic",
+					Strength:      0.5,
+					Context:       "Tags em comum",
 					CreatedAt:     time.Now(),
 					Bidirectional: true,
 				}
@@ -788,63 +875,68 @@ func (zs *ZettelService) findAndCreateLinks(ctx context.Context, z *Zettel) []Ze
 				links = append(links, link)
 			}
 		}
-		rows.Close()
-	}
-
-	// Buscar zettels com tags em comum
-	if len(z.Tags) > 0 {
-		query := `
-			SELECT id
-			FROM zettels
-			WHERE idoso_id = $1 AND id != $2
-			  AND tags && $3
-		`
-
-		rows, err := zs.db.QueryContext(ctx, query, z.IdosoID, z.ID, z.Tags)
-		if err == nil {
-			for rows.Next() {
-				var relatedID string
-				if rows.Scan(&relatedID) == nil {
-					link := ZettelLink{
-						FromID:        z.ID,
-						ToID:          relatedID,
-						LinkType:      "related_topic",
-						Strength:      0.5,
-						Context:       "Tags em comum",
-						CreatedAt:     time.Now(),
-						Bidirectional: true,
-					}
-					zs.saveLink(ctx, link)
-					links = append(links, link)
-				}
-			}
-			rows.Close()
-		}
 	}
 
 	return links
 }
 
 func (zs *ZettelService) saveLink(ctx context.Context, link ZettelLink) error {
-	query := `
-		INSERT INTO zettel_links (from_id, to_id, link_type, strength, context, bidirectional)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		ON CONFLICT (from_id, to_id, link_type) DO UPDATE SET
-			strength = GREATEST(zettel_links.strength, $4)
-	`
+	linkID := fmt.Sprintf("%s_%s_%s", link.FromID, link.ToID, link.LinkType)
 
-	_, err := zs.db.ExecContext(ctx, query,
-		link.FromID, link.ToID, link.LinkType, link.Strength, link.Context, link.Bidirectional,
-	)
-
-	// Se bidirecional, criar link reverso tambem
-	if link.Bidirectional && err == nil {
-		zs.db.ExecContext(ctx, query,
-			link.ToID, link.FromID, link.LinkType, link.Strength, link.Context, link.Bidirectional,
-		)
+	content := map[string]interface{}{
+		"link_id":       linkID,
+		"from_id":       link.FromID,
+		"to_id":         link.ToID,
+		"link_type":     link.LinkType,
+		"strength":      link.Strength,
+		"context":       link.Context,
+		"created_at":    link.CreatedAt.Format(time.RFC3339),
+		"bidirectional": link.Bidirectional,
 	}
 
-	return err
+	// Try to get existing link (upsert logic)
+	existing, err := zs.db.GetNodeByID(ctx, "zettel_links", linkID)
+	if err == nil && existing != nil {
+		// Update: keep the highest strength
+		existingStrength := database.GetFloat64(existing, "strength")
+		if link.Strength > existingStrength {
+			zs.db.Update(ctx, "zettel_links",
+				map[string]interface{}{"link_id": linkID},
+				map[string]interface{}{"strength": link.Strength})
+		}
+	} else {
+		// Insert new link
+		zs.db.InsertWithID(ctx, "zettel_links", linkID, content)
+	}
+
+	// Se bidirecional, criar link reverso tambem
+	if link.Bidirectional {
+		reverseLinkID := fmt.Sprintf("%s_%s_%s", link.ToID, link.FromID, link.LinkType)
+		reverseContent := map[string]interface{}{
+			"link_id":       reverseLinkID,
+			"from_id":       link.ToID,
+			"to_id":         link.FromID,
+			"link_type":     link.LinkType,
+			"strength":      link.Strength,
+			"context":       link.Context,
+			"created_at":    link.CreatedAt.Format(time.RFC3339),
+			"bidirectional": link.Bidirectional,
+		}
+
+		existingReverse, err := zs.db.GetNodeByID(ctx, "zettel_links", reverseLinkID)
+		if err == nil && existingReverse != nil {
+			existingStrength := database.GetFloat64(existingReverse, "strength")
+			if link.Strength > existingStrength {
+				zs.db.Update(ctx, "zettel_links",
+					map[string]interface{}{"link_id": reverseLinkID},
+					map[string]interface{}{"strength": link.Strength})
+			}
+		} else {
+			zs.db.InsertWithID(ctx, "zettel_links", reverseLinkID, reverseContent)
+		}
+	}
+
+	return nil
 }
 
 func (zs *ZettelService) createEntityZettels(ctx context.Context, idosoID int64, entities []Entity, parentID string) []*Zettel {
@@ -855,21 +947,32 @@ func (zs *ZettelService) createEntityZettels(ctx context.Context, idosoID int64,
 			continue
 		}
 
-		// Verificar se ja existe zettel para esta entidade
-		var exists bool
-		checkQuery := `
-			SELECT EXISTS(
-				SELECT 1 FROM zettels
-				WHERE idoso_id = $1 AND zettel_type = $2
-				  AND title ILIKE $3
-			)
-		`
 		zettelType := ZETTEL_PERSON
 		if e.Type == "place" {
 			zettelType = ZETTEL_PLACE
 		}
 
-		zs.db.QueryRowContext(ctx, checkQuery, idosoID, zettelType, "%"+e.Value+"%").Scan(&exists)
+		// Verificar se ja existe zettel para esta entidade
+		rows, err := zs.db.QueryByLabel(ctx, "zettels",
+			` AND n.idoso_id = $idoso_id AND n.zettel_type = $zettel_type`,
+			map[string]interface{}{
+				"idoso_id":    idosoID,
+				"zettel_type": string(zettelType),
+			}, 0)
+		if err != nil {
+			continue
+		}
+
+		// Filter: check if title contains the entity value (case insensitive)
+		exists := false
+		entityLower := strings.ToLower(e.Value)
+		for _, m := range rows {
+			title := database.GetString(m, "title")
+			if strings.Contains(strings.ToLower(title), entityLower) {
+				exists = true
+				break
+			}
+		}
 
 		if !exists {
 			// Criar zettel para a entidade
@@ -912,69 +1015,51 @@ func (zs *ZettelService) createEntityZettels(ctx context.Context, idosoID int64,
 }
 
 func (zs *ZettelService) incrementAccessCount(ctx context.Context, zettelID string) {
-	query := `
-		UPDATE zettels
-		SET access_count = access_count + 1,
-		    last_accessed = NOW()
-		WHERE id = $1
-	`
-	zs.db.ExecContext(ctx, query, zettelID)
-}
-
-func (zs *ZettelService) scanZettels(rows *sql.Rows) ([]*Zettel, error) {
-	var zettels []*Zettel
-
-	for rows.Next() {
-		z := &Zettel{}
-		var sourceJSON, entitiesJSON, metadataJSON []byte
-		var linkedZettels, tags []string
-
-		err := rows.Scan(
-			&z.ID, &z.Title, &z.Content, &z.ZettelType,
-			&sourceJSON, &entitiesJSON, &tags,
-			&linkedZettels, &metadataJSON,
-			&z.CreatedAt, &z.UpdatedAt, &z.AccessCount,
-		)
-		if err != nil {
-			continue
-		}
-
-		json.Unmarshal(sourceJSON, &z.Source)
-		json.Unmarshal(entitiesJSON, &z.Entities)
-		json.Unmarshal(metadataJSON, &z.Metadata)
-		z.Tags = tags
-		z.LinkedZettels = linkedZettels
-
-		zettels = append(zettels, z)
+	// Get current access_count, then update with incremented value
+	existing, err := zs.db.GetNodeByID(ctx, "zettels", zettelID)
+	if err != nil || existing == nil {
+		return
 	}
 
-	return zettels, nil
+	currentCount := int(database.GetInt64(existing, "access_count"))
+	zs.db.Update(ctx, "zettels",
+		map[string]interface{}{"id": zettelID},
+		map[string]interface{}{
+			"access_count":  currentCount + 1,
+			"last_accessed": time.Now().Format(time.RFC3339),
+		})
 }
 
 func (zs *ZettelService) getDayConversations(ctx context.Context, idosoID int64, date time.Time) ([]string, error) {
-	query := `
-		SELECT transcricao_completa
-		FROM historico_ligacoes
-		WHERE idoso_id = $1
-		  AND DATE(inicio_chamada) = $2
-		  AND transcricao_completa IS NOT NULL
-		ORDER BY inicio_chamada
-	`
-
-	rows, err := zs.db.QueryContext(ctx, query, idosoID, date.Format("2006-01-02"))
+	rows, err := zs.db.QueryByLabel(ctx, "historico_ligacoes",
+		` AND n.idoso_id = $idoso_id`, map[string]interface{}{
+			"idoso_id": idosoID,
+		}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
+	dateStr := date.Format("2006-01-02")
 	var conversations []string
-	for rows.Next() {
-		var text string
-		if rows.Scan(&text) == nil {
+
+	for _, m := range rows {
+		// Filter by date: check if inicio_chamada starts with the target date
+		inicioChamada := database.GetString(m, "inicio_chamada")
+		if !strings.HasPrefix(inicioChamada, dateStr) {
+			// Also try parsing as time
+			t := database.GetTime(m, "inicio_chamada")
+			if t.Format("2006-01-02") != dateStr {
+				continue
+			}
+		}
+
+		text := database.GetString(m, "transcricao_completa")
+		if text != "" {
 			conversations = append(conversations, text)
 		}
 	}
 
+	// Sort by inicio_chamada (already filtered by date, order preserved from NQL)
 	return conversations, nil
 }
 
@@ -989,66 +1074,109 @@ func (zs *ZettelService) generateDailySummary(conversations []string) string {
 }
 
 func (zs *ZettelService) getAllZettels(ctx context.Context, idosoID int64, limit int) ([]*Zettel, error) {
-	query := `
-		SELECT id, title, content, zettel_type, source, entities, tags,
-		       linked_zettels, metadata, created_at, updated_at, access_count
-		FROM zettels
-		WHERE idoso_id = $1
-		ORDER BY access_count DESC, created_at DESC
-		LIMIT $2
-	`
-
-	rows, err := zs.db.QueryContext(ctx, query, idosoID, limit)
+	rows, err := zs.db.QueryByLabel(ctx, "zettels",
+		` AND n.idoso_id = $idoso_id`, map[string]interface{}{
+			"idoso_id": idosoID,
+		}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	return zs.scanZettels(rows)
+	var zettels []*Zettel
+	for _, m := range rows {
+		zettels = append(zettels, contentToZettel(m))
+	}
+
+	// Sort by access_count DESC, then created_at DESC
+	sort.Slice(zettels, func(i, j int) bool {
+		if zettels[i].AccessCount != zettels[j].AccessCount {
+			return zettels[i].AccessCount > zettels[j].AccessCount
+		}
+		return zettels[i].CreatedAt.After(zettels[j].CreatedAt)
+	})
+
+	if limit > 0 && len(zettels) > limit {
+		zettels = zettels[:limit]
+	}
+
+	return zettels, nil
 }
 
 func (zs *ZettelService) getAllLinks(ctx context.Context, idosoID int64) ([]ZettelLink, error) {
-	query := `
-		SELECT zl.from_id, zl.to_id, zl.link_type, zl.strength, zl.context, zl.created_at, zl.bidirectional
-		FROM zettel_links zl
-		JOIN zettels z ON zl.from_id = z.id
-		WHERE z.idoso_id = $1
-	`
-
-	rows, err := zs.db.QueryContext(ctx, query, idosoID)
+	// Get all links, then filter to only those belonging to zettels of this idoso
+	linkRows, err := zs.db.QueryByLabel(ctx, "zettel_links", "", nil, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+
+	// Build set of zettel IDs for this idoso (for filtering links)
+	zettelRows, err := zs.db.QueryByLabel(ctx, "zettels",
+		` AND n.idoso_id = $idoso_id`, map[string]interface{}{
+			"idoso_id": idosoID,
+		}, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	idosoZettelIDs := make(map[string]bool)
+	for _, m := range zettelRows {
+		idosoZettelIDs[database.GetString(m, "id")] = true
+	}
 
 	var links []ZettelLink
-	for rows.Next() {
-		var l ZettelLink
-		if rows.Scan(&l.FromID, &l.ToID, &l.LinkType, &l.Strength, &l.Context, &l.CreatedAt, &l.Bidirectional) == nil {
-			links = append(links, l)
+	for _, m := range linkRows {
+		fromID := database.GetString(m, "from_id")
+		if !idosoZettelIDs[fromID] {
+			continue
 		}
+
+		links = append(links, contentToZettelLink(m))
 	}
 
 	return links, nil
 }
 
-func (zs *ZettelService) getRelatedFromSQL(ctx context.Context, zettelID string) ([]*Zettel, error) {
-	query := `
-		SELECT z.id, z.title, z.content, z.zettel_type, z.source, z.entities, z.tags,
-		       z.linked_zettels, z.metadata, z.created_at, z.updated_at, z.access_count
-		FROM zettels z
-		JOIN zettel_links zl ON z.id = zl.to_id
-		WHERE zl.from_id = $1
-		ORDER BY zl.strength DESC
-	`
-
-	rows, err := zs.db.QueryContext(ctx, query, zettelID)
+func (zs *ZettelService) getRelatedFromLinks(ctx context.Context, zettelID string) ([]*Zettel, error) {
+	// Get all links from this zettel
+	linkRows, err := zs.db.QueryByLabel(ctx, "zettel_links", "", nil, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	return zs.scanZettels(rows)
+	// Collect target zettel IDs
+	var targetIDs []string
+	for _, m := range linkRows {
+		fromID := database.GetString(m, "from_id")
+		if fromID == zettelID {
+			toID := database.GetString(m, "to_id")
+			targetIDs = append(targetIDs, toID)
+		}
+	}
+
+	if len(targetIDs) == 0 {
+		return []*Zettel{}, nil
+	}
+
+	// Fetch each related zettel
+	targetSet := make(map[string]bool)
+	for _, id := range targetIDs {
+		targetSet[id] = true
+	}
+
+	allZettels, err := zs.db.QueryByLabel(ctx, "zettels", "", nil, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	var zettels []*Zettel
+	for _, m := range allZettels {
+		id := database.GetString(m, "id")
+		if targetSet[id] {
+			zettels = append(zettels, contentToZettel(m))
+		}
+	}
+
+	return zettels, nil
 }
 
 // getRelatedFromGraph uses BFS from NietzscheDB for variable-length path traversal
@@ -1097,21 +1225,26 @@ func (zs *ZettelService) getRelatedFromGraph(ctx context.Context, zettelID strin
 		ids = ids[:20]
 	}
 
-	// Buscar zettels do NietzscheDB pelos IDs
-	query := `
-		SELECT id, title, content, zettel_type, source, entities, tags,
-		       linked_zettels, metadata, created_at, updated_at, access_count
-		FROM zettels
-		WHERE id = ANY($1)
-	`
+	// Fetch zettels from NietzscheDB by IDs
+	idSet := make(map[string]bool)
+	for _, id := range ids {
+		idSet[id] = true
+	}
 
-	rows, err := zs.db.QueryContext(ctx, query, ids)
+	allRows, err := zs.db.QueryByLabel(ctx, "zettels", "", nil, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	return zs.scanZettels(rows)
+	var zettels []*Zettel
+	for _, m := range allRows {
+		id := database.GetString(m, "id")
+		if idSet[id] {
+			zettels = append(zettels, contentToZettel(m))
+		}
+	}
+
+	return zettels, nil
 }
 
 // getGraphFromNietzsche builds the graph data from NietzscheDB
@@ -1142,7 +1275,6 @@ func (zs *ZettelService) getGraphFromNietzsche(ctx context.Context, idosoID int6
 
 		// Include center node
 		allIDs := append([]string{centerResult.NodeID}, neighborIDs...)
-		nodeIDSet := make(map[string]bool)
 
 		for _, nID := range allIDs {
 			node, err := zs.graphAdapter.GetNode(ctx, nID, "")
@@ -1163,7 +1295,6 @@ func (zs *ZettelService) getGraphFromNietzsche(ctx context.Context, idosoID int6
 			title, _ := node.Content["title"].(string)
 			zettelType, _ := node.Content["type"].(string)
 
-			nodeIDSet[nID] = true
 			graphData.Nodes = append(graphData.Nodes, GraphNode{
 				ID:    zettelID,
 				Label: title,
@@ -1219,6 +1350,113 @@ func (zs *ZettelService) getGraphFromNietzsche(ctx context.Context, idosoID int6
 	}
 
 	return graphData, nil
+}
+
+// ============================================================================
+// NietzscheDB content map -> struct conversion helpers
+// ============================================================================
+
+// contentToZettel converts a NietzscheDB content map to a Zettel struct
+func contentToZettel(m map[string]interface{}) *Zettel {
+	z := &Zettel{
+		ID:          database.GetString(m, "id"),
+		IdosoID:     database.GetInt64(m, "idoso_id"),
+		Title:       database.GetString(m, "title"),
+		Content:     database.GetString(m, "content"),
+		ZettelType:  ZettelType(database.GetString(m, "zettel_type")),
+		CreatedAt:   database.GetTime(m, "created_at"),
+		UpdatedAt:   database.GetTime(m, "updated_at"),
+		AccessCount: int(database.GetInt64(m, "access_count")),
+		LastAccessed: database.GetTimePtr(m, "last_accessed"),
+	}
+
+	// Parse source JSON
+	sourceStr := database.GetString(m, "source")
+	if sourceStr != "" {
+		json.Unmarshal([]byte(sourceStr), &z.Source)
+	}
+
+	// Parse entities JSON
+	z.Entities = getEntitiesFromContent(m)
+
+	// Parse tags JSON
+	z.Tags = getStringSlice(m, "tags")
+
+	// Parse linked_zettels JSON
+	z.LinkedZettels = getStringSlice(m, "linked_zettels")
+
+	// Parse metadata JSON
+	metadataStr := database.GetString(m, "metadata")
+	if metadataStr != "" {
+		z.Metadata = make(map[string]string)
+		json.Unmarshal([]byte(metadataStr), &z.Metadata)
+	}
+
+	return z
+}
+
+// contentToZettelLink converts a NietzscheDB content map to a ZettelLink struct
+func contentToZettelLink(m map[string]interface{}) ZettelLink {
+	return ZettelLink{
+		FromID:        database.GetString(m, "from_id"),
+		ToID:          database.GetString(m, "to_id"),
+		LinkType:      database.GetString(m, "link_type"),
+		Strength:      database.GetFloat64(m, "strength"),
+		Context:       database.GetString(m, "context"),
+		CreatedAt:     database.GetTime(m, "created_at"),
+		Bidirectional: database.GetBool(m, "bidirectional"),
+	}
+}
+
+// getEntitiesFromContent parses the entities field from a content map.
+// Handles both JSON string and native slice representations.
+func getEntitiesFromContent(m map[string]interface{}) []Entity {
+	var entities []Entity
+
+	raw, ok := m["entities"]
+	if !ok || raw == nil {
+		return entities
+	}
+
+	switch v := raw.(type) {
+	case string:
+		json.Unmarshal([]byte(v), &entities)
+	default:
+		// Could be []interface{} from JSON deserialization
+		if b, err := json.Marshal(v); err == nil {
+			json.Unmarshal(b, &entities)
+		}
+	}
+
+	return entities
+}
+
+// getStringSlice parses a string slice from a content map.
+// Handles both JSON string and native slice representations.
+func getStringSlice(m map[string]interface{}, key string) []string {
+	raw, ok := m[key]
+	if !ok || raw == nil {
+		return nil
+	}
+
+	switch v := raw.(type) {
+	case string:
+		var result []string
+		json.Unmarshal([]byte(v), &result)
+		return result
+	case []interface{}:
+		result := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				result = append(result, s)
+			}
+		}
+		return result
+	case []string:
+		return v
+	}
+
+	return nil
 }
 
 // Helper type conversion

@@ -5,7 +5,6 @@ package signaling
 
 import (
 	"context"
-	"database/sql"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -187,7 +186,7 @@ func (s *WebSocketSession) GetState() vdefs.ConversationState {
 
 type SignalingServer struct {
 	cfg           *config.Config
-	db            *sql.DB
+	db            *database.DB
 	pushService   *push.FirebaseService
 	knowledge     *knowledge.GraphReasoningService
 	audioAnalysis *knowledge.AudioAnalysisService // ✅ NOVO
@@ -240,7 +239,7 @@ type SignalingServer struct {
 
 func NewSignalingServer(
 	cfg *config.Config,
-	db *sql.DB,
+	db *database.DB,
 	pushService *push.FirebaseService,
 	vectorAdapter *nietzscheInfra.VectorAdapter,
 	embedder *memory.EmbeddingService,
@@ -270,11 +269,10 @@ func NewSignalingServer(
 		}
 	}
 
-	// ✅ NOVO: Wrapper do DB para ContextService
-	dbWrapper := &database.DB{Conn: db}
-	ctxService := knowledge.NewContextService(dbWrapper)
+	// ContextService e ToolsHandler já recebem *database.DB diretamente
+	ctxService := knowledge.NewContextService(db)
 	server.context = ctxService
-	server.tools = tools.NewToolsHandler(dbWrapper, pushService, server.emailService) // ✅ Agora com emailService inicializado
+	server.tools = tools.NewToolsHandler(db, pushService, server.emailService)
 
 	// ✅ FASE 10: Configurar Callback de Sinalização para Tools (WebRTC, etc)
 	server.tools.NotifyFunc = func(idosoID int64, msgType string, payload interface{}) {
@@ -307,7 +305,7 @@ func NewSignalingServer(
 	log.Println("🎭 Signaling: PersonaManager initialized for Multi-Persona System")
 
 	// ✅ NOVO: Inicializar ProsodyAnalyzer (Voice Biomarkers)
-	if prosodyAnalyzer, err := voice.NewProsodyAnalyzer(cfg.GoogleAPIKey, dbWrapper); err != nil {
+	if prosodyAnalyzer, err := voice.NewProsodyAnalyzer(cfg.GoogleAPIKey, db); err != nil {
 		log.Printf("⚠️ Erro ao inicializar ProsodyAnalyzer: %v", err)
 	} else {
 		server.prosodyAnalyzer = prosodyAnalyzer
@@ -385,7 +383,7 @@ func NewSignalingServer(
 	log.Println("🔮 Signaling: CrisisPredictor initialized (Predição de Crises)")
 
 	// ✅ Clinical Scales Manager (PHQ-9, GAD-7, C-SSRS)
-	server.clinicalScales = scales.NewClinicalScalesManager(dbWrapper)
+	server.clinicalScales = scales.NewClinicalScalesManager(db)
 	log.Println("📊 Signaling: ClinicalScalesManager initialized (PHQ-9, GAD-7, C-SSRS)")
 
 	// ✅ Deep Memory Service (Memória Persistente, Corporal, Compartilhada)
@@ -1319,50 +1317,47 @@ func (s *SignalingServer) saveTranscription(idosoID int64, role, content string)
 
 	formattedMsg := fmt.Sprintf("[%s] %s: %s", timestamp, roleLabel, content)
 
-	// Tentar atualizar registro ativo (últimos 5 minutos)
-	updateQuery := `
-		UPDATE historico_ligacoes 
-		SET transcricao_completa = COALESCE(transcricao_completa, '') || E'\n' || $2
-		WHERE id = (
-			SELECT id 
-			FROM historico_ligacoes
-			WHERE idoso_id = $1 
-			  AND fim_chamada IS NULL
-			  AND inicio_chamada > NOW() - INTERVAL '5 minutes'
-			ORDER BY inicio_chamada DESC 
-			LIMIT 1
-		)
-		RETURNING id
-	`
+	// Tentar encontrar registro ativo (últimos 5 minutos)
+	ctx := context.Background()
+	fiveMinAgo := time.Now().Add(-5 * time.Minute).Format(time.RFC3339)
+
+	rows, _ := s.db.QueryByLabel(ctx, "historico_ligacoes",
+		" AND n.idoso_id = $idoso_id AND n.fim_chamada = $empty",
+		map[string]interface{}{"idoso_id": idosoID, "empty": ""}, 0)
 
 	var historyID int64
-	err := s.db.QueryRow(updateQuery, idosoID, formattedMsg).Scan(&historyID)
+	found := false
+	for _, row := range rows {
+		inicio := database.GetString(row, "inicio_chamada")
+		if inicio >= fiveMinAgo {
+			historyID = database.GetInt64(row, "pg_id")
+			if historyID == 0 {
+				historyID = database.GetInt64(row, "id")
+			}
+			// Append transcription
+			existing := database.GetString(row, "transcricao_completa")
+			s.db.Update(ctx, "historico_ligacoes",
+				map[string]interface{}{"pg_id": historyID},
+				map[string]interface{}{"transcricao_completa": existing + "\n" + formattedMsg})
+			found = true
+			break
+		}
+	}
 
-	// Se não existe registro ativo, criar novo
-	if err == sql.ErrNoRows {
-		insertQuery := `
-			INSERT INTO historico_ligacoes (
-				agendamento_id, 
-				idoso_id, 
-				inicio_chamada,
-				transcricao_completa
-			)
-			VALUES (
-				(SELECT id FROM agendamentos WHERE idoso_id = $1 AND status IN ('agendado', 'em_andamento') ORDER BY data_hora_agendada DESC LIMIT 1),
-				$1,
-				CURRENT_TIMESTAMP,
-				$2
-			)
-			RETURNING id
-		`
-
-		err = s.db.QueryRow(insertQuery, idosoID, formattedMsg).Scan(&historyID)
+	if !found {
+		// Criar novo registro
+		historyID, err := s.db.Insert(ctx, "historico_ligacoes", map[string]interface{}{
+			"idoso_id":              idosoID,
+			"inicio_chamada":       time.Now().Format(time.RFC3339),
+			"transcricao_completa": formattedMsg,
+		})
 		if err != nil {
 			log.Printf("⚠️ Erro ao criar histórico: %v", err)
 			return
 		}
 		log.Printf("📝 Novo histórico criado: #%d para idoso %d", historyID, idosoID)
 	}
+	_ = historyID
 
 	// 📚 ZETTELKASTEN: Auto-criar zettels de mensagens do usuário
 	if role == "user" && s.zettelService != nil && len(content) > 30 {
@@ -1482,26 +1477,31 @@ func (s *SignalingServer) analyzeAndSaveConversation(idosoID int64) {
 	log.Printf("🔍 [ANÁLISE] Iniciando análise para idoso %d", idosoID)
 
 	// Buscar última transcrição sem fim_chamada
-	query := `
-		SELECT id, transcricao_completa
-		FROM historico_ligacoes
-		WHERE idoso_id = $1 
-		  AND fim_chamada IS NULL
-		  AND transcricao_completa IS NOT NULL
-		  AND LENGTH(transcricao_completa) > 50
-		ORDER BY inicio_chamada DESC
-		LIMIT 1
-	`
-
-	var historyID int64
-	var transcript string
-	err := s.db.QueryRow(query, idosoID).Scan(&historyID, &transcript)
-	if err == sql.ErrNoRows {
+	ctx := context.Background()
+	rows, err := s.db.QueryByLabel(ctx, "historico_ligacoes",
+		" AND n.idoso_id = $idoso_id AND n.fim_chamada = $empty",
+		map[string]interface{}{"idoso_id": idosoID, "empty": ""}, 0)
+	if err != nil || len(rows) == 0 {
 		log.Printf("⚠️ [ANÁLISE] Nenhuma transcrição encontrada para idoso %d", idosoID)
 		return
 	}
-	if err != nil {
-		log.Printf("❌ [ANÁLISE] Erro ao buscar transcrição: %v", err)
+
+	// Find latest entry with transcript > 50 chars
+	var historyID int64
+	var transcript string
+	for _, row := range rows {
+		t := database.GetString(row, "transcricao_completa")
+		if len(t) > 50 {
+			historyID = database.GetInt64(row, "pg_id")
+			if historyID == 0 {
+				historyID = database.GetInt64(row, "id")
+			}
+			transcript = t
+			break
+		}
+	}
+	if transcript == "" {
+		log.Printf("⚠️ [ANÁLISE] Nenhuma transcrição encontrada para idoso %d", idosoID)
 		return
 	}
 
@@ -1542,34 +1542,23 @@ func (s *SignalingServer) analyzeAndSaveConversation(idosoID int64) {
 
 	log.Printf("💾 [ANÁLISE] Salvando no banco...")
 
-	// Atualizar banco com análise NOS CAMPOS CORRETOS
-	updateQuery := `
-		UPDATE historico_ligacoes 
-		SET 
-			fim_chamada = CURRENT_TIMESTAMP,
-			analise_gemini = $2::jsonb,
-			urgencia = $3,
-			sentimento = $4,
-			transcricao_resumo = $5
-		WHERE id = $1
-	`
-
-	result, err := s.db.Exec(
-		updateQuery,
-		historyID,
-		string(analysisJSON),  // analise_gemini (JSON completo)
-		analysis.UrgencyLevel, // urgencia
-		analysis.MoodState,    // sentimento
-		analysis.Summary,      // transcricao_resumo
-	)
+	// Atualizar banco com análise
+	err = s.db.Update(ctx, "historico_ligacoes",
+		map[string]interface{}{"pg_id": historyID},
+		map[string]interface{}{
+			"fim_chamada":        time.Now().Format(time.RFC3339),
+			"analise_gemini":     string(analysisJSON),
+			"urgencia":           analysis.UrgencyLevel,
+			"sentimento":         analysis.MoodState,
+			"transcricao_resumo": analysis.Summary,
+		})
 
 	if err != nil {
 		log.Printf("❌ [ANÁLISE] Erro ao salvar: %v", err)
 		return
 	}
 
-	rows, _ := result.RowsAffected()
-	log.Printf("✅ [ANÁLISE] Salvo com sucesso! (%d linha atualizada)", rows)
+	log.Printf("✅ [ANÁLISE] Salvo com sucesso!")
 
 	// 🚨 ALERTA CRÍTICO OU ALTO
 	if analysis.UrgencyLevel == "CRITICO" || analysis.UrgencyLevel == "ALTO" {
@@ -1674,28 +1663,32 @@ func (s *SignalingServer) cleanupDeadSessions() {
 }
 
 func (s *SignalingServer) getIdosoByCPF(cpf string) (*Idoso, error) {
-	query := `
-		SELECT id, nome, cpf, device_token, ativo, nivel_cognitivo, COALESCE(voice_name, 'Aoede')
-		FROM idosos 
-		WHERE cpf = $1 AND ativo = true
-	`
-
-	var idoso Idoso
-	err := s.db.QueryRow(query, cpf).Scan(
-		&idoso.ID,
-		&idoso.Nome,
-		&idoso.CPF,
-		&idoso.DeviceToken,
-		&idoso.Ativo,
-		&idoso.NivelCognitivo,
-		&idoso.VoiceName,
-	)
-
-	if err != nil {
-		return nil, err
+	ctx := context.Background()
+	rows, err := s.db.QueryByLabel(ctx, "idosos",
+		" AND n.cpf = $cpf AND n.ativo = $ativo",
+		map[string]interface{}{"cpf": cpf, "ativo": true}, 1)
+	if err != nil || len(rows) == 0 {
+		return nil, fmt.Errorf("idoso not found for CPF %s", cpf)
 	}
 
-	return &idoso, nil
+	m := rows[0]
+	idoso := &Idoso{
+		ID:             database.GetInt64(m, "pg_id"),
+		Nome:           database.GetString(m, "nome"),
+		CPF:            database.GetString(m, "cpf"),
+		DeviceToken:    database.GetString(m, "device_token"),
+		Ativo:          database.GetBool(m, "ativo"),
+		NivelCognitivo: database.GetString(m, "nivel_cognitivo"),
+		VoiceName:      database.GetString(m, "voice_name"),
+	}
+	if idoso.ID == 0 {
+		idoso.ID = database.GetInt64(m, "id")
+	}
+	if idoso.VoiceName == "" {
+		idoso.VoiceName = "Aoede"
+	}
+
+	return idoso, nil
 }
 
 func (s *SignalingServer) sendMessage(conn *websocket.Conn, msg ControlMessage) {
@@ -1713,151 +1706,150 @@ func (s *SignalingServer) sendError(conn *websocket.Conn, errMsg string) {
 
 func (s *SignalingServer) BuildInstructions(idosoID int64) string {
 	db := s.db
+	ctx := context.Background()
 	nomeDefault := "Paciente"
-	// 1. QUERY RESILIENTE: Buscar apenas o essencial primeiro
-	query := `
-		SELECT 
-			nome, 
-			EXTRACT(YEAR FROM AGE(data_nascimento)) as idade,
-			nivel_cognitivo, 
-			tom_voz,
-			preferencia_horario_ligacao,
-			medicamentos_atuais,
-			condicoes_medicas,
-			endereco
-		FROM idosos 
-		WHERE id = $1
-	`
 
-	// ✅ Campos da Query
+	// 1. QUERY RESILIENTE: Buscar dados do idoso via NietzscheDB
 	var nome, nivelCognitivo, tomVoz string
-	var idade int
-	var preferenciaHorario sql.NullString
-	var medicamentosAtuais, condicoesMedicas, endereco sql.NullString
+	var idade int64
+	var preferenciaHorario, medicamentosAtuais, condicoesMedicas, endereco string
 
-	// ✅ Campos fixos para evitar crash/missing
+	// Campos fixos para evitar crash/missing
 	var mobilidade string = "Não informada"
-	var limitacoesVisuais, familiarPrincipal, medicoResponsavel, notasGerais sql.NullString
-	var limitacoesAuditivas, usaAparelhoAuditivo, ambienteRuidoso sql.NullBool
+	var limitacoesVisuais, familiarPrincipal, medicoResponsavel, notasGerais string
+	var limitacoesAuditivas, usaAparelhoAuditivo, ambienteRuidoso bool
 
-	err := db.QueryRow(query, idosoID).Scan(
-		&nome,
-		&idade,
-		&nivelCognitivo,
-		&tomVoz,
-		&preferenciaHorario,
-		&medicamentosAtuais,
-		&condicoesMedicas,
-		&endereco,
-	)
-
-	if err != nil {
-		log.Printf("⚠️ [BuildInstructions] Usando dados parciais para %s devido a erro SQL: %v", nomeDefault, err)
+	idosoData, err := db.GetNodeByID(ctx, "idosos", idosoID)
+	if err != nil || idosoData == nil {
+		log.Printf("⚠️ [BuildInstructions] Usando dados parciais para %s devido a erro: %v", nomeDefault, err)
 		nome = nomeDefault
 		idade = 0
 		nivelCognitivo = "Não informado"
 		tomVoz = "Suave"
+	} else {
+		nome = database.GetString(idosoData, "nome")
+		if nome == "" {
+			nome = nomeDefault
+		}
+		idade = database.GetInt64(idosoData, "idade")
+		nivelCognitivo = database.GetString(idosoData, "nivel_cognitivo")
+		if nivelCognitivo == "" {
+			nivelCognitivo = "Não informado"
+		}
+		tomVoz = database.GetString(idosoData, "tom_voz")
+		if tomVoz == "" {
+			tomVoz = "Suave"
+		}
+		preferenciaHorario = database.GetString(idosoData, "preferencia_horario_ligacao")
+		medicamentosAtuais = database.GetString(idosoData, "medicamentos_atuais")
+		condicoesMedicas = database.GetString(idosoData, "condicoes_medicas")
+		endereco = database.GetString(idosoData, "endereco")
+		limitacoesVisuais = database.GetString(idosoData, "limitacoes_visuais")
+		familiarPrincipal = database.GetString(idosoData, "familiar_principal")
+		medicoResponsavel = database.GetString(idosoData, "medico_responsavel")
+		notasGerais = database.GetString(idosoData, "notas_gerais")
+		limitacoesAuditivas = database.GetBool(idosoData, "limitacoes_auditivas")
+		usaAparelhoAuditivo = database.GetBool(idosoData, "usa_aparelho_auditivo")
+		ambienteRuidoso = database.GetBool(idosoData, "ambiente_ruidoso")
 	}
 
-	// ✅ NOVO: Buscar medicamentos da tabela RELACIONAL 'medicamentos'
-	// Isso sobrescreve/complementa os campos de texto do cadastro do idoso
-	medsQuery := `
-		SELECT nome, dosagem, horarios, observacoes 
-		FROM medicamentos 
-		WHERE idoso_id = $1 AND ativo = true
-	`
-	rows, errMeds := db.Query(medsQuery, idosoID)
+	// Buscar medicamentos via NietzscheDB
+	medsParams := map[string]interface{}{
+		"idoso_id": idosoID,
+		"ativo":    true,
+	}
+	medsResults, errMeds := db.QueryByLabel(ctx, "medicamentos",
+		" AND n.idoso_id = $idoso_id AND n.ativo = $ativo", medsParams, 0)
 	var medsList []string
 	if errMeds == nil {
-		defer rows.Close()
-		// ... resto da logica de medicamentos ...
-	}
-	if errMeds == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var mNome, mDosagem, mHorarios, mObs string
-			if err := rows.Scan(&mNome, &mDosagem, &mHorarios, &mObs); err == nil {
-				medInfo := fmt.Sprintf("- %s (%s)", mNome, mDosagem)
-				if mHorarios != "" {
-					medInfo += fmt.Sprintf(" às %s", mHorarios)
-				}
-				if mObs != "" {
-					medInfo += fmt.Sprintf(". Obs: %s", mObs)
-				}
-				medsList = append(medsList, medInfo)
+		for _, m := range medsResults {
+			mNome := database.GetString(m, "nome")
+			mDosagem := database.GetString(m, "dosagem")
+			mHorarios := database.GetString(m, "horarios")
+			mObs := database.GetString(m, "observacoes")
+
+			medInfo := fmt.Sprintf("- %s (%s)", mNome, mDosagem)
+			if mHorarios != "" {
+				medInfo += fmt.Sprintf(" às %s", mHorarios)
 			}
+			if mObs != "" {
+				medInfo += fmt.Sprintf(". Obs: %s", mObs)
+			}
+			medsList = append(medsList, medInfo)
 		}
 	} else {
 		log.Printf("⚠️ Erro ao buscar tabela medicamentos: %v", errMeds)
 	}
 
-	// ✅ NOVO (AGENDA DO DIA): Buscar agendamentos futuros (próximas 24h)
-	agendaQuery := `
-		SELECT tipo, data_hora_agendada, dados_tarefa
-		FROM agendamentos
-		WHERE idoso_id = $1 
-		  AND status = 'agendado'
-		  AND data_hora_agendada >= NOW()
-		ORDER BY data_hora_agendada ASC
-	`
-	rowsAgenda, errAgenda := db.Query(agendaQuery, idosoID)
+	// Buscar agendamentos futuros via NietzscheDB
+	agendaParams := map[string]interface{}{
+		"idoso_id": idosoID,
+		"status":   "agendado",
+	}
+	agendaResults, errAgenda := db.QueryByLabel(ctx, "agendamentos",
+		" AND n.idoso_id = $idoso_id AND n.status = $status", agendaParams, 0)
 	var agendaList []string
 	if errAgenda == nil {
-		defer rowsAgenda.Close()
-		for rowsAgenda.Next() {
-			var aTipo string
-			var aData time.Time
-			var aDadosJSON sql.NullString
+		now := time.Now()
+		for _, a := range agendaResults {
+			aTipo := database.GetString(a, "tipo")
+			aDataStr := database.GetString(a, "data_hora_agendada")
+			aDadosJSON := database.GetString(a, "dados_tarefa")
 
-			if err := rowsAgenda.Scan(&aTipo, &aData, &aDadosJSON); err == nil {
-				// Formatar data e hora: "19/01 às 14:30"
-				dataHora := aData.Format("02/01 às 15:04")
-				item := fmt.Sprintf("- [%s]: %s", dataHora, strings.Title(aTipo))
-
-				// Se tiver detalhes extras no JSON
-				if aDadosJSON.Valid && aDadosJSON.String != "{}" {
-					item += fmt.Sprintf(" (%s)", aDadosJSON.String)
-				}
-				agendaList = append(agendaList, item)
+			// Filtrar por data >= agora em Go
+			aData, parseErr := time.Parse(time.RFC3339, aDataStr)
+			if parseErr != nil {
+				continue
 			}
+			if aData.Before(now) {
+				continue
+			}
+
+			// Formatar data e hora: "19/01 às 14:30"
+			dataHora := aData.Format("02/01 às 15:04")
+			item := fmt.Sprintf("- [%s]: %s", dataHora, strings.Title(aTipo))
+
+			// Se tiver detalhes extras no JSON
+			if aDadosJSON != "" && aDadosJSON != "{}" {
+				item += fmt.Sprintf(" (%s)", aDadosJSON)
+			}
+			agendaList = append(agendaList, item)
 		}
 	} else {
 		log.Printf("⚠️ Erro ao buscar agenda: %v", errAgenda)
 	}
 
-	// ✅ NOVO: Buscar rede de apoio (cuidadores/família/médico)
-	redeApoioQuery := `
-		SELECT
-			c.nome,
-			c.telefone,
-			c.email,
-			c.tipo,
-			c.cpf,
-			COALESCE(ci.prioridade, 99) as prioridade,
-			COALESCE(ci.parentesco, c.tipo) as parentesco
-		FROM cuidadores c
-		LEFT JOIN cuidador_idoso ci ON c.id = ci.cuidador_id AND ci.idoso_id = $1
-		WHERE ci.idoso_id = $1 OR c.tipo IN ('medico', 'responsavel')
-		ORDER BY prioridade ASC
-	`
-	rowsRede, errRede := db.Query(redeApoioQuery, idosoID)
+	// Buscar rede de apoio (cuidadores/família/médico) via NietzscheDB
+	redeParams := map[string]interface{}{
+		"idoso_id": idosoID,
+	}
+	redeResults, errRede := db.QueryByLabel(ctx, "cuidadores",
+		" AND n.idoso_id = $idoso_id", redeParams, 0)
 	type ContatoRede struct {
 		Nome       string
-		Telefone   sql.NullString
-		Email      sql.NullString
+		Telefone   string
+		Email      string
 		Tipo       string
-		CPF        sql.NullString
-		Prioridade int
+		CPF        string
+		Prioridade int64
 		Parentesco string
 	}
 	var redeApoio []ContatoRede
 	if errRede == nil {
-		defer rowsRede.Close()
-		for rowsRede.Next() {
-			var c ContatoRede
-			if err := rowsRede.Scan(&c.Nome, &c.Telefone, &c.Email, &c.Tipo, &c.CPF, &c.Prioridade, &c.Parentesco); err == nil {
-				redeApoio = append(redeApoio, c)
+		for _, r := range redeResults {
+			c := ContatoRede{
+				Nome:       database.GetString(r, "nome"),
+				Telefone:   database.GetString(r, "telefone"),
+				Email:      database.GetString(r, "email"),
+				Tipo:       database.GetString(r, "tipo"),
+				CPF:        database.GetString(r, "cpf"),
+				Prioridade: database.GetInt64(r, "prioridade"),
+				Parentesco: database.GetString(r, "parentesco"),
 			}
+			if c.Parentesco == "" {
+				c.Parentesco = c.Tipo
+			}
+			redeApoio = append(redeApoio, c)
 		}
 		log.Printf("📞 [REDE APOIO] %d contatos encontrados para idoso %d", len(redeApoio), idosoID)
 	} else {
@@ -1867,7 +1859,7 @@ func (s *SignalingServer) BuildInstructions(idosoID int64) string {
 	// 📝 DEBUG EXAUSTIVO DOS DADOS RECUPERADOS
 	log.Printf("📋 [DADOS PACIENTE] Nome: %s, Idade: %d", nome, idade)
 	log.Printf("   💊 Meds Relacionais: %d encontrados", len(medsList))
-	log.Printf("   🥼 Condições: %s", getString(condicoesMedicas, "Nenhuma"))
+	log.Printf("   🥼 Condições: %s", strDefault(condicoesMedicas, "Nenhuma"))
 
 	// 2. Buscar Persona Ativa e seu Template
 	var template string
@@ -1897,8 +1889,16 @@ func (s *SignalingServer) BuildInstructions(idosoID int64) string {
 
 	// Fallback: Buscar template base se persona não disponível
 	if template == "" {
-		templateQuery := `SELECT template FROM prompt_templates WHERE nome = 'eva_base_v2' AND ativo = true LIMIT 1`
-		if err := db.QueryRow(templateQuery).Scan(&template); err != nil {
+		tplParams := map[string]interface{}{
+			"nome":  "eva_base_v2",
+			"ativo": true,
+		}
+		tplResults, tplErr := db.QueryByLabel(ctx, "prompt_templates",
+			" AND n.nome = $nome AND n.ativo = $ativo", tplParams, 1)
+		if tplErr == nil && len(tplResults) > 0 {
+			template = database.GetString(tplResults[0], "template")
+		}
+		if template == "" {
 			log.Printf("⚠️ Template não encontrado, usando padrão.")
 			template = `Você é a EVA, assistente de saúde virtual para {{nome_idoso}}.`
 		}
@@ -1908,14 +1908,14 @@ func (s *SignalingServer) BuildInstructions(idosoID int64) string {
 	dossier := fmt.Sprintf("\n\n📋 --- FICHA COMPLETA DO PACIENTE (INFORMAÇÃO CONFIDENCIAL) ---\n")
 	dossier += fmt.Sprintf("NOME: %s\n", nome)
 	dossier += fmt.Sprintf("IDADE: %d anos\n", idade)
-	dossier += fmt.Sprintf("ENDEREÇO: %s\n", getString(endereco, "Não completado"))
+	dossier += fmt.Sprintf("ENDEREÇO: %s\n", strDefault(endereco, "Não completado"))
 
 	dossier += "\n🥼 --- SAÚDE E CONDIÇÕES ---\n"
 	dossier += fmt.Sprintf("Nível Cognitivo: %s\n", nivelCognitivo)
 	dossier += fmt.Sprintf("Mobilidade: %s\n", mobilidade)
 	dossier += fmt.Sprintf("Limitações Auditivas: %v (Usa Aparelho: %v)\n", limitacoesAuditivas, usaAparelhoAuditivo)
-	dossier += fmt.Sprintf("Limitações Visuais: %s\n", getString(limitacoesVisuais, "Nenhuma"))
-	dossier += fmt.Sprintf("Condições Médicas: %s\n", getString(condicoesMedicas, "Nenhuma registrada"))
+	dossier += fmt.Sprintf("Limitações Visuais: %s\n", strDefault(limitacoesVisuais, "Nenhuma"))
+	dossier += fmt.Sprintf("Condições Médicas: %s\n", strDefault(condicoesMedicas, "Nenhuma registrada"))
 
 	dossier += "\n💊 --- MEDICAMENTOS (FONTE OFICIAL) ---\n"
 	if len(medsList) > 0 {
@@ -1926,13 +1926,13 @@ func (s *SignalingServer) BuildInstructions(idosoID int64) string {
 		}
 
 		// Fallback visual para os campos legados, caso existam e não estejam na lista (opcional, mas bom para debug)
-		oldMeds := getString(medicamentosAtuais, "")
+		oldMeds := medicamentosAtuais
 		if oldMeds != "" {
 			dossier += fmt.Sprintf("\n(Nota de cadastro antigo: %s)\n", oldMeds)
 		}
 	} else {
 		// Fallback para campos de texto antigos se a tabela relacional estiver vazia
-		medsA := getString(medicamentosAtuais, "")
+		medsA := medicamentosAtuais
 		if medsA == "" {
 			dossier += "Nenhum medicamento registrado no sistema.\n"
 		} else {
@@ -1961,12 +1961,12 @@ func (s *SignalingServer) BuildInstructions(idosoID int64) string {
 				tipoLabel = c.Tipo
 			}
 			telefone := "não informado"
-			if c.Telefone.Valid && c.Telefone.String != "" {
-				telefone = c.Telefone.String
+			if c.Telefone != "" {
+				telefone = c.Telefone
 			}
 			cpfInfo := ""
-			if c.CPF.Valid && c.CPF.String != "" {
-				cpfInfo = fmt.Sprintf(" [CPF: %s]", c.CPF.String)
+			if c.CPF != "" {
+				cpfInfo = fmt.Sprintf(" [CPF: %s]", c.CPF)
 			}
 			dossier += fmt.Sprintf("- %s (%s): Tel %s%s\n", c.Nome, tipoLabel, telefone, cpfInfo)
 		}
@@ -1977,13 +1977,13 @@ func (s *SignalingServer) BuildInstructions(idosoID int64) string {
 		dossier += "- Se for emergência, use call_central_webrtc\n"
 	} else {
 		dossier += "Nenhum contato de apoio cadastrado.\n"
-		dossier += fmt.Sprintf("Familiar (legado): %s\n", getString(familiarPrincipal, "Não informado"))
-		dossier += fmt.Sprintf("Médico (legado): %s\n", getString(medicoResponsavel, "Não informado"))
+		dossier += fmt.Sprintf("Familiar (legado): %s\n", strDefault(familiarPrincipal, "Não informado"))
+		dossier += fmt.Sprintf("Médico (legado): %s\n", strDefault(medicoResponsavel, "Não informado"))
 	}
 
 	dossier += "\n📝 --- OUTRAS NOTAS ---\n"
-	dossier += fmt.Sprintf("Notas Gerais: %s\n", getString(notasGerais, ""))
-	dossier += fmt.Sprintf("Preferência Horário: %s\n", getString(preferenciaHorario, "Indiferente"))
+	dossier += fmt.Sprintf("Notas Gerais: %s\n", notasGerais)
+	dossier += fmt.Sprintf("Preferência Horário: %s\n", strDefault(preferenciaHorario, "Indiferente"))
 	dossier += fmt.Sprintf("Ambiente Ruidoso: %v\n", ambienteRuidoso)
 	dossier += fmt.Sprintf("Tom de Voz Ideal: %s\n", tomVoz)
 	dossier += "--------------------------------------------------------\n"
@@ -1999,8 +1999,8 @@ func (s *SignalingServer) BuildInstructions(idosoID int64) string {
 		"{{.NivelCognitivo}}":   nivelCognitivo,
 		"{{tom_voz}}":           tomVoz,
 		"{{.TomVoz}}":           tomVoz,
-		"{{condicoes_medicas}}": sanitizeMedicalConditions(getString(condicoesMedicas, "")),
-		"{{.CondicoesMedicas}}": sanitizeMedicalConditions(getString(condicoesMedicas, "")),
+		"{{condicoes_medicas}}": sanitizeMedicalConditions(condicoesMedicas),
+		"{{.CondicoesMedicas}}": sanitizeMedicalConditions(condicoesMedicas),
 	}
 
 	instructions := template + "\n\n" + dossier
@@ -2011,7 +2011,7 @@ func (s *SignalingServer) BuildInstructions(idosoID int64) string {
 	// Injeta a lista formatada ou o legado para medicamentos
 	medsString := strings.Join(medsList, ", ")
 	if medsString == "" {
-		medsString = getString(medicamentosAtuais, "Nenhum")
+		medsString = strDefault(medicamentosAtuais, "Nenhum")
 	}
 	instructions = strings.ReplaceAll(instructions, "{{medicamentos}}", medsString)
 	instructions = strings.ReplaceAll(instructions, "{{.MedicamentosAtuais}}", medsString)
@@ -2058,7 +2058,7 @@ func (s *SignalingServer) BuildInstructions(idosoID int64) string {
 	1. Verifique SILENCIOSAMENTE em sua base de conhecimento se há interação perigosa com a lista de "MEDICAMENTOS (FONTE OFICIAL)" mostrada acima.
 	2. Se houver qualquer risco, ALERTE IMEDIATAMENTE o paciente de forma calma mas firme.
 	3. Recomende que ele NÃO tome nada sem falar com o médico responsável: %s.
-	`, getString(medicoResponsavel, "médico cadastrado"))
+	`, strDefault(medicoResponsavel, "médico cadastrado"))
 
 	// 6. Zeta Story Engine (Gap 2)
 	var storySection string
@@ -2086,10 +2086,10 @@ INSTRUÇÃO: %s
 	return finalInstructions
 }
 
-// Helper seguro para NullString
-func getString(ns sql.NullString, def string) string {
-	if ns.Valid {
-		return ns.String
+// strDefault retorna o valor ou o default se vazio
+func strDefault(s, def string) string {
+	if s != "" {
+		return s
 	}
 	return def
 }
@@ -2157,7 +2157,7 @@ type Idoso struct {
 	ID             int64
 	Nome           string
 	CPF            string
-	DeviceToken    sql.NullString
+	DeviceToken    string
 	Ativo          bool
 	NivelCognitivo string
 	VoiceName      string // ✅ NOVO: Preferência de voz
@@ -2165,41 +2165,34 @@ type Idoso struct {
 
 // 🧠 GetRecentMemories recupera as últimas conversas para contexto
 func (s *SignalingServer) GetRecentMemories(idosoID int64) []string {
-	// Limite de 10 conversas ou o que couber (com 1M tokens, 10 é tranquilo)
-	query := `
-		SELECT inicio_chamada, transcricao_completa, analise_gemini->>'summary' as resumo
-		FROM historico_ligacoes
-		WHERE idoso_id = $1 
-		  AND fim_chamada IS NOT NULL
-		  AND transcricao_completa IS NOT NULL
-		ORDER BY inicio_chamada DESC
-		LIMIT 10
-	`
-
-	rows, err := s.db.Query(query, idosoID)
+	ctx := context.Background()
+	rows, err := s.db.QueryByLabel(ctx, "historico_ligacoes",
+		" AND n.idoso_id = $idoso_id",
+		map[string]interface{}{"idoso_id": idosoID}, 0)
 	if err != nil {
 		log.Printf("⚠️ Erro ao buscar memórias: %v", err)
 		return []string{}
 	}
-	defer rows.Close()
 
 	var tempMemories []string
 
-	for rows.Next() {
-		var inicio time.Time
-		var transcricao string
-		var resumo sql.NullString
-
-		if err := rows.Scan(&inicio, &transcricao, &resumo); err != nil {
+	for _, row := range rows {
+		fimChamada := database.GetString(row, "fim_chamada")
+		transcricao := database.GetString(row, "transcricao_completa")
+		if fimChamada == "" || transcricao == "" {
 			continue
 		}
 
-		// Preferir transcrição completa (Narrativa Completa)
+		inicio := database.GetTime(row, "inicio_chamada")
 		content := transcricao
 
 		dataStr := inicio.Format("02/01/2006 15:04")
 		memoryEntry := fmt.Sprintf("DATA: %s\nCONVERSA:\n%s", dataStr, content)
 		tempMemories = append(tempMemories, memoryEntry)
+
+		if len(tempMemories) >= 10 {
+			break
+		}
 	}
 
 	// Inverter para cronológico (Antigo -> Novo)

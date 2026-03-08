@@ -5,20 +5,21 @@ package workers
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"time"
+
+	"eva/internal/brainstem/database"
 )
 
 // PatternWorker detecta padrões comportamentais
 type PatternWorker struct {
-	db *sql.DB
+	db *database.DB
 }
 
 // NewPatternWorker cria um novo worker de padrões
-func NewPatternWorker(db *sql.DB) *PatternWorker {
+func NewPatternWorker(db *database.DB) *PatternWorker {
 	return &PatternWorker{db: db}
 }
 
@@ -34,7 +35,7 @@ func (pw *PatternWorker) Interval() time.Duration {
 
 // Run executa a detecção de padrões
 func (pw *PatternWorker) Run(ctx context.Context) error {
-	log.Println("🔍 Iniciando detecção de padrões comportamentais...")
+	log.Println("Iniciando deteccao de padroes comportamentais...")
 
 	// Buscar todos os idosos ativos
 	idosos, err := pw.getActiveIdosos(ctx)
@@ -42,7 +43,7 @@ func (pw *PatternWorker) Run(ctx context.Context) error {
 		return fmt.Errorf("erro ao buscar idosos: %w", err)
 	}
 
-	log.Printf("📊 Analisando padrões para %d idoso(s)...", len(idosos))
+	log.Printf("Analisando padroes para %d idoso(s)...", len(idosos))
 
 	totalPadroes := 0
 	for _, idosoID := range idosos {
@@ -68,27 +69,25 @@ func (pw *PatternWorker) Run(ctx context.Context) error {
 		}
 	}
 
-	log.Printf("✅ Detecção concluída: %d padrão(ões) detectado(s)", totalPadroes)
+	log.Printf("Deteccao concluida: %d padrao(oes) detectado(s)", totalPadroes)
 	return nil
 }
 
 // getActiveIdosos retorna lista de idosos ativos
 func (pw *PatternWorker) getActiveIdosos(ctx context.Context) ([]int, error) {
-	query := `SELECT id FROM idosos WHERE ativo = true`
-
-	rows, err := pw.db.QueryContext(ctx, query)
+	rows, err := pw.db.QueryByLabel(ctx, "idosos",
+		" AND n.ativo = $ativo",
+		map[string]interface{}{"ativo": true}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	var idosos []int
-	for rows.Next() {
-		var id int
-		if err := rows.Scan(&id); err != nil {
-			continue
+	for _, m := range rows {
+		id := int(database.GetInt64(m, "id"))
+		if id > 0 {
+			idosos = append(idosos, id)
 		}
-		idosos = append(idosos, id)
 	}
 
 	return idosos, nil
@@ -106,34 +105,25 @@ type BehaviorPattern struct {
 
 // detectSleepPattern detecta padrões de sono
 func (pw *PatternWorker) detectSleepPattern(ctx context.Context, idosoID int) (*BehaviorPattern, error) {
-	query := `
-		SELECT 
-			EXTRACT(HOUR FROM inicio_chamada) as hora,
-			COUNT(*) as total
-		FROM historico_ligacoes
-		WHERE idoso_id = $1
-		  AND inicio_chamada > NOW() - INTERVAL '30 days'
-		  AND tarefa_concluida = true
-		GROUP BY EXTRACT(HOUR FROM inicio_chamada)
-		ORDER BY hora
-	`
+	thirtyDaysAgo := time.Now().AddDate(0, 0, -30).UTC().Format(time.RFC3339)
 
-	rows, err := pw.db.QueryContext(ctx, query, idosoID)
+	rows, err := pw.db.QueryByLabel(ctx, "historico_ligacoes",
+		" AND n.idoso_id = $idoso AND n.inicio_chamada > $since AND n.tarefa_concluida = $concluida",
+		map[string]interface{}{"idoso": idosoID, "since": thirtyDaysAgo, "concluida": true}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	horariosAtivos := make(map[int]int)
 	totalLigacoes := 0
 
-	for rows.Next() {
-		var hora, total int
-		if err := rows.Scan(&hora, &total); err != nil {
-			continue
+	for _, m := range rows {
+		t := database.GetTime(m, "inicio_chamada")
+		if !t.IsZero() {
+			hora := t.Hour()
+			horariosAtivos[hora]++
+			totalLigacoes++
 		}
-		horariosAtivos[hora] = total
-		totalLigacoes += total
 	}
 
 	if totalLigacoes < 10 {
@@ -157,7 +147,7 @@ func (pw *PatternWorker) detectSleepPattern(ctx context.Context, idosoID int) (*
 		pattern := &BehaviorPattern{
 			IdosoID:    idosoID,
 			TipoPadrao: "horario_sono",
-			Descricao:  fmt.Sprintf("Padrão de sono detectado: %02d:00 - %02d:00", inicio, fim),
+			Descricao:  fmt.Sprintf("Padrao de sono detectado: %02d:00 - %02d:00", inicio, fim),
 			Frequencia: "diario",
 			Confianca:  0.85,
 			DadosEstatisticos: map[string]interface{}{
@@ -177,31 +167,40 @@ func (pw *PatternWorker) detectSleepPattern(ctx context.Context, idosoID int) (*
 
 // detectMoodPattern detecta padrões de humor
 func (pw *PatternWorker) detectMoodPattern(ctx context.Context, idosoID int) (*BehaviorPattern, error) {
-	query := `
-		SELECT 
-			sentimento_geral,
-			COUNT(*) as total,
-			AVG(sentimento_intensidade) as intensidade_media
-		FROM historico_ligacoes
-		WHERE idoso_id = $1
-		  AND inicio_chamada > NOW() - INTERVAL '30 days'
-		  AND sentimento_geral IS NOT NULL
-		GROUP BY sentimento_geral
-		ORDER BY total DESC
-		LIMIT 1
-	`
+	thirtyDaysAgo := time.Now().AddDate(0, 0, -30).UTC().Format(time.RFC3339)
 
-	var sentimento string
-	var total int
-	var intensidadeMedia float64
-
-	err := pw.db.QueryRowContext(ctx, query, idosoID).Scan(&sentimento, &total, &intensidadeMedia)
+	rows, err := pw.db.QueryByLabel(ctx, "historico_ligacoes",
+		" AND n.idoso_id = $idoso AND n.inicio_chamada > $since",
+		map[string]interface{}{"idoso": idosoID, "since": thirtyDaysAgo}, 0)
 	if err != nil {
 		return nil, err
 	}
 
-	if total >= 10 {
-		confianca := float64(total) / 30.0
+	// Count sentimentos
+	sentimentoCounts := make(map[string]int)
+	sentimentoIntensidade := make(map[string]float64)
+
+	for _, m := range rows {
+		sentimento := database.GetString(m, "sentimento_geral")
+		if sentimento != "" {
+			sentimentoCounts[sentimento]++
+			sentimentoIntensidade[sentimento] += database.GetFloat64(m, "sentimento_intensidade")
+		}
+	}
+
+	// Find dominant sentiment
+	var bestSentimento string
+	var bestTotal int
+	for s, count := range sentimentoCounts {
+		if count > bestTotal {
+			bestTotal = count
+			bestSentimento = s
+		}
+	}
+
+	if bestTotal >= 10 {
+		intensidadeMedia := sentimentoIntensidade[bestSentimento] / float64(bestTotal)
+		confianca := float64(bestTotal) / 30.0
 		if confianca > 1.0 {
 			confianca = 1.0
 		}
@@ -209,12 +208,12 @@ func (pw *PatternWorker) detectMoodPattern(ctx context.Context, idosoID int) (*B
 		pattern := &BehaviorPattern{
 			IdosoID:    idosoID,
 			TipoPadrao: "humor_recorrente",
-			Descricao:  fmt.Sprintf("Humor predominante: %s (%d ocorrências em 30 dias)", sentimento, total),
+			Descricao:  fmt.Sprintf("Humor predominante: %s (%d ocorrencias em 30 dias)", bestSentimento, bestTotal),
 			Frequencia: "semanal",
 			Confianca:  confianca,
 			DadosEstatisticos: map[string]interface{}{
-				"sentimento_predominante": sentimento,
-				"ocorrencias":             total,
+				"sentimento_predominante": bestSentimento,
+				"ocorrencias":             bestTotal,
 				"intensidade_media":       intensidadeMedia,
 				"dias_analisados":         30,
 			},
@@ -228,87 +227,102 @@ func (pw *PatternWorker) detectMoodPattern(ctx context.Context, idosoID int) (*B
 
 // detectMedicationPattern detecta padrões de adesão à medicação
 func (pw *PatternWorker) detectMedicationPattern(ctx context.Context, idosoID int) (*BehaviorPattern, error) {
-	query := `
-		SELECT 
-			COUNT(*) as total_agendamentos,
-			COUNT(CASE WHEN medicamento_tomado = true THEN 1 END) as medicamentos_tomados
-		FROM agendamentos
-		WHERE idoso_id = $1
-		  AND tipo = 'lembrete_medicamento'
-		  AND data_hora_agendada > NOW() - INTERVAL '30 days'
-	`
+	thirtyDaysAgo := time.Now().AddDate(0, 0, -30).UTC().Format(time.RFC3339)
 
-	var totalAgendamentos, medicamentosTomados int
-
-	err := pw.db.QueryRowContext(ctx, query, idosoID).Scan(&totalAgendamentos, &medicamentosTomados)
+	rows, err := pw.db.QueryByLabel(ctx, "agendamentos",
+		" AND n.idoso_id = $idoso AND n.tipo = $tipo AND n.data_hora_agendada > $since",
+		map[string]interface{}{"idoso": idosoID, "tipo": "lembrete_medicamento", "since": thirtyDaysAgo}, 0)
 	if err != nil {
 		return nil, err
 	}
 
-	if totalAgendamentos >= 10 {
-		taxaAdesao := float64(medicamentosTomados) / float64(totalAgendamentos)
-
-		var descricao string
-		if taxaAdesao >= 0.9 {
-			descricao = fmt.Sprintf("Excelente adesão à medicação: %.0f%%", taxaAdesao*100)
-		} else if taxaAdesao >= 0.7 {
-			descricao = fmt.Sprintf("Boa adesão à medicação: %.0f%%", taxaAdesao*100)
-		} else if taxaAdesao >= 0.5 {
-			descricao = fmt.Sprintf("Adesão moderada à medicação: %.0f%%", taxaAdesao*100)
-		} else {
-			descricao = fmt.Sprintf("Baixa adesão à medicação: %.0f%% - ATENÇÃO", taxaAdesao*100)
-		}
-
-		pattern := &BehaviorPattern{
-			IdosoID:    idosoID,
-			TipoPadrao: "medicacao_adesao",
-			Descricao:  descricao,
-			Frequencia: "diario",
-			Confianca:  0.90,
-			DadosEstatisticos: map[string]interface{}{
-				"total_agendamentos":   totalAgendamentos,
-				"medicamentos_tomados": medicamentosTomados,
-				"taxa_adesao":          taxaAdesao,
-				"dias_analisados":      30,
-			},
-		}
-
-		return pattern, nil
+	totalAgendamentos := len(rows)
+	if totalAgendamentos < 10 {
+		return nil, nil
 	}
 
-	return nil, nil
+	medicamentosTomados := 0
+	for _, m := range rows {
+		if database.GetBool(m, "medicamento_tomado") {
+			medicamentosTomados++
+		}
+	}
+
+	taxaAdesao := float64(medicamentosTomados) / float64(totalAgendamentos)
+
+	var descricao string
+	if taxaAdesao >= 0.9 {
+		descricao = fmt.Sprintf("Excelente adesao a medicacao: %.0f%%", taxaAdesao*100)
+	} else if taxaAdesao >= 0.7 {
+		descricao = fmt.Sprintf("Boa adesao a medicacao: %.0f%%", taxaAdesao*100)
+	} else if taxaAdesao >= 0.5 {
+		descricao = fmt.Sprintf("Adesao moderada a medicacao: %.0f%%", taxaAdesao*100)
+	} else {
+		descricao = fmt.Sprintf("Baixa adesao a medicacao: %.0f%% - ATENCAO", taxaAdesao*100)
+	}
+
+	pattern := &BehaviorPattern{
+		IdosoID:    idosoID,
+		TipoPadrao: "medicacao_adesao",
+		Descricao:  descricao,
+		Frequencia: "diario",
+		Confianca:  0.90,
+		DadosEstatisticos: map[string]interface{}{
+			"total_agendamentos":   totalAgendamentos,
+			"medicamentos_tomados": medicamentosTomados,
+			"taxa_adesao":          taxaAdesao,
+			"dias_analisados":      30,
+		},
+	}
+
+	return pattern, nil
 }
 
 // savePattern salva padrão no banco
 func (pw *PatternWorker) savePattern(ctx context.Context, pattern *BehaviorPattern) error {
 	dadosJSON, _ := json.Marshal(pattern.DadosEstatisticos)
+	now := time.Now().UTC().Format(time.RFC3339)
 
-	query := `
-		INSERT INTO padroes_comportamento (
-			idoso_id, tipo_padrao, descricao, frequencia, 
-			confianca, dados_estatisticos
-		) VALUES ($1, $2, $3, $4, $5, $6)
-		ON CONFLICT (idoso_id, tipo_padrao) 
-		DO UPDATE SET 
-			descricao = EXCLUDED.descricao,
-			confianca = EXCLUDED.confianca,
-			dados_estatisticos = EXCLUDED.dados_estatisticos,
-			ultima_confirmacao = NOW(),
-			ocorrencias = padroes_comportamento.ocorrencias + 1,
-			atualizado_em = NOW()
-	`
+	// Try to find existing pattern (upsert on idoso_id + tipo_padrao)
+	existing, _ := pw.db.QueryByLabel(ctx, "padroes_comportamento",
+		" AND n.idoso_id = $idoso AND n.tipo_padrao = $tipo",
+		map[string]interface{}{"idoso": pattern.IdosoID, "tipo": pattern.TipoPadrao}, 1)
 
-	_, err := pw.db.ExecContext(ctx, query,
-		pattern.IdosoID,
-		pattern.TipoPadrao,
-		pattern.Descricao,
-		pattern.Frequencia,
-		pattern.Confianca,
-		dadosJSON,
-	)
+	if len(existing) > 0 {
+		// Update existing
+		ocorrencias := database.GetInt64(existing[0], "ocorrencias") + 1
+		err := pw.db.Update(ctx, "padroes_comportamento",
+			map[string]interface{}{"idoso_id": pattern.IdosoID, "tipo_padrao": pattern.TipoPadrao},
+			map[string]interface{}{
+				"descricao":           pattern.Descricao,
+				"confianca":           pattern.Confianca,
+				"dados_estatisticos":  string(dadosJSON),
+				"ultima_confirmacao":  now,
+				"ocorrencias":         ocorrencias,
+				"atualizado_em":       now,
+			})
+		if err == nil {
+			log.Printf("Padrao '%s' atualizado para idoso %d", pattern.TipoPadrao, pattern.IdosoID)
+		}
+		return err
+	}
+
+	// Insert new
+	_, err := pw.db.Insert(ctx, "padroes_comportamento", map[string]interface{}{
+		"idoso_id":           pattern.IdosoID,
+		"tipo_padrao":        pattern.TipoPadrao,
+		"descricao":          pattern.Descricao,
+		"frequencia":         pattern.Frequencia,
+		"confianca":          pattern.Confianca,
+		"dados_estatisticos": string(dadosJSON),
+		"ocorrencias":        int64(1),
+		"ultima_confirmacao": now,
+		"criado_em":          now,
+		"atualizado_em":      now,
+	})
 
 	if err == nil {
-		log.Printf("✅ Padrão '%s' salvo para idoso %d", pattern.TipoPadrao, pattern.IdosoID)
+		log.Printf("Padrao '%s' salvo para idoso %d", pattern.TipoPadrao, pattern.IdosoID)
 	}
 
 	return err

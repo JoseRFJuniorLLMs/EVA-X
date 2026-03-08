@@ -5,16 +5,17 @@ package knowledge
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
+
+	"eva/internal/brainstem/database"
 )
 
 // SelfKnowledgeService permite a EVA consultar conhecimento sobre si mesma
 type SelfKnowledgeService struct {
-	db *sql.DB
+	db *database.DB
 }
 
 // KnowledgeEntry representa um registro de conhecimento
@@ -33,7 +34,7 @@ type KnowledgeEntry struct {
 }
 
 // NewSelfKnowledgeService cria o serviço de autoconhecimento
-func NewSelfKnowledgeService(db *sql.DB) *SelfKnowledgeService {
+func NewSelfKnowledgeService(db *database.DB) *SelfKnowledgeService {
 	return &SelfKnowledgeService{db: db}
 }
 
@@ -43,91 +44,96 @@ func (s *SelfKnowledgeService) SearchByQuery(ctx context.Context, query string, 
 		limit = 5
 	}
 
-	// Busca por título, summary ou tags
-	sqlQuery := `
-		SELECT
-			id, knowledge_type, knowledge_key, title, summary,
-			detailed_content, COALESCE(code_location, ''),
-			COALESCE(parent_key, ''), COALESCE(related_keys, '[]'),
-			COALESCE(tags, '[]'), importance
-		FROM eva_self_knowledge
-		WHERE
-			title ILIKE $1 OR
-			summary ILIKE $1 OR
-			detailed_content ILIKE $1 OR
-			tags::text ILIKE $1
-		ORDER BY importance DESC
-		LIMIT $2
-	`
-
-	searchPattern := "%" + query + "%"
-	rows, err := s.db.QueryContext(ctx, sqlQuery, searchPattern, limit)
+	// Buscar todos os registros de self_knowledge e filtrar localmente
+	rows, err := s.db.QueryByLabel(ctx, "EvaSelfKnowledge", "", nil, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to search knowledge: %w", err)
 	}
-	defer rows.Close()
 
-	return s.scanEntries(rows)
+	searchLower := strings.ToLower(query)
+	var entries []*KnowledgeEntry
+
+	for _, row := range rows {
+		title := database.GetString(row, "title")
+		summary := database.GetString(row, "summary")
+		detailedContent := database.GetString(row, "detailed_content")
+		tagsStr := database.GetString(row, "tags")
+
+		// Check if any field contains the search query (case-insensitive)
+		if strings.Contains(strings.ToLower(title), searchLower) ||
+			strings.Contains(strings.ToLower(summary), searchLower) ||
+			strings.Contains(strings.ToLower(detailedContent), searchLower) ||
+			strings.Contains(strings.ToLower(tagsStr), searchLower) {
+
+			entry := s.rowToEntry(row)
+			entries = append(entries, entry)
+
+			if len(entries) >= limit {
+				break
+			}
+		}
+	}
+
+	// Sort by importance (descending) - entries are already filtered
+	sortEntriesByImportance(entries)
+
+	if len(entries) > limit {
+		entries = entries[:limit]
+	}
+
+	return entries, nil
 }
 
 // GetByKey busca conhecimento por chave específica
 func (s *SelfKnowledgeService) GetByKey(ctx context.Context, key string) (*KnowledgeEntry, error) {
-	query := `
-		SELECT
-			id, knowledge_type, knowledge_key, title, summary,
-			detailed_content, COALESCE(code_location, ''),
-			COALESCE(parent_key, ''), COALESCE(related_keys, '[]'),
-			COALESCE(tags, '[]'), importance
-		FROM eva_self_knowledge
-		WHERE knowledge_key = $1
-	`
+	rows, err := s.db.QueryByLabel(ctx, "EvaSelfKnowledge",
+		" AND n.knowledge_key = $knowledge_key",
+		map[string]interface{}{"knowledge_key": key}, 1)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get knowledge by key: %w", err)
+	}
 
-	row := s.db.QueryRowContext(ctx, query, key)
-	return s.scanEntry(row)
+	if len(rows) == 0 {
+		return nil, nil
+	}
+
+	return s.rowToEntry(rows[0]), nil
 }
 
 // GetByType busca conhecimento por tipo
 func (s *SelfKnowledgeService) GetByType(ctx context.Context, knowledgeType string) ([]*KnowledgeEntry, error) {
-	query := `
-		SELECT
-			id, knowledge_type, knowledge_key, title, summary,
-			detailed_content, COALESCE(code_location, ''),
-			COALESCE(parent_key, ''), COALESCE(related_keys, '[]'),
-			COALESCE(tags, '[]'), importance
-		FROM eva_self_knowledge
-		WHERE knowledge_type = $1
-		ORDER BY importance DESC
-	`
-
-	rows, err := s.db.QueryContext(ctx, query, knowledgeType)
+	rows, err := s.db.QueryByLabel(ctx, "EvaSelfKnowledge",
+		" AND n.knowledge_type = $knowledge_type",
+		map[string]interface{}{"knowledge_type": knowledgeType}, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get knowledge by type: %w", err)
 	}
-	defer rows.Close()
 
-	return s.scanEntries(rows)
+	var entries []*KnowledgeEntry
+	for _, row := range rows {
+		entries = append(entries, s.rowToEntry(row))
+	}
+
+	sortEntriesByImportance(entries)
+	return entries, nil
 }
 
 // GetChildren busca filhos de uma entrada
 func (s *SelfKnowledgeService) GetChildren(ctx context.Context, parentKey string) ([]*KnowledgeEntry, error) {
-	query := `
-		SELECT
-			id, knowledge_type, knowledge_key, title, summary,
-			detailed_content, COALESCE(code_location, ''),
-			COALESCE(parent_key, ''), COALESCE(related_keys, '[]'),
-			COALESCE(tags, '[]'), importance
-		FROM eva_self_knowledge
-		WHERE parent_key = $1
-		ORDER BY importance DESC
-	`
-
-	rows, err := s.db.QueryContext(ctx, query, parentKey)
+	rows, err := s.db.QueryByLabel(ctx, "EvaSelfKnowledge",
+		" AND n.parent_key = $parent_key",
+		map[string]interface{}{"parent_key": parentKey}, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get children: %w", err)
 	}
-	defer rows.Close()
 
-	return s.scanEntries(rows)
+	var entries []*KnowledgeEntry
+	for _, row := range rows {
+		entries = append(entries, s.rowToEntry(row))
+	}
+
+	sortEntriesByImportance(entries)
+	return entries, nil
 }
 
 // GetArchitectureOverview retorna visão geral da arquitetura
@@ -233,68 +239,74 @@ func (s *SelfKnowledgeService) IsCreatorAsking(query string) bool {
 	return false
 }
 
-// Helper: scan múltiplas entradas
-func (s *SelfKnowledgeService) scanEntries(rows *sql.Rows) ([]*KnowledgeEntry, error) {
-	var entries []*KnowledgeEntry
-
-	for rows.Next() {
-		entry := &KnowledgeEntry{}
-		var relatedJSON, tagsJSON []byte
-
-		err := rows.Scan(
-			&entry.ID, &entry.KnowledgeType, &entry.KnowledgeKey,
-			&entry.Title, &entry.Summary, &entry.DetailedContent,
-			&entry.CodeLocation, &entry.ParentKey, &relatedJSON,
-			&tagsJSON, &entry.Importance,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan entry: %w", err)
-		}
-
-		json.Unmarshal(relatedJSON, &entry.RelatedKeys)
-		json.Unmarshal(tagsJSON, &entry.Tags)
-
-		entries = append(entries, entry)
+// rowToEntry converts a NietzscheDB row to a KnowledgeEntry
+func (s *SelfKnowledgeService) rowToEntry(row map[string]interface{}) *KnowledgeEntry {
+	entry := &KnowledgeEntry{
+		ID:              database.GetInt64(row, "pg_id"),
+		KnowledgeType:   database.GetString(row, "knowledge_type"),
+		KnowledgeKey:    database.GetString(row, "knowledge_key"),
+		Title:           database.GetString(row, "title"),
+		Summary:         database.GetString(row, "summary"),
+		DetailedContent: database.GetString(row, "detailed_content"),
+		CodeLocation:    database.GetString(row, "code_location"),
+		ParentKey:       database.GetString(row, "parent_key"),
+		Importance:      int(database.GetInt64(row, "importance")),
 	}
 
-	return entries, rows.Err()
+	if entry.ID == 0 {
+		entry.ID = database.GetInt64(row, "id")
+	}
+
+	// Parse JSON arrays for related_keys and tags
+	relatedStr := database.GetString(row, "related_keys")
+	if relatedStr != "" {
+		json.Unmarshal([]byte(relatedStr), &entry.RelatedKeys)
+	}
+
+	tagsStr := database.GetString(row, "tags")
+	if tagsStr != "" {
+		json.Unmarshal([]byte(tagsStr), &entry.Tags)
+	}
+
+	return entry
 }
 
-// Helper: scan uma entrada
-func (s *SelfKnowledgeService) scanEntry(row *sql.Row) (*KnowledgeEntry, error) {
-	entry := &KnowledgeEntry{}
-	var relatedJSON, tagsJSON []byte
-
-	err := row.Scan(
-		&entry.ID, &entry.KnowledgeType, &entry.KnowledgeKey,
-		&entry.Title, &entry.Summary, &entry.DetailedContent,
-		&entry.CodeLocation, &entry.ParentKey, &relatedJSON,
-		&tagsJSON, &entry.Importance,
-	)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
+// sortEntriesByImportance sorts entries by importance descending
+func sortEntriesByImportance(entries []*KnowledgeEntry) {
+	for i := 0; i < len(entries); i++ {
+		for j := i + 1; j < len(entries); j++ {
+			if entries[j].Importance > entries[i].Importance {
+				entries[i], entries[j] = entries[j], entries[i]
+			}
 		}
-		return nil, fmt.Errorf("failed to scan entry: %w", err)
 	}
-
-	json.Unmarshal(relatedJSON, &entry.RelatedKeys)
-	json.Unmarshal(tagsJSON, &entry.Tags)
-
-	return entry, nil
 }
 
 // LogCreatorQuery registra consulta do criador sobre arquitetura
 func (s *SelfKnowledgeService) LogCreatorQuery(ctx context.Context) error {
-	query := `
-		UPDATE creator_knowledge_access
-		SET last_architecture_query = NOW(),
-		    total_architecture_queries = total_architecture_queries + 1
-		WHERE creator_cpf = '64525430249'
-	`
-	_, err := s.db.ExecContext(ctx, query)
+	// Update creator knowledge access in NietzscheDB
+	err := s.db.Update(ctx, "CreatorKnowledgeAccess",
+		map[string]interface{}{"creator_cpf": "64525430249"},
+		map[string]interface{}{
+			"last_architecture_query":    fmt.Sprintf("%v", strings.Replace(fmt.Sprintf("%v", ctx), " ", "", -1)),
+			"total_architecture_queries": "increment", // Note: NietzscheDB doesn't support increment natively
+		})
 	if err != nil {
-		log.Printf("⚠️ [SELF-KNOWLEDGE] Erro ao registrar consulta do criador: %v", err)
+		// Fallback: try to get current value and update
+		rows, qerr := s.db.QueryByLabel(ctx, "CreatorKnowledgeAccess",
+			" AND n.creator_cpf = $cpf",
+			map[string]interface{}{"cpf": "64525430249"}, 1)
+		if qerr == nil && len(rows) > 0 {
+			currentCount := database.GetInt64(rows[0], "total_architecture_queries")
+			err = s.db.Update(ctx, "CreatorKnowledgeAccess",
+				map[string]interface{}{"creator_cpf": "64525430249"},
+				map[string]interface{}{
+					"total_architecture_queries": currentCount + 1,
+				})
+		}
+		if err != nil {
+			log.Printf("⚠️ [SELF-KNOWLEDGE] Erro ao registrar consulta do criador: %v", err)
+		}
 	}
 	return err
 }

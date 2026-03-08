@@ -7,8 +7,10 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
+	"eva/internal/brainstem/database"
 	"eva/internal/motor/calendar"
 	"eva/internal/motor/drive"
 	"eva/internal/motor/gmail"
@@ -163,12 +165,16 @@ func (h *ToolsHandler) handlePlayMusic(idosoID int64, args map[string]interface{
 
 	// Tentar buscar via API se tiver token
 	go func() {
-		if h.db == nil || h.db.Conn == nil {
+		if h.db == nil {
 			return
 		}
-		// Buscar token Spotify do usuário (se existir)
+		// Buscar token Spotify do usuario (se existir)
+		ctx := context.Background()
+		idosoRow, err := h.db.GetNodeByID(ctx, "idosos", idosoID)
 		var spotifyToken string
-		h.db.Conn.QueryRow("SELECT spotify_access_token FROM idosos WHERE id = $1", idosoID).Scan(&spotifyToken)
+		if err == nil && idosoRow != nil {
+			spotifyToken = database.GetString(idosoRow, "spotify_access_token")
+		}
 
 		if spotifyToken != "" {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -210,14 +216,30 @@ func (h *ToolsHandler) handleSendWhatsApp(idosoID int64, args map[string]interfa
 	contactName, _ := args["contact_name"].(string)
 
 	if to == "" && contactName != "" {
-		// Buscar número pelo nome do contato
-		var phone string
-		err := h.db.Conn.QueryRow(
-			"SELECT telefone FROM cuidadores c JOIN cuidador_idoso ci ON c.id = ci.cuidador_id WHERE ci.idoso_id = $1 AND LOWER(c.nome) LIKE LOWER($2) LIMIT 1",
-			idosoID, "%"+contactName+"%",
-		).Scan(&phone)
-		if err == nil && phone != "" {
-			to = phone
+		// Buscar numero pelo nome do contato via NietzscheDB
+		ctx := context.Background()
+		// First find cuidador_idoso links for this idoso
+		links, _ := h.db.QueryByLabel(ctx, "cuidador_idoso",
+			" AND n.idoso_id = $iid",
+			map[string]interface{}{"iid": idosoID}, 0)
+		lowerName := strings.ToLower(contactName)
+		for _, link := range links {
+			cuidadorID := database.GetInt64(link, "cuidador_id")
+			if cuidadorID == 0 {
+				continue
+			}
+			cuidador, err := h.db.GetNodeByID(ctx, "cuidadores", cuidadorID)
+			if err != nil || cuidador == nil {
+				continue
+			}
+			nome := database.GetString(cuidador, "nome")
+			if strings.Contains(strings.ToLower(nome), lowerName) {
+				phone := database.GetString(cuidador, "telefone")
+				if phone != "" {
+					to = phone
+					break
+				}
+			}
 		}
 	}
 

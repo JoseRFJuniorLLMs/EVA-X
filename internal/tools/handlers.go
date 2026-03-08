@@ -365,20 +365,6 @@ func (h *ToolsHandler) ExecuteTool(name string, args map[string]interface{}, ido
 		}, nil
 	}
 
-	// Guard: tools that need h.db.Conn (legacy PostgreSQL)
-	needsDBConn := map[string]bool{
-		"alert_family": true, "confirm_medication": true, "pending_schedule": true,
-		"confirm_schedule": true, "schedule_appointment": true,
-		"get_vitals": true, "get_agendamentos": true, "scan_medication_visual": true,
-	}
-	if needsDBConn[name] && (h.db == nil || h.db.Conn == nil) {
-		return map[string]interface{}{
-			"status":  "degraded",
-			"error":   "PostgreSQL indisponivel — funcionalidade desabilitada",
-			"message": "Esta funcao requer PostgreSQL que foi removido. Migre para NietzscheDB.",
-		}, nil
-	}
-
 	switch name {
 	case "alert_family":
 		reason, _ := args["reason"].(string)
@@ -386,7 +372,7 @@ func (h *ToolsHandler) ExecuteTool(name string, args map[string]interface{}, ido
 		if severity == "" {
 			severity = "alta"
 		}
-		err := actions.AlertFamilyWithSeverity(h.db.Conn, h.pushService, h.emailService, idosoID, reason, severity)
+		err := actions.AlertFamilyWithSeverity(h.db, h.pushService, h.emailService, idosoID, reason, severity)
 		if err != nil {
 			return map[string]interface{}{"error": err.Error()}, nil
 		}
@@ -409,10 +395,13 @@ func (h *ToolsHandler) ExecuteTool(name string, args map[string]interface{}, ido
 					return
 				}
 
-				// Buscar nome do idoso
+				// Buscar nome do idoso via NietzscheDB
 				var elderName string
-				if h.db != nil && h.db.Conn != nil {
-					h.db.Conn.QueryRow("SELECT nome FROM idosos WHERE id = $1", eid).Scan(&elderName)
+				if h.db != nil {
+					m, mErr := h.db.GetNodeByID(ctx, "idosos", eid)
+					if mErr == nil && m != nil {
+						elderName = database.GetString(m, "nome")
+					}
 				}
 				if elderName == "" {
 					elderName = fmt.Sprintf("Paciente %d", eid)
@@ -431,7 +420,7 @@ func (h *ToolsHandler) ExecuteTool(name string, args map[string]interface{}, ido
 
 	case "confirm_medication":
 		medicationName, _ := args["medication_name"].(string)
-		err := actions.ConfirmMedication(h.db.Conn, h.pushService, idosoID, medicationName)
+		err := actions.ConfirmMedication(h.db, h.pushService, idosoID, medicationName)
 		if err != nil {
 			return map[string]interface{}{"error": err.Error()}, nil
 		}
@@ -445,7 +434,7 @@ func (h *ToolsHandler) ExecuteTool(name string, args map[string]interface{}, ido
 
 		// 🛡️ SAFETY CHECK: Verificar interações medicamentosas ANTES de agendar
 		if tipo == "medicamento" || tipo == "remedio" || tipo == "medication" {
-			interacoes, err := actions.CheckMedicationInteractions(h.db.Conn, idosoID, description)
+			interacoes, err := actions.CheckMedicationInteractions(h.db, idosoID, description)
 			if err != nil {
 				log.Printf("⚠️ [SAFETY] Erro ao verificar interações: %v", err)
 				// Continua mesmo com erro - melhor agendar do que bloquear por falha técnica
@@ -457,7 +446,7 @@ func (h *ToolsHandler) ExecuteTool(name string, args map[string]interface{}, ido
 				// Notificar cuidador/família sobre tentativa bloqueada
 				alertMsg := fmt.Sprintf("EVA bloqueou agendamento de %s para idoso %d devido a interação medicamentosa: %s",
 					description, idosoID, interacoes[0].NivelPerigo)
-				go actions.AlertFamilyWithSeverity(h.db.Conn, h.pushService, h.emailService, idosoID, alertMsg, "alta")
+				go actions.AlertFamilyWithSeverity(h.db, h.pushService, h.emailService, idosoID, alertMsg, "alta")
 
 				return map[string]interface{}{
 					"status":       "bloqueado",
@@ -482,7 +471,7 @@ func (h *ToolsHandler) ExecuteTool(name string, args map[string]interface{}, ido
 	case "confirm_schedule":
 		// Confirma ou cancela agendamento pendente
 		confirmed, _ := args["confirmed"].(bool)
-		success, desc, err := actions.ConfirmPendingSchedule(h.db.Conn, idosoID, confirmed)
+		success, desc, err := actions.ConfirmPendingSchedule(h.db, idosoID, confirmed)
 		if err != nil {
 			return map[string]interface{}{"error": err.Error()}, nil
 		}
@@ -510,7 +499,7 @@ func (h *ToolsHandler) ExecuteTool(name string, args map[string]interface{}, ido
 		timestamp, _ := args["timestamp"].(string)
 		tipo, _ := args["type"].(string)
 		description, _ := args["description"].(string)
-		err := actions.ScheduleAppointment(h.db.Conn, idosoID, timestamp, tipo, description)
+		err := actions.ScheduleAppointment(h.db, idosoID, timestamp, tipo, description)
 		if err != nil {
 			return map[string]interface{}{"error": err.Error()}, nil
 		}
@@ -1403,18 +1392,17 @@ func (h *ToolsHandler) handleApplyPHQ9(idosoID int64, startAssessment bool) (map
 		}, nil
 	}
 
-	// Criar sessão de avaliação no banco
+	// Criar sessão de avaliação no NietzscheDB
 	sessionID := fmt.Sprintf("phq9-%d-%d", idosoID, time.Now().Unix())
 
-	query := `
-		INSERT INTO clinical_assessments (
-			patient_id, assessment_type, session_id, status, created_at
-		) VALUES ($1, 'PHQ-9', $2, 'in_progress', NOW())
-		RETURNING id
-	`
-
-	var assessmentID int64
-	err := h.db.Conn.QueryRow(query, idosoID, sessionID).Scan(&assessmentID)
+	ctx := context.Background()
+	assessmentID, err := h.db.Insert(ctx, "clinical_assessments", map[string]interface{}{
+		"patient_id":      idosoID,
+		"assessment_type": "PHQ-9",
+		"session_id":      sessionID,
+		"status":          "in_progress",
+		"created_at":      time.Now().Format(time.RFC3339),
+	})
 	if err != nil {
 		log.Printf("❌ [PHQ-9] Erro ao criar sessão: %v", err)
 		return map[string]interface{}{"error": "Erro ao iniciar avaliação"}, nil
@@ -1452,18 +1440,17 @@ func (h *ToolsHandler) handleApplyGAD7(idosoID int64, startAssessment bool) (map
 		}, nil
 	}
 
-	// Criar sessão de avaliação no banco
+	// Criar sessão de avaliação no NietzscheDB
 	sessionID := fmt.Sprintf("gad7-%d-%d", idosoID, time.Now().Unix())
 
-	query := `
-		INSERT INTO clinical_assessments (
-			patient_id, assessment_type, session_id, status, created_at
-		) VALUES ($1, 'GAD-7', $2, 'in_progress', NOW())
-		RETURNING id
-	`
-
-	var assessmentID int64
-	err := h.db.Conn.QueryRow(query, idosoID, sessionID).Scan(&assessmentID)
+	ctx := context.Background()
+	assessmentID, err := h.db.Insert(ctx, "clinical_assessments", map[string]interface{}{
+		"patient_id":      idosoID,
+		"assessment_type": "GAD-7",
+		"session_id":      sessionID,
+		"status":          "in_progress",
+		"created_at":      time.Now().Format(time.RFC3339),
+	})
 	if err != nil {
 		log.Printf("❌ [GAD-7] Erro ao criar sessão: %v", err)
 		return map[string]interface{}{"error": "Erro ao iniciar avaliação"}, nil
@@ -1501,18 +1488,19 @@ func (h *ToolsHandler) handleApplyCSSRS(idosoID int64, triggerPhrase string, sta
 		}, nil
 	}
 
-	// Criar sessão CRÍTICA de avaliação no banco
+	// Criar sessão CRÍTICA de avaliação no NietzscheDB
 	sessionID := fmt.Sprintf("cssrs-%d-%d", idosoID, time.Now().Unix())
 
-	query := `
-		INSERT INTO clinical_assessments (
-			patient_id, assessment_type, session_id, status, trigger_phrase, priority, created_at
-		) VALUES ($1, 'C-SSRS', $2, 'in_progress', $3, 'CRITICAL', NOW())
-		RETURNING id
-	`
-
-	var assessmentID int64
-	err := h.db.Conn.QueryRow(query, idosoID, sessionID, triggerPhrase).Scan(&assessmentID)
+	ctx := context.Background()
+	assessmentID, err := h.db.Insert(ctx, "clinical_assessments", map[string]interface{}{
+		"patient_id":      idosoID,
+		"assessment_type": "C-SSRS",
+		"session_id":      sessionID,
+		"status":          "in_progress",
+		"trigger_phrase":  triggerPhrase,
+		"priority":        "CRITICAL",
+		"created_at":      time.Now().Format(time.RFC3339),
+	})
 	if err != nil {
 		log.Printf("❌ [C-SSRS] Erro ao criar sessão: %v", err)
 		return map[string]interface{}{"error": "Erro ao iniciar avaliação"}, nil
@@ -1529,7 +1517,7 @@ func (h *ToolsHandler) handleApplyCSSRS(idosoID int64, triggerPhrase string, sta
 	}
 
 	// Também alertar via sistema de alertas
-	_ = actions.AlertFamilyWithSeverity(h.db.Conn, h.pushService, h.emailService, idosoID,
+	_ = actions.AlertFamilyWithSeverity(h.db, h.pushService, h.emailService, idosoID,
 		fmt.Sprintf("🚨 ALERTA CRÍTICO: Avaliação de risco suicida iniciada. Frase: '%s'", triggerPhrase),
 		"critica")
 
@@ -1555,7 +1543,7 @@ func (h *ToolsHandler) handleApplyCSSRS(idosoID int64, triggerPhrase string, sta
 	}, nil
 }
 
-// getCallTargetCPF busca o CPF do contato baseado no tipo de chamada
+// getCallTargetCPF busca o CPF do contato baseado no tipo de chamada (NietzscheDB)
 func (h *ToolsHandler) getCallTargetCPF(idosoID int64, callType string) (string, string, error) {
 	// Mapear tipo de chamada para tipo de cuidador
 	var tipoFilter string
@@ -1572,35 +1560,58 @@ func (h *ToolsHandler) getCallTargetCPF(idosoID int64, callType string) (string,
 		tipoFilter = "familiar" // fallback
 	}
 
-	// Query para buscar o contato com prioridade mais alta do tipo solicitado
-	query := `
-		SELECT c.cpf, c.nome
-		FROM cuidadores c
-		LEFT JOIN cuidador_idoso ci ON c.id = ci.cuidador_id AND ci.idoso_id = $1
-		WHERE (ci.idoso_id = $1 OR c.tipo = 'responsavel')
-		  AND (c.tipo = $2 OR ci.parentesco = $2 OR c.tipo ILIKE '%' || $2 || '%')
-		  AND c.cpf IS NOT NULL AND c.cpf != ''
-		ORDER BY COALESCE(ci.prioridade, 99) ASC
-		LIMIT 1
-	`
+	ctx := context.Background()
 
-	var cpf, nome string
-	err := h.db.Conn.QueryRow(query, idosoID, tipoFilter).Scan(&cpf, &nome)
+	// Query NietzscheDB: buscar todos os cuidadores
+	rows, err := h.db.QueryByLabel(ctx, "cuidadores", "", nil, 0)
 	if err != nil {
-		// Fallback: buscar qualquer contato ativo se não encontrar do tipo específico
-		fallbackQuery := `
-			SELECT c.cpf, c.nome
-			FROM cuidadores c
-			JOIN cuidador_idoso ci ON c.id = ci.cuidador_id
-			WHERE ci.idoso_id = $1
-			  AND c.cpf IS NOT NULL AND c.cpf != ''
-			ORDER BY ci.prioridade ASC
-			LIMIT 1
-		`
-		err = h.db.Conn.QueryRow(fallbackQuery, idosoID).Scan(&cpf, &nome)
-		if err != nil {
-			return "", "", fmt.Errorf("nenhum contato encontrado para %s", callType)
+		return "", "", fmt.Errorf("erro ao buscar cuidadores: %w", err)
+	}
+
+	// Filtrar em Go: buscar cuidador vinculado ao idoso com tipo matching
+	var cpf, nome string
+	var fallbackCPF, fallbackNome string
+	for _, row := range rows {
+		rowCPF := database.GetString(row, "cpf")
+		if rowCPF == "" {
+			continue
 		}
+		rowTipo := strings.ToLower(database.GetString(row, "tipo"))
+		rowParentesco := strings.ToLower(database.GetString(row, "parentesco"))
+		rowIdosoID := database.GetInt64(row, "idoso_id")
+		rowNome := database.GetString(row, "nome")
+
+		// Verificar se está vinculado ao idoso
+		if rowIdosoID == idosoID {
+			// Guardar como fallback (qualquer contato vinculado)
+			if fallbackCPF == "" {
+				fallbackCPF = rowCPF
+				fallbackNome = rowNome
+			}
+			// Verificar tipo match
+			if rowTipo == tipoFilter || rowParentesco == tipoFilter || strings.Contains(rowTipo, tipoFilter) {
+				cpf = rowCPF
+				nome = rowNome
+				break
+			}
+		} else if rowTipo == "responsavel" {
+			// Responsável global
+			if rowTipo == tipoFilter || rowParentesco == tipoFilter || strings.Contains(rowTipo, tipoFilter) {
+				if cpf == "" {
+					cpf = rowCPF
+					nome = rowNome
+				}
+			}
+		}
+	}
+
+	// Usar match direto ou fallback
+	if cpf == "" {
+		cpf = fallbackCPF
+		nome = fallbackNome
+	}
+	if cpf == "" {
+		return "", "", fmt.Errorf("nenhum contato encontrado para %s", callType)
 	}
 
 	maskedCPF := "***"
@@ -1625,140 +1636,111 @@ type AlarmInfo struct {
 	CreatedAt  string   `json:"created_at"`
 }
 
-// createAlarm cria um novo alarme no banco de dados
+// createAlarm cria um novo alarme no NietzscheDB
 func (h *ToolsHandler) createAlarm(idosoID int64, timeStr, label string, repeatDays []string) (int64, error) {
 	// Validar formato do horário
 	if _, err := time.Parse("15:04", timeStr); err != nil {
 		return 0, fmt.Errorf("horário inválido: use formato HH:MM (ex: 07:00)")
 	}
 
-	// Converter repeatDays para JSON
-	repeatDaysJSON := "{}"
-	if len(repeatDays) > 0 {
-		repeatDaysJSON = fmt.Sprintf("[\"%s\"]", joinStrings(repeatDays, "\",\""))
-	} else {
-		repeatDaysJSON = "[]"
-	}
-
-	// Inserir no banco
-	query := `
-		INSERT INTO alarmes (idoso_id, horario, descricao, dias_repeticao, ativo, criado_em)
-		VALUES ($1, $2, $3, $4::jsonb, true, NOW())
-		RETURNING id
-	`
-
-	var alarmID int64
-	err := h.db.Conn.QueryRow(query, idosoID, timeStr, label, repeatDaysJSON).Scan(&alarmID)
+	ctx := context.Background()
+	alarmID, err := h.db.Insert(ctx, "alarmes", map[string]interface{}{
+		"idoso_id":       idosoID,
+		"horario":        timeStr,
+		"descricao":      label,
+		"dias_repeticao": repeatDays,
+		"ativo":          true,
+		"criado_em":      time.Now().Format(time.RFC3339),
+	})
 	if err != nil {
-		// Se tabela não existe, criar
-		if err.Error() == "pq: relation \"alarmes\" does not exist" {
-			if createErr := h.createAlarmsTable(); createErr != nil {
-				return 0, createErr
-			}
-			// Tentar novamente
-			err = h.db.Conn.QueryRow(query, idosoID, timeStr, label, repeatDaysJSON).Scan(&alarmID)
-			if err != nil {
-				return 0, fmt.Errorf("erro ao criar alarme: %w", err)
-			}
-		} else {
-			return 0, fmt.Errorf("erro ao criar alarme: %w", err)
-		}
+		return 0, fmt.Errorf("erro ao criar alarme: %w", err)
 	}
 
 	log.Printf("⏰ [ALARM] Alarme criado ID=%d para idoso %d às %s", alarmID, idosoID, timeStr)
 	return alarmID, nil
 }
 
-// cancelAlarm cancela um ou todos os alarmes
+// cancelAlarm cancela um ou todos os alarmes via NietzscheDB
 func (h *ToolsHandler) cancelAlarm(idosoID int64, alarmID string) (int, error) {
-	var result int64
+	ctx := context.Background()
 
 	if alarmID == "all" {
-		// Cancelar todos os alarmes ativos
-		query := `UPDATE alarmes SET ativo = false WHERE idoso_id = $1 AND ativo = true`
-		res, err := h.db.Conn.Exec(query, idosoID)
+		// Buscar todos os alarmes ativos deste idoso
+		rows, err := h.db.QueryByLabel(ctx, "alarmes", " AND n.idoso_id = $idoso_id AND n.ativo = $ativo",
+			map[string]interface{}{"idoso_id": float64(idosoID), "ativo": true}, 0)
 		if err != nil {
-			return 0, fmt.Errorf("erro ao cancelar alarmes: %w", err)
+			return 0, fmt.Errorf("erro ao buscar alarmes: %w", err)
 		}
-		result, _ = res.RowsAffected()
-		log.Printf("⏰ [ALARM] %d alarmes cancelados para idoso %d", result, idosoID)
-	} else {
-		// Cancelar alarme específico
-		query := `UPDATE alarmes SET ativo = false WHERE id = $1 AND idoso_id = $2`
-		res, err := h.db.Conn.Exec(query, alarmID, idosoID)
-		if err != nil {
-			return 0, fmt.Errorf("erro ao cancelar alarme: %w", err)
+		// Desativar cada um
+		for _, row := range rows {
+			rowID := database.GetInt64(row, "id")
+			if rowID > 0 {
+				_ = h.db.Update(ctx, "alarmes",
+					map[string]interface{}{"id": float64(rowID)},
+					map[string]interface{}{"ativo": false})
+			}
 		}
-		result, _ = res.RowsAffected()
-		log.Printf("⏰ [ALARM] Alarme %s cancelado para idoso %d", alarmID, idosoID)
+		log.Printf("⏰ [ALARM] %d alarmes cancelados para idoso %d", len(rows), idosoID)
+		return len(rows), nil
 	}
 
-	return int(result), nil
+	// Cancelar alarme específico
+	// Converter alarmID string para float64 para match
+	var idFloat float64
+	fmt.Sscanf(alarmID, "%f", &idFloat)
+	err := h.db.Update(ctx, "alarmes",
+		map[string]interface{}{"id": idFloat, "idoso_id": float64(idosoID)},
+		map[string]interface{}{"ativo": false})
+	if err != nil {
+		return 0, fmt.Errorf("erro ao cancelar alarme: %w", err)
+	}
+	log.Printf("⏰ [ALARM] Alarme %s cancelado para idoso %d", alarmID, idosoID)
+	return 1, nil
 }
 
-// listAlarms lista todos os alarmes ativos de um idoso
+// listAlarms lista todos os alarmes ativos de um idoso via NietzscheDB
 func (h *ToolsHandler) listAlarms(idosoID int64) ([]AlarmInfo, error) {
-	query := `
-		SELECT id, horario, descricao, COALESCE(dias_repeticao::text, '[]'), ativo, criado_em
-		FROM alarmes
-		WHERE idoso_id = $1 AND ativo = true
-		ORDER BY horario ASC
-	`
-
-	rows, err := h.db.Conn.Query(query, idosoID)
+	ctx := context.Background()
+	rows, err := h.db.QueryByLabel(ctx, "alarmes", " AND n.idoso_id = $idoso_id AND n.ativo = $ativo",
+		map[string]interface{}{"idoso_id": float64(idosoID), "ativo": true}, 0)
 	if err != nil {
-		// Se tabela não existe, retornar vazio
-		if err.Error() == "pq: relation \"alarmes\" does not exist" {
-			return []AlarmInfo{}, nil
-		}
-		return nil, fmt.Errorf("erro ao listar alarmes: %w", err)
+		return []AlarmInfo{}, nil // NietzscheDB schemaless — vazio se coleção não existe
 	}
-	defer rows.Close()
 
 	var alarms []AlarmInfo
-	for rows.Next() {
-		var a AlarmInfo
-		var repeatDaysJSON string
-		var createdAt time.Time
-
-		if err := rows.Scan(&a.ID, &a.Time, &a.Label, &repeatDaysJSON, &a.Active, &createdAt); err != nil {
-			continue
+	for _, row := range rows {
+		a := AlarmInfo{
+			ID:     database.GetInt64(row, "id"),
+			Time:   database.GetString(row, "horario"),
+			Label:  database.GetString(row, "descricao"),
+			Active: true,
 		}
 
-		// Parse repeat_days do JSON
-		a.RepeatDays = parseJSONArray(repeatDaysJSON)
-		a.CreatedAt = createdAt.Format("02/01/2006 15:04")
+		// Parse repeat_days
+		if rd, ok := row["dias_repeticao"].([]interface{}); ok {
+			for _, d := range rd {
+				if ds, ok := d.(string); ok {
+					a.RepeatDays = append(a.RepeatDays, ds)
+				}
+			}
+		} else {
+			repeatStr := database.GetString(row, "dias_repeticao")
+			if repeatStr != "" {
+				a.RepeatDays = parseJSONArray(repeatStr)
+			}
+		}
+
+		createdStr := database.GetString(row, "criado_em")
+		if t, parseErr := time.Parse(time.RFC3339, createdStr); parseErr == nil {
+			a.CreatedAt = t.Format("02/01/2006 15:04")
+		} else {
+			a.CreatedAt = createdStr
+		}
 
 		alarms = append(alarms, a)
 	}
 
 	return alarms, nil
-}
-
-// createAlarmsTable cria a tabela de alarmes se não existir
-func (h *ToolsHandler) createAlarmsTable() error {
-	query := `
-		CREATE TABLE IF NOT EXISTS alarmes (
-			id SERIAL PRIMARY KEY,
-			idoso_id BIGINT NOT NULL REFERENCES idosos(id),
-			horario VARCHAR(5) NOT NULL,
-			descricao VARCHAR(255) NOT NULL DEFAULT 'Alarme',
-			dias_repeticao JSONB DEFAULT '[]',
-			ativo BOOLEAN DEFAULT true,
-			criado_em TIMESTAMP DEFAULT NOW(),
-			atualizado_em TIMESTAMP DEFAULT NOW()
-		);
-		CREATE INDEX IF NOT EXISTS idx_alarmes_idoso ON alarmes(idoso_id);
-		CREATE INDEX IF NOT EXISTS idx_alarmes_ativo ON alarmes(ativo);
-	`
-
-	_, err := h.db.Conn.Exec(query)
-	if err != nil {
-		return fmt.Errorf("erro ao criar tabela alarmes: %w", err)
-	}
-
-	log.Println("✅ [ALARM] Tabela 'alarmes' criada com sucesso")
-	return nil
 }
 
 // Helper: juntar strings com separador
@@ -1809,10 +1791,10 @@ type GTDTask struct {
 	CompletedAt *time.Time `json:"completed_at"`
 }
 
-// handleCaptureTask captura uma preocupação/tarefa vaga e transforma em ação
+// handleCaptureTask captura uma preocupação/tarefa vaga e transforma em ação (NietzscheDB)
 func (h *ToolsHandler) handleCaptureTask(idosoID int64, args map[string]interface{}) (map[string]interface{}, error) {
 	rawInput, _ := args["raw_input"].(string)
-	context, _ := args["context"].(string)
+	taskContext, _ := args["context"].(string)
 	nextAction, _ := args["next_action"].(string)
 	dueDate, _ := args["due_date"].(string)
 	project, _ := args["project"].(string)
@@ -1827,47 +1809,45 @@ func (h *ToolsHandler) handleCaptureTask(idosoID int64, args map[string]interfac
 	}
 
 	// Normalizar contexto
-	if context == "" {
-		context = "geral"
+	if taskContext == "" {
+		taskContext = "geral"
 	}
-	context = strings.ToLower(context)
-
-	// Criar tabela se não existir
-	if err := h.createGTDTable(); err != nil {
-		log.Printf("⚠️ [GTD] Erro ao criar tabela: %v", err)
-	}
+	taskContext = strings.ToLower(taskContext)
 
 	// Processar data
-	var dueDatePtr *string
+	var dueDateStr string
 	if dueDate != "" {
-		parsedDate := h.parseGTDDate(dueDate)
-		if parsedDate != "" {
-			dueDatePtr = &parsedDate
-		}
+		dueDateStr = h.parseGTDDate(dueDate)
 	}
 
-	// Inserir tarefa
-	query := `
-		INSERT INTO gtd_tasks (idoso_id, raw_input, next_action, context, project, due_date, status, priority, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, 'next', 2, NOW())
-		RETURNING id, created_at
-	`
+	ctx := context.Background()
+	content := map[string]interface{}{
+		"idoso_id":    idosoID,
+		"raw_input":   rawInput,
+		"next_action": nextAction,
+		"context":     taskContext,
+		"project":     project,
+		"status":      "next",
+		"priority":    2,
+		"created_at":  time.Now().Format(time.RFC3339),
+	}
+	if dueDateStr != "" {
+		content["due_date"] = dueDateStr
+	}
 
-	var taskID int64
-	var createdAt time.Time
-	err := h.db.Conn.QueryRow(query, idosoID, rawInput, nextAction, context, project, dueDatePtr).Scan(&taskID, &createdAt)
+	taskID, err := h.db.Insert(ctx, "gtd_tasks", content)
 	if err != nil {
 		return map[string]interface{}{"error": fmt.Sprintf("Erro ao capturar tarefa: %v", err)}, nil
 	}
 
-	log.Printf("📋 [GTD] Tarefa capturada ID=%d: '%s' -> '%s' (@%s)", taskID, rawInput, nextAction, context)
+	log.Printf("📋 [GTD] Tarefa capturada ID=%d: '%s' -> '%s' (@%s)", taskID, rawInput, nextAction, taskContext)
 
 	// Notificar app sobre nova tarefa
 	if h.NotifyFunc != nil {
 		h.NotifyFunc(idosoID, "gtd_task_created", map[string]interface{}{
 			"task_id":     taskID,
 			"next_action": nextAction,
-			"context":     context,
+			"context":     taskContext,
 		})
 	}
 
@@ -1876,70 +1856,63 @@ func (h *ToolsHandler) handleCaptureTask(idosoID int64, args map[string]interfac
 		"task_id":     taskID,
 		"raw_input":   rawInput,
 		"next_action": nextAction,
-		"context":     context,
+		"context":     taskContext,
 		"message":     fmt.Sprintf("Entendi! Anotei: '%s'. Isso está na sua lista de próximas ações.", nextAction),
 	}, nil
 }
 
-// handleListTasks lista as próximas ações pendentes
+// handleListTasks lista as próximas ações pendentes via NietzscheDB
 func (h *ToolsHandler) handleListTasks(idosoID int64, args map[string]interface{}) (map[string]interface{}, error) {
-	context, _ := args["context"].(string)
+	taskContext, _ := args["context"].(string)
 	limitFloat, _ := args["limit"].(float64)
 	limit := int(limitFloat)
 	if limit == 0 {
 		limit = 5
 	}
 
-	query := `
-		SELECT id, raw_input, next_action, context, COALESCE(project, ''),
-		       COALESCE(to_char(due_date, 'DD/MM/YYYY'), ''), status, priority, created_at
-		FROM gtd_tasks
-		WHERE idoso_id = $1 AND status IN ('next', 'inbox')
-	`
-	queryArgs := []interface{}{idosoID}
+	ctx := context.Background()
 
-	if context != "" {
-		query += " AND context = $2"
-		queryArgs = append(queryArgs, strings.ToLower(context))
-		query += " ORDER BY priority ASC, created_at ASC LIMIT $3"
-		queryArgs = append(queryArgs, limit)
-	} else {
-		query += " ORDER BY priority ASC, created_at ASC LIMIT $2"
-		queryArgs = append(queryArgs, limit)
+	// Build NQL filter
+	extraWhere := " AND n.idoso_id = $idoso_id AND n.status = $status"
+	params := map[string]interface{}{
+		"idoso_id": float64(idosoID),
+		"status":   "next",
 	}
 
-	rows, err := h.db.Conn.Query(query, queryArgs...)
+	// Query "next" status first, then "inbox"
+	rows, err := h.db.QueryByLabel(ctx, "gtd_tasks", extraWhere, params, 0)
 	if err != nil {
-		// Se tabela não existe, retornar vazio
-		if strings.Contains(err.Error(), "does not exist") {
-			return map[string]interface{}{
-				"status":  "sucesso",
-				"tasks":   []interface{}{},
-				"message": "Você não tem tarefas pendentes. Que bom!",
-			}, nil
-		}
-		return map[string]interface{}{"error": fmt.Sprintf("Erro ao listar tarefas: %v", err)}, nil
+		rows = []map[string]interface{}{} // schemaless — vazio se não existe
 	}
-	defer rows.Close()
+	// Also query inbox
+	params2 := map[string]interface{}{
+		"idoso_id": float64(idosoID),
+		"status":   "inbox",
+	}
+	inboxRows, _ := h.db.QueryByLabel(ctx, "gtd_tasks", extraWhere, params2, 0)
+	rows = append(rows, inboxRows...)
 
+	// Filter by context in Go if specified
 	var tasks []map[string]interface{}
-	for rows.Next() {
-		var t GTDTask
-		var project, dueDate string
-		var createdAt time.Time
-
-		if err := rows.Scan(&t.ID, &t.RawInput, &t.NextAction, &t.Context, &project, &dueDate, &t.Status, &t.Priority, &createdAt); err != nil {
-			continue
+	for _, row := range rows {
+		if taskContext != "" {
+			rowCtx := strings.ToLower(database.GetString(row, "context"))
+			if rowCtx != strings.ToLower(taskContext) {
+				continue
+			}
 		}
 
 		tasks = append(tasks, map[string]interface{}{
-			"id":          t.ID,
-			"next_action": t.NextAction,
-			"context":     t.Context,
-			"project":     project,
-			"due_date":    dueDate,
-			"priority":    t.Priority,
+			"id":          database.GetInt64(row, "id"),
+			"next_action": database.GetString(row, "next_action"),
+			"context":     database.GetString(row, "context"),
+			"project":     database.GetString(row, "project"),
+			"due_date":    database.GetString(row, "due_date"),
+			"priority":    database.GetInt64(row, "priority"),
 		})
+		if len(tasks) >= limit {
+			break
+		}
 	}
 
 	if len(tasks) == 0 {
@@ -1953,7 +1926,7 @@ func (h *ToolsHandler) handleListTasks(idosoID int64, args map[string]interface{
 	// Montar mensagem de fala
 	var taskList []string
 	for i, task := range tasks {
-		action := task["next_action"].(string)
+		action, _ := task["next_action"].(string)
 		taskList = append(taskList, fmt.Sprintf("%d. %s", i+1, action))
 	}
 	message := fmt.Sprintf("Você tem %d tarefa(s) pendente(s):\n%s", len(tasks), strings.Join(taskList, "\n"))
@@ -1966,44 +1939,76 @@ func (h *ToolsHandler) handleListTasks(idosoID int64, args map[string]interface{
 	}, nil
 }
 
-// handleCompleteTask marca uma tarefa como concluída
+// handleCompleteTask marca uma tarefa como concluída via NietzscheDB
 func (h *ToolsHandler) handleCompleteTask(idosoID int64, args map[string]interface{}) (map[string]interface{}, error) {
 	taskID, _ := args["task_id"].(float64)
 	taskDesc, _ := args["task_description"].(string)
 
-	var query string
-	var queryArgs []interface{}
-
-	if taskID > 0 {
-		query = `
-			UPDATE gtd_tasks
-			SET status = 'done', completed_at = NOW()
-			WHERE id = $1 AND idoso_id = $2 AND status != 'done'
-			RETURNING id, next_action
-		`
-		queryArgs = []interface{}{int64(taskID), idosoID}
-	} else if taskDesc != "" {
-		// Buscar por descrição parcial
-		query = `
-			UPDATE gtd_tasks
-			SET status = 'done', completed_at = NOW()
-			WHERE idoso_id = $1 AND status != 'done'
-			  AND (LOWER(next_action) LIKE '%' || LOWER($2) || '%' OR LOWER(raw_input) LIKE '%' || LOWER($2) || '%')
-			RETURNING id, next_action
-		`
-		queryArgs = []interface{}{idosoID, taskDesc}
-	} else {
-		return map[string]interface{}{"error": "Informe o ID ou descrição da tarefa"}, nil
-	}
-
+	ctx := context.Background()
 	var completedID int64
 	var completedAction string
-	err := h.db.Conn.QueryRow(query, queryArgs...).Scan(&completedID, &completedAction)
-	if err != nil {
-		return map[string]interface{}{
-			"status":  "não encontrado",
-			"message": "Não encontrei essa tarefa nas suas pendências.",
-		}, nil
+
+	if taskID > 0 {
+		// Buscar a tarefa por ID para pegar o next_action
+		m, err := h.db.GetNodeByID(ctx, "gtd_tasks", int64(taskID))
+		if err != nil || m == nil {
+			return map[string]interface{}{
+				"status":  "não encontrado",
+				"message": "Não encontrei essa tarefa nas suas pendências.",
+			}, nil
+		}
+		if database.GetString(m, "status") == "done" {
+			return map[string]interface{}{
+				"status":  "já concluída",
+				"message": "Essa tarefa já foi marcada como concluída.",
+			}, nil
+		}
+		completedID = int64(taskID)
+		completedAction = database.GetString(m, "next_action")
+
+		// Atualizar status
+		err = h.db.Update(ctx, "gtd_tasks",
+			map[string]interface{}{"id": taskID},
+			map[string]interface{}{"status": "done", "completed_at": time.Now().Format(time.RFC3339)})
+		if err != nil {
+			return map[string]interface{}{"error": fmt.Sprintf("Erro ao concluir tarefa: %v", err)}, nil
+		}
+	} else if taskDesc != "" {
+		// Buscar por descrição parcial — query todas as tarefas pendentes do idoso
+		rows, err := h.db.QueryByLabel(ctx, "gtd_tasks",
+			" AND n.idoso_id = $idoso_id",
+			map[string]interface{}{"idoso_id": float64(idosoID)}, 0)
+		if err != nil {
+			return map[string]interface{}{"error": fmt.Sprintf("Erro ao buscar tarefas: %v", err)}, nil
+		}
+
+		descLower := strings.ToLower(taskDesc)
+		found := false
+		for _, row := range rows {
+			status := database.GetString(row, "status")
+			if status == "done" {
+				continue
+			}
+			action := strings.ToLower(database.GetString(row, "next_action"))
+			rawInput := strings.ToLower(database.GetString(row, "raw_input"))
+			if strings.Contains(action, descLower) || strings.Contains(rawInput, descLower) {
+				completedID = database.GetInt64(row, "id")
+				completedAction = database.GetString(row, "next_action")
+				_ = h.db.Update(ctx, "gtd_tasks",
+					map[string]interface{}{"id": float64(completedID)},
+					map[string]interface{}{"status": "done", "completed_at": time.Now().Format(time.RFC3339)})
+				found = true
+				break
+			}
+		}
+		if !found {
+			return map[string]interface{}{
+				"status":  "não encontrado",
+				"message": "Não encontrei essa tarefa nas suas pendências.",
+			}, nil
+		}
+	} else {
+		return map[string]interface{}{"error": "Informe o ID ou descrição da tarefa"}, nil
 	}
 
 	log.Printf("✅ [GTD] Tarefa concluída ID=%d: '%s'", completedID, completedAction)
@@ -2041,29 +2046,53 @@ func (h *ToolsHandler) handleClarifyTask(idosoID int64, args map[string]interfac
 	}, nil
 }
 
-// handleWeeklyReview mostra revisão semanal GTD
+// handleWeeklyReview mostra revisão semanal GTD via NietzscheDB
 func (h *ToolsHandler) handleWeeklyReview(idosoID int64, args map[string]interface{}) (map[string]interface{}, error) {
-	// Contar tarefas por status
-	statsQuery := `
-		SELECT
-			COUNT(*) FILTER (WHERE status = 'next') as next_count,
-			COUNT(*) FILTER (WHERE status = 'inbox') as inbox_count,
-			COUNT(*) FILTER (WHERE status = 'waiting') as waiting_count,
-			COUNT(*) FILTER (WHERE status = 'done' AND completed_at > NOW() - INTERVAL '7 days') as done_week,
-			COUNT(*) FILTER (WHERE due_date < NOW() AND status NOT IN ('done')) as overdue_count
-		FROM gtd_tasks
-		WHERE idoso_id = $1
-	`
+	ctx := context.Background()
 
+	// Buscar todas as tarefas do idoso
+	rows, err := h.db.QueryByLabel(ctx, "gtd_tasks",
+		" AND n.idoso_id = $idoso_id",
+		map[string]interface{}{"idoso_id": float64(idosoID)}, 0)
+	if err != nil || len(rows) == 0 {
+		return map[string]interface{}{
+			"status":  "sucesso",
+			"message": "Você ainda não tem tarefas cadastradas. Que tal começar a usar o sistema de captura?",
+		}, nil
+	}
+
+	// Agregar contagens em Go
 	var nextCount, inboxCount, waitingCount, doneWeek, overdueCount int
-	err := h.db.Conn.QueryRow(statsQuery, idosoID).Scan(&nextCount, &inboxCount, &waitingCount, &doneWeek, &overdueCount)
-	if err != nil {
-		// Se tabela não existe
-		if strings.Contains(err.Error(), "does not exist") {
-			return map[string]interface{}{
-				"status":  "sucesso",
-				"message": "Você ainda não tem tarefas cadastradas. Que tal começar a usar o sistema de captura?",
-			}, nil
+	oneWeekAgo := time.Now().AddDate(0, 0, -7)
+	now := time.Now()
+
+	for _, row := range rows {
+		status := database.GetString(row, "status")
+		switch status {
+		case "next":
+			nextCount++
+		case "inbox":
+			inboxCount++
+		case "waiting":
+			waitingCount++
+		case "done":
+			completedStr := database.GetString(row, "completed_at")
+			if t, parseErr := time.Parse(time.RFC3339, completedStr); parseErr == nil {
+				if t.After(oneWeekAgo) {
+					doneWeek++
+				}
+			}
+		}
+		// Verificar atrasadas
+		if status != "done" {
+			dueDateStr := database.GetString(row, "due_date")
+			if dueDateStr != "" {
+				if t, parseErr := time.Parse("2006-01-02", dueDateStr); parseErr == nil {
+					if t.Before(now) {
+						overdueCount++
+					}
+				}
+			}
 		}
 	}
 
@@ -2079,7 +2108,7 @@ func (h *ToolsHandler) handleWeeklyReview(idosoID int64, args map[string]interfa
 		parts = append(parts, fmt.Sprintf("%d item(ns) na caixa de entrada para processar", inboxCount))
 	}
 	if overdueCount > 0 {
-		parts = append(parts, fmt.Sprintf("⚠️ Atenção: %d tarefa(s) atrasada(s)", overdueCount))
+		parts = append(parts, fmt.Sprintf("Atenção: %d tarefa(s) atrasada(s)", overdueCount))
 	}
 	if waitingCount > 0 {
 		parts = append(parts, fmt.Sprintf("%d tarefa(s) aguardando alguém", waitingCount))
@@ -2099,38 +2128,6 @@ func (h *ToolsHandler) handleWeeklyReview(idosoID int64, args map[string]interfa
 		"overdue_count": overdueCount,
 		"message":       message,
 	}, nil
-}
-
-// createGTDTable cria a tabela de tarefas GTD
-func (h *ToolsHandler) createGTDTable() error {
-	query := `
-		CREATE TABLE IF NOT EXISTS gtd_tasks (
-			id SERIAL PRIMARY KEY,
-			idoso_id BIGINT NOT NULL REFERENCES idosos(id),
-			raw_input TEXT NOT NULL,
-			next_action TEXT NOT NULL,
-			context VARCHAR(50) DEFAULT 'geral',
-			project VARCHAR(255),
-			due_date DATE,
-			status VARCHAR(20) DEFAULT 'inbox',
-			priority INT DEFAULT 2,
-			created_at TIMESTAMP DEFAULT NOW(),
-			completed_at TIMESTAMP,
-			updated_at TIMESTAMP DEFAULT NOW()
-		);
-		CREATE INDEX IF NOT EXISTS idx_gtd_idoso ON gtd_tasks(idoso_id);
-		CREATE INDEX IF NOT EXISTS idx_gtd_status ON gtd_tasks(status);
-		CREATE INDEX IF NOT EXISTS idx_gtd_context ON gtd_tasks(context);
-		CREATE INDEX IF NOT EXISTS idx_gtd_due ON gtd_tasks(due_date) WHERE due_date IS NOT NULL;
-	`
-
-	_, err := h.db.Conn.Exec(query)
-	if err != nil && !strings.Contains(err.Error(), "already exists") {
-		return fmt.Errorf("erro ao criar tabela gtd_tasks: %w", err)
-	}
-
-	log.Println("✅ [GTD] Tabela 'gtd_tasks' verificada/criada")
-	return nil
 }
 
 // parseGTDDate converte datas relativas para absolutas
@@ -2366,19 +2363,31 @@ func (h *ToolsHandler) handlePauseMemory(idosoID int64, args map[string]interfac
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Se passou descrição ao invés de ID, buscar
+	// Se passou descricao ao inves de ID, buscar
 	if itemID == 0 && contentSearch != "" {
-		query := `
-			SELECT id FROM spaced_memory_items
-			WHERE idoso_id = $1 AND status = 'active'
-			  AND LOWER(content) LIKE '%' || LOWER($2) || '%'
-			LIMIT 1
-		`
-		err := h.db.Conn.QueryRowContext(ctx, query, idosoID, contentSearch).Scan(&itemID)
-		if err != nil {
+		rows, err := h.db.QueryByLabel(ctx, "spaced_memory_items",
+			" AND n.idoso_id = $iid AND n.status = $st",
+			map[string]interface{}{"iid": idosoID, "st": "active"}, 0)
+		if err != nil || len(rows) == 0 {
 			return map[string]interface{}{
-				"status":  "não encontrado",
-				"message": "Não encontrei essa memória na sua lista.",
+				"status":  "nao encontrado",
+				"message": "Nao encontrei essa memoria na sua lista.",
+			}, nil
+		}
+		lowerSearch := strings.ToLower(contentSearch)
+		found := false
+		for _, row := range rows {
+			content := database.GetString(row, "content")
+			if strings.Contains(strings.ToLower(content), lowerSearch) {
+				itemID = float64(database.GetInt64(row, "id"))
+				found = true
+				break
+			}
+		}
+		if !found {
+			return map[string]interface{}{
+				"status":  "nao encontrado",
+				"message": "Nao encontrei essa memoria na sua lista.",
 			}, nil
 		}
 	}

@@ -4,29 +4,34 @@
 package prediction
 
 import (
-	"database/sql"
-	"eva/internal/cortex/explainability"
+	"context"
 	"fmt"
 	"log"
+	"time"
+
+	"eva/internal/brainstem/database"
+	"eva/internal/cortex/explainability"
 )
 
-// CrisisPredictor prediz risco de crises e gera explicações
+// CrisisPredictor prediz risco de crises e gera explicacoes
 type CrisisPredictor struct {
-	db       *sql.DB
+	db        *database.DB
 	explainer *explainability.ClinicalDecisionExplainer
+	ctx       context.Context
 }
 
 // NewCrisisPredictor cria novo preditor
-func NewCrisisPredictor(db *sql.DB) *CrisisPredictor {
+func NewCrisisPredictor(db *database.DB) *CrisisPredictor {
 	return &CrisisPredictor{
-		db:       db,
+		db:        db,
 		explainer: explainability.NewClinicalDecisionExplainer(db),
+		ctx:       context.Background(),
 	}
 }
 
-// PredictCrisisRisk prediz risco de crise e gera explicação
+// PredictCrisisRisk prediz risco de crise e gera explicacao
 func (cp *CrisisPredictor) PredictCrisisRisk(patientID int64) (*explainability.Explanation, error) {
-	log.Printf("🔮 [PREDICTOR] Iniciando predição de risco de crise para paciente %d", patientID)
+	log.Printf("[PREDICTOR] Iniciando predicao de risco de crise para paciente %d", patientID)
 
 	// 1. Coletar features de diferentes fontes
 	features, err := cp.collectFeatures(patientID)
@@ -35,15 +40,15 @@ func (cp *CrisisPredictor) PredictCrisisRisk(patientID int64) (*explainability.E
 	}
 
 	if len(features) == 0 {
-		return nil, fmt.Errorf("nenhuma feature disponível para paciente %d", patientID)
+		return nil, fmt.Errorf("nenhuma feature disponivel para paciente %d", patientID)
 	}
 
 	// 2. Calcular score de risco
 	riskScore, severity, timeframe := cp.calculateRiskScore(features)
 
-	log.Printf("📊 [PREDICTOR] Score de risco calculado: %.2f (%s)", riskScore, severity)
+	log.Printf("[PREDICTOR] Score de risco calculado: %.2f (%s)", riskScore, severity)
 
-	// 3. Criar predição
+	// 3. Criar predicao
 	prediction := explainability.ClinicalPrediction{
 		PatientID:           patientID,
 		DecisionType:        "crisis_prediction",
@@ -54,27 +59,27 @@ func (cp *CrisisPredictor) PredictCrisisRisk(patientID int64) (*explainability.E
 		ModelVersion:        "v1.0.0",
 	}
 
-	// 4. Gerar explicação usando o explainer
+	// 4. Gerar explicacao usando o explainer
 	explanation, err := cp.explainer.ExplainDecision(prediction)
 	if err != nil {
-		return nil, fmt.Errorf("erro ao gerar explicação: %w", err)
+		return nil, fmt.Errorf("erro ao gerar explicacao: %w", err)
 	}
 
 	return explanation, nil
 }
 
-// collectFeatures coleta features de todas as fontes disponíveis
+// collectFeatures coleta features de todas as fontes disponiveis
 func (cp *CrisisPredictor) collectFeatures(patientID int64) (map[string]explainability.Feature, error) {
 	features := make(map[string]explainability.Feature)
 
-	// 1. Adesão medicamentosa (últimos 7 dias)
+	// 1. Adesao medicamentosa (ultimos 7 dias)
 	medicationAdherence, err := cp.getMedicationAdherence(patientID, 7)
 	if err == nil && medicationAdherence >= 0 {
 		status := cp.getAdherenceStatus(medicationAdherence)
 		features["medication_adherence"] = explainability.Feature{
 			Name:          "medication_adherence",
 			CurrentValue:  medicationAdherence,
-			BaselineValue: 0.85, // 85% é considerado bom
+			BaselineValue: 0.85, // 85% e considerado bom
 			Category:      "primary",
 			Status:        status,
 			Details: map[string]interface{}{
@@ -118,14 +123,14 @@ func (cp *CrisisPredictor) collectFeatures(patientID int64) (map[string]explaina
 		}
 	}
 
-	// 4. Qualidade do sono (últimos 7 dias)
+	// 4. Qualidade do sono (ultimos 7 dias)
 	sleepQuality, err := cp.getSleepQuality(patientID, 7)
 	if err == nil && sleepQuality > 0 {
 		status := cp.getSleepStatus(sleepQuality)
 		features["sleep_quality"] = explainability.Feature{
 			Name:          "sleep_quality",
 			CurrentValue:  sleepQuality,
-			BaselineValue: 7.5, // 7-8h é ideal
+			BaselineValue: 7.5, // 7-8h e ideal
 			Category:      "secondary",
 			Status:        status,
 			Details: map[string]interface{}{
@@ -135,10 +140,10 @@ func (cp *CrisisPredictor) collectFeatures(patientID int64) (map[string]explaina
 		}
 	}
 
-	// 5. Biomarcadores de voz (pitch mean - últimos 7 dias)
+	// 5. Biomarcadores de voz (pitch mean - ultimos 7 dias)
 	voicePitchMean, err := cp.getVoicePitchMean(patientID, 7)
 	if err == nil && voicePitchMean > 0 {
-		// Buscar baseline (últimos 30 dias)
+		// Buscar baseline (ultimos 30 dias)
 		voicePitchBaseline, _ := cp.getVoicePitchMean(patientID, 30)
 		if voicePitchBaseline == 0 {
 			voicePitchBaseline = 150.0 // Default masculino adulto
@@ -152,21 +157,21 @@ func (cp *CrisisPredictor) collectFeatures(patientID int64) (map[string]explaina
 			Category:      "secondary",
 			Status:        status,
 			Details: map[string]interface{}{
-				"unit":          "Hz",
-				"description":   "Pitch médio (tom de voz)",
-				"change_from_baseline": voicePitchMean - voicePitchBaseline,
+				"unit":                  "Hz",
+				"description":           "Pitch medio (tom de voz)",
+				"change_from_baseline":  voicePitchMean - voicePitchBaseline,
 			},
 		}
 	}
 
-	// 6. Isolamento social (dias sem interação humana)
+	// 6. Isolamento social (dias sem interacao humana)
 	daysSinceHumanInteraction, err := cp.getDaysSinceHumanInteraction(patientID)
 	if err == nil {
 		status := cp.getIsolationStatus(daysSinceHumanInteraction)
 		features["social_isolation"] = explainability.Feature{
 			Name:          "social_isolation",
 			CurrentValue:  float64(daysSinceHumanInteraction),
-			BaselineValue: 2.0, // Ideal é contato a cada 2 dias
+			BaselineValue: 2.0, // Ideal e contato a cada 2 dias
 			Category:      "secondary",
 			Status:        status,
 			Details: map[string]interface{}{
@@ -182,7 +187,7 @@ func (cp *CrisisPredictor) collectFeatures(patientID int64) (map[string]explaina
 		features["cognitive_load"] = explainability.Feature{
 			Name:          "cognitive_load",
 			CurrentValue:  cognitiveLoad,
-			BaselineValue: 0.5, // 0.5 é considerado normal
+			BaselineValue: 0.5, // 0.5 e considerado normal
 			Category:      "tertiary",
 			Status:        status,
 		}
@@ -210,10 +215,10 @@ func (cp *CrisisPredictor) calculateRiskScore(features map[string]explainability
 	for name, feature := range features {
 		weight := weights[name]
 		if weight == 0 {
-			weight = 0.05 // Peso padrão para outras features
+			weight = 0.05 // Peso padrao para outras features
 		}
 
-		// Calcular contribuição da feature para o risco
+		// Calcular contribuicao da feature para o risco
 		contribution := 0.0
 
 		switch feature.Status {
@@ -252,7 +257,7 @@ func (cp *CrisisPredictor) calculateRiskScore(features map[string]explainability
 		timeframe = "5-7 days"
 	}
 
-	// Se múltiplos fatores críticos, escalar severidade
+	// Se multiplos fatores criticos, escalar severidade
 	if riskFactors >= 3 {
 		severity = "critical"
 		timeframe = "24h"
@@ -268,136 +273,173 @@ func (cp *CrisisPredictor) calculateRiskScore(features map[string]explainability
 // ========================================
 
 func (cp *CrisisPredictor) getMedicationAdherence(patientID int64, days int) (float64, error) {
-	query := `
-		SELECT
-			COUNT(*) FILTER (WHERE taken_at IS NOT NULL)::FLOAT /
-			NULLIF(COUNT(*), 0) AS adherence
-		FROM medication_logs
-		WHERE patient_id = $1
-		  AND scheduled_time > NOW() - INTERVAL '1 day' * $2
-	`
-
-	var adherence sql.NullFloat64
-	err := cp.db.QueryRow(query, patientID, days).Scan(&adherence)
-	if err != nil || !adherence.Valid {
+	// Query all medication logs for this patient in the period
+	rows, err := cp.db.QueryByLabel(cp.ctx, "medication_logs",
+		" AND n.patient_id = $pid",
+		map[string]interface{}{"pid": patientID},
+		0,
+	)
+	if err != nil || len(rows) == 0 {
 		return -1, err
 	}
 
-	return adherence.Float64, nil
+	// Calculate adherence: count taken / total
+	total := 0
+	taken := 0
+	for _, m := range rows {
+		total++
+		takenAt := database.GetString(m, "taken_at")
+		if takenAt != "" {
+			taken++
+		}
+	}
+
+	if total == 0 {
+		return -1, fmt.Errorf("no medication logs")
+	}
+
+	return float64(taken) / float64(total), nil
 }
 
 func (cp *CrisisPredictor) getLatestPHQ9Score(patientID int64) (float64, error) {
-	query := `
-		SELECT total_score
-		FROM clinical_assessments
-		WHERE patient_id = $1
-		  AND assessment_type = 'PHQ-9'
-		  AND status = 'completed'
-		ORDER BY completed_at DESC
-		LIMIT 1
-	`
-
-	var score sql.NullFloat64
-	err := cp.db.QueryRow(query, patientID).Scan(&score)
-	if err != nil || !score.Valid {
+	rows, err := cp.db.QueryByLabel(cp.ctx, "clinical_assessments",
+		" AND n.patient_id = $pid AND n.assessment_type = $atype AND n.status = $status",
+		map[string]interface{}{
+			"pid":    patientID,
+			"atype":  "PHQ-9",
+			"status": "completed",
+		},
+		1,
+	)
+	if err != nil || len(rows) == 0 {
 		return -1, err
 	}
 
-	return score.Float64, nil
+	score := database.GetFloat64(rows[0], "total_score")
+	return score, nil
 }
 
 func (cp *CrisisPredictor) getLatestGAD7Score(patientID int64) (float64, error) {
-	query := `
-		SELECT total_score
-		FROM clinical_assessments
-		WHERE patient_id = $1
-		  AND assessment_type = 'GAD-7'
-		  AND status = 'completed'
-		ORDER BY completed_at DESC
-		LIMIT 1
-	`
-
-	var score sql.NullFloat64
-	err := cp.db.QueryRow(query, patientID).Scan(&score)
-	if err != nil || !score.Valid {
+	rows, err := cp.db.QueryByLabel(cp.ctx, "clinical_assessments",
+		" AND n.patient_id = $pid AND n.assessment_type = $atype AND n.status = $status",
+		map[string]interface{}{
+			"pid":    patientID,
+			"atype":  "GAD-7",
+			"status": "completed",
+		},
+		1,
+	)
+	if err != nil || len(rows) == 0 {
 		return -1, err
 	}
 
-	return score.Float64, nil
+	score := database.GetFloat64(rows[0], "total_score")
+	return score, nil
 }
 
 func (cp *CrisisPredictor) getSleepQuality(patientID int64, days int) (float64, error) {
-	// Placeholder: buscar de wearable ou self-report
-	query := `
-		SELECT AVG(CAST(valor AS FLOAT))
-		FROM sinais_vitais
-		WHERE idoso_id = $1
-		  AND tipo = 'sono'
-		  AND data_medicao > NOW() - INTERVAL '1 day' * $2
-	`
-
-	var avgSleep sql.NullFloat64
-	err := cp.db.QueryRow(query, patientID, days).Scan(&avgSleep)
-	if err != nil || !avgSleep.Valid {
+	// Buscar sinais vitais tipo sono
+	rows, err := cp.db.QueryByLabel(cp.ctx, "sinais_vitais",
+		" AND n.idoso_id = $pid AND n.tipo = $tipo",
+		map[string]interface{}{
+			"pid":  patientID,
+			"tipo": "sono",
+		},
+		0,
+	)
+	if err != nil || len(rows) == 0 {
 		return 0, err
 	}
 
-	return avgSleep.Float64, nil
+	// Calculate average
+	total := 0.0
+	count := 0
+	for _, m := range rows {
+		val := database.GetFloat64(m, "valor")
+		if val > 0 {
+			total += val
+			count++
+		}
+	}
+
+	if count == 0 {
+		return 0, fmt.Errorf("no sleep data")
+	}
+
+	return total / float64(count), nil
 }
 
 func (cp *CrisisPredictor) getVoicePitchMean(patientID int64, days int) (float64, error) {
-	query := `
-		SELECT AVG(vpf.pitch_mean)
-		FROM voice_prosody_features vpf
-		JOIN voice_prosody_analyses vpa ON vpf.analysis_id = vpa.id
-		WHERE vpa.patient_id = $1
-		  AND vpa.created_at > NOW() - INTERVAL '1 day' * $2
-	`
-
-	var pitchMean sql.NullFloat64
-	err := cp.db.QueryRow(query, patientID, days).Scan(&pitchMean)
-	if err != nil || !pitchMean.Valid {
+	// Query voice prosody features
+	rows, err := cp.db.QueryByLabel(cp.ctx, "voice_prosody_features",
+		" AND n.patient_id = $pid",
+		map[string]interface{}{"pid": patientID},
+		0,
+	)
+	if err != nil || len(rows) == 0 {
 		return 0, err
 	}
 
-	return pitchMean.Float64, nil
+	// Calculate average pitch_mean
+	total := 0.0
+	count := 0
+	for _, m := range rows {
+		pitchMean := database.GetFloat64(m, "pitch_mean")
+		if pitchMean > 0 {
+			total += pitchMean
+			count++
+		}
+	}
+
+	if count == 0 {
+		return 0, fmt.Errorf("no voice data")
+	}
+
+	return total / float64(count), nil
 }
 
 func (cp *CrisisPredictor) getDaysSinceHumanInteraction(patientID int64) (int, error) {
-	// Placeholder: buscar de call logs, mensagens família, etc
-	query := `
-		SELECT COALESCE(
-			EXTRACT(DAY FROM NOW() - MAX(call_time)),
-			999
-		)
-		FROM call_logs
-		WHERE patient_id = $1
-		  AND call_type IN ('family', 'caregiver', 'friend')
-	`
-
-	var days sql.NullInt64
-	err := cp.db.QueryRow(query, patientID).Scan(&days)
-	if err != nil || !days.Valid {
+	// Query call logs for family/caregiver/friend calls
+	rows, err := cp.db.QueryByLabel(cp.ctx, "call_logs",
+		" AND n.patient_id = $pid",
+		map[string]interface{}{"pid": patientID},
+		0,
+	)
+	if err != nil || len(rows) == 0 {
 		return 999, nil // Assumir muito tempo sem contato
 	}
 
-	return int(days.Int64), nil
+	// Find most recent call of type family/caregiver/friend
+	var latestCallTime time.Time
+	for _, m := range rows {
+		callType := database.GetString(m, "call_type")
+		if callType == "family" || callType == "caregiver" || callType == "friend" {
+			callTime := database.GetTime(m, "call_time")
+			if latestCallTime.IsZero() || callTime.After(latestCallTime) {
+				latestCallTime = callTime
+			}
+		}
+	}
+
+	if latestCallTime.IsZero() {
+		return 999, nil
+	}
+
+	daysSince := int(time.Since(latestCallTime).Hours() / 24)
+	return daysSince, nil
 }
 
 func (cp *CrisisPredictor) getCognitiveLoadScore(patientID int64) (float64, error) {
-	query := `
-		SELECT current_load_score
-		FROM cognitive_load_state
-		WHERE patient_id = $1
-	`
-
-	var loadScore sql.NullFloat64
-	err := cp.db.QueryRow(query, patientID).Scan(&loadScore)
-	if err != nil || !loadScore.Valid {
+	rows, err := cp.db.QueryByLabel(cp.ctx, "cognitive_load_state",
+		" AND n.patient_id = $pid",
+		map[string]interface{}{"pid": patientID},
+		1,
+	)
+	if err != nil || len(rows) == 0 {
 		return 0, err
 	}
 
-	return loadScore.Float64, nil
+	return database.GetFloat64(rows[0], "current_load_score"), nil
 }
 
 // ========================================
@@ -482,15 +524,15 @@ func (cp *CrisisPredictor) getCognitiveLoadStatus(load float64) string {
 
 func (cp *CrisisPredictor) interpretPHQ9(score float64) string {
 	if score >= 20 {
-		return "Depressão severa"
+		return "Depressao severa"
 	} else if score >= 15 {
-		return "Depressão moderadamente severa"
+		return "Depressao moderadamente severa"
 	} else if score >= 10 {
-		return "Depressão moderada"
+		return "Depressao moderada"
 	} else if score >= 5 {
-		return "Depressão leve"
+		return "Depressao leve"
 	}
-	return "Mínimo ou nenhum"
+	return "Minimo ou nenhum"
 }
 
 func (cp *CrisisPredictor) interpretGAD7(score float64) string {
@@ -501,5 +543,5 @@ func (cp *CrisisPredictor) interpretGAD7(score float64) string {
 	} else if score >= 5 {
 		return "Ansiedade leve"
 	}
-	return "Mínimo ou nenhum"
+	return "Minimo ou nenhum"
 }

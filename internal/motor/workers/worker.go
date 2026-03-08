@@ -5,10 +5,11 @@ package workers
 
 import (
 	"context"
-	"database/sql"
 	"log"
 	"sync"
 	"time"
+
+	"eva/internal/brainstem/database"
 )
 
 // Worker interface que todos os workers devem implementar
@@ -21,14 +22,14 @@ type Worker interface {
 // WorkerManager gerencia múltiplos workers
 type WorkerManager struct {
 	workers  []Worker
-	db       *sql.DB
+	db       *database.DB
 	stopChan chan struct{}
 	wg       sync.WaitGroup
 	mu       sync.Mutex
 }
 
 // NewWorkerManager cria um novo gerenciador de workers
-func NewWorkerManager(db *sql.DB) *WorkerManager {
+func NewWorkerManager(db *database.DB) *WorkerManager {
 	return &WorkerManager{
 		workers:  []Worker{},
 		db:       db,
@@ -111,6 +112,6 @@ func (wm *WorkerManager) Stop() {
 }
 
 // GetDB retorna a conexão com o banco de dados
-func (wm *WorkerManager) GetDB() *sql.DB {
+func (wm *WorkerManager) GetDB() *database.DB {
 	return wm.db
 }

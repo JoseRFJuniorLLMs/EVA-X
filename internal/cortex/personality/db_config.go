@@ -5,16 +5,18 @@ package personality
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
+	"sort"
 	"sync"
 	"time"
+
+	"eva/internal/brainstem/database"
 )
 
 // EnneagramDBConfig gerencia configurações do Enneagram do banco de dados
 type EnneagramDBConfig struct {
-	db    *sql.DB
+	db    *database.DB
 	cache *enneagramCache
 	mu    sync.RWMutex
 }
@@ -56,7 +58,7 @@ type RelationshipLevel struct {
 }
 
 // NewEnneagramDBConfig cria um novo gerenciador de configurações
-func NewEnneagramDBConfig(db *sql.DB) *EnneagramDBConfig {
+func NewEnneagramDBConfig(db *database.DB) *EnneagramDBConfig {
 	config := &EnneagramDBConfig{
 		db:    db,
 		cache: &enneagramCache{},
@@ -115,31 +117,41 @@ func (c *EnneagramDBConfig) LoadAll(ctx context.Context) error {
 
 // loadTypes carrega os tipos do Enneagram
 func (c *EnneagramDBConfig) loadTypes(ctx context.Context) error {
-	rows, err := c.db.QueryContext(ctx, `
-		SELECT type_id, type_name, COALESCE(type_name_en, ''), archetype,
-		       COALESCE(core_motivation, ''), COALESCE(core_fear, ''),
-		       personality_description, llm_instruction,
-		       stress_point, growth_point, wing_options
-		FROM enneagram_types
-		WHERE active = true
-	`)
+	rows, err := c.db.QueryByLabel(ctx, "enneagram_types", " AND n.active = $active", map[string]interface{}{"active": true}, 0)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var t EnneagramTypeInfo
-		var wings []int
-		if err := rows.Scan(
-			&t.TypeID, &t.TypeName, &t.TypeNameEN, &t.Archetype,
-			&t.CoreMotivation, &t.CoreFear,
-			&t.PersonalityDescription, &t.LLMInstruction,
-			&t.StressPoint, &t.GrowthPoint, &wings,
-		); err != nil {
-			continue
+	for _, row := range rows {
+		t := EnneagramTypeInfo{
+			TypeID:                 int(database.GetInt64(row, "type_id")),
+			TypeName:               database.GetString(row, "type_name"),
+			TypeNameEN:             database.GetString(row, "type_name_en"),
+			Archetype:              database.GetString(row, "archetype"),
+			CoreMotivation:         database.GetString(row, "core_motivation"),
+			CoreFear:               database.GetString(row, "core_fear"),
+			PersonalityDescription: database.GetString(row, "personality_description"),
+			LLMInstruction:         database.GetString(row, "llm_instruction"),
+			StressPoint:            int(database.GetInt64(row, "stress_point")),
+			GrowthPoint:            int(database.GetInt64(row, "growth_point")),
 		}
-		t.WingOptions = wings
+
+		// Parse wing_options from []interface{} to []int
+		if wRaw, ok := row["wing_options"]; ok && wRaw != nil {
+			if wSlice, ok := wRaw.([]interface{}); ok {
+				for _, v := range wSlice {
+					switch w := v.(type) {
+					case float64:
+						t.WingOptions = append(t.WingOptions, int(w))
+					case int64:
+						t.WingOptions = append(t.WingOptions, int(w))
+					case int:
+						t.WingOptions = append(t.WingOptions, w)
+					}
+				}
+			}
+		}
+
 		c.cache.types[t.TypeID] = t
 	}
 
@@ -148,22 +160,15 @@ func (c *EnneagramDBConfig) loadTypes(ctx context.Context) error {
 
 // loadAttentionWeights carrega os pesos de atenção
 func (c *EnneagramDBConfig) loadAttentionWeights(ctx context.Context) error {
-	rows, err := c.db.QueryContext(ctx, `
-		SELECT type_id, attention_concept, weight_multiplier
-		FROM enneagram_attention_weights
-	`)
+	rows, err := c.db.QueryByLabel(ctx, "enneagram_attention_weights", "", nil, 0)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var typeID int
-		var concept string
-		var weight float64
-		if err := rows.Scan(&typeID, &concept, &weight); err != nil {
-			continue
-		}
+	for _, row := range rows {
+		typeID := int(database.GetInt64(row, "type_id"))
+		concept := database.GetString(row, "attention_concept")
+		weight := database.GetFloat64(row, "weight_multiplier")
 
 		if c.cache.attentionWeights[typeID] == nil {
 			c.cache.attentionWeights[typeID] = make(map[string]float64)
@@ -176,21 +181,15 @@ func (c *EnneagramDBConfig) loadAttentionWeights(ctx context.Context) error {
 
 // loadMovements carrega os movimentos de estresse e crescimento
 func (c *EnneagramDBConfig) loadMovements(ctx context.Context) error {
-	rows, err := c.db.QueryContext(ctx, `
-		SELECT from_type, to_type, movement_type
-		FROM enneagram_movements
-	`)
+	rows, err := c.db.QueryByLabel(ctx, "enneagram_movements", "", nil, 0)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var fromType, toType int
-		var movementType string
-		if err := rows.Scan(&fromType, &toType, &movementType); err != nil {
-			continue
-		}
+	for _, row := range rows {
+		fromType := int(database.GetInt64(row, "from_type"))
+		toType := int(database.GetInt64(row, "to_type"))
+		movementType := database.GetString(row, "movement_type")
 
 		if movementType == "stress" {
 			c.cache.stressPoints[fromType] = toType
@@ -204,23 +203,24 @@ func (c *EnneagramDBConfig) loadMovements(ctx context.Context) error {
 
 // loadRelationshipLevels carrega os níveis de relacionamento
 func (c *EnneagramDBConfig) loadRelationshipLevels(ctx context.Context) error {
-	rows, err := c.db.QueryContext(ctx, `
-		SELECT level, level_name, COALESCE(description, ''),
-		       COALESCE(interaction_style, ''), autonomy_degree, min_conversations
-		FROM relationship_levels
-	`)
+	rows, err := c.db.QueryByLabel(ctx, "relationship_levels", "", nil, 0)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var rl RelationshipLevel
-		if err := rows.Scan(
-			&rl.Level, &rl.LevelName, &rl.Description,
-			&rl.InteractionStyle, &rl.AutonomyDegree, &rl.MinConversations,
-		); err != nil {
-			continue
+	// Sort by level ASC (NietzscheDB has no ORDER BY)
+	sort.Slice(rows, func(i, j int) bool {
+		return database.GetInt64(rows[i], "level") < database.GetInt64(rows[j], "level")
+	})
+
+	for _, row := range rows {
+		rl := RelationshipLevel{
+			Level:            int(database.GetInt64(row, "level")),
+			LevelName:        database.GetString(row, "level_name"),
+			Description:      database.GetString(row, "description"),
+			InteractionStyle: database.GetString(row, "interaction_style"),
+			AutonomyDegree:   database.GetFloat64(row, "autonomy_degree"),
+			MinConversations: int(database.GetInt64(row, "min_conversations")),
 		}
 		c.cache.relationshipLevels[rl.Level] = rl
 	}
@@ -230,20 +230,17 @@ func (c *EnneagramDBConfig) loadRelationshipLevels(ctx context.Context) error {
 
 // loadConfig carrega configurações gerais
 func (c *EnneagramDBConfig) loadConfig(ctx context.Context) error {
-	rows, err := c.db.QueryContext(ctx, `
-		SELECT config_key, config_value FROM enneagram_config
-	`)
+	rows, err := c.db.QueryByLabel(ctx, "enneagram_config", "", nil, 0)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var key, value string
-		if err := rows.Scan(&key, &value); err != nil {
-			continue
+	for _, row := range rows {
+		key := database.GetString(row, "config_key")
+		value := database.GetString(row, "config_value")
+		if key != "" {
+			c.cache.config[key] = value
 		}
-		c.cache.config[key] = value
 	}
 
 	return nil

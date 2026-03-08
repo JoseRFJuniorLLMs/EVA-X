@@ -2,13 +2,14 @@ package memory
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
+	"eva/internal/brainstem/database"
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	nietzsche "nietzsche-sdk"
 )
@@ -44,16 +45,16 @@ type Memory struct {
 
 // MemoryStore gerencia o armazenamento de memórias
 type MemoryStore struct {
-	db            *sql.DB
+	db            *database.DB
 	graphStore    *GraphStore                   // Para salvar relações no NietzscheDB graph
 	vectorAdapter *nietzscheInfra.VectorAdapter // Para salvar vetores no NietzscheDB
 }
 
 // NewMemoryStore cria um novo gerenciador de memórias
-// graphStore é opcional - se nil, apenas Postgres será usado
-func NewMemoryStore(db *sql.DB, graphStore *GraphStore, vectorAdapter *nietzscheInfra.VectorAdapter) *MemoryStore {
+// graphStore é opcional - se nil, apenas NietzscheDB primary será usado
+func NewMemoryStore(db *database.DB, graphStore *GraphStore, vectorAdapter *nietzscheInfra.VectorAdapter) *MemoryStore {
 	if db == nil {
-		log.Printf("⚠️ [STORAGE] NietzscheDB unavailable — running in degraded mode (NietzscheDB only)")
+		log.Printf("⚠️ [STORAGE] NietzscheDB unavailable — running in degraded mode")
 	}
 	return &MemoryStore{
 		db:            db,
@@ -63,40 +64,42 @@ func NewMemoryStore(db *sql.DB, graphStore *GraphStore, vectorAdapter *nietzsche
 }
 
 // Store salva uma nova memória no banco
-// ✅ CORREÇÃO P5: Agora salva no Postgres E NietzscheDB graph
+// ✅ NietzscheDB primary storage + graph + vector
 func (m *MemoryStore) Store(ctx context.Context, memory *Memory) error {
-	// 1. ✅ Salvar no Postgres (Sem vetor)
+	// 1. ✅ Salvar no NietzscheDB
 	if m.db != nil {
-		query := `
-			INSERT INTO episodic_memories
-			(idoso_id, speaker, content, emotion, importance, topics, session_id, call_history_id, event_date, is_atomic)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-			RETURNING id, timestamp
-		`
+		memory.Timestamp = time.Now()
 
-		err := m.db.QueryRowContext(
-			ctx,
-			query,
-			memory.IdosoID,
-			memory.Speaker,
-			memory.Content,
-			memory.Emotion,
-			memory.Importance,
-			pqArray(memory.Topics),
-			memory.SessionID,
-			memory.CallHistoryID,
-			memory.EventDate,
-			memory.IsAtomic,
-		).Scan(&memory.ID, &memory.Timestamp)
-
-		if err != nil {
-			return fmt.Errorf("postgres save failed: %w", err)
+		var callHistoryID interface{}
+		if memory.CallHistoryID != nil {
+			callHistoryID = float64(*memory.CallHistoryID)
 		}
 
-		log.Printf("✅ [STORAGE] Memória salva no Postgres: ID=%d, idoso=%d, speaker=%s",
+		content := map[string]interface{}{
+			"idoso_id":        float64(memory.IdosoID),
+			"speaker":         memory.Speaker,
+			"content":         memory.Content,
+			"emotion":         memory.Emotion,
+			"importance":      memory.Importance,
+			"topics":          memory.Topics,
+			"session_id":      memory.SessionID,
+			"call_history_id": callHistoryID,
+			"event_date":      memory.EventDate.Format(time.RFC3339),
+			"is_atomic":       memory.IsAtomic,
+			"is_archived":     false,
+			"timestamp":       memory.Timestamp.Format(time.RFC3339),
+		}
+
+		id, err := m.db.Insert(ctx, "episodic_memories", content)
+		if err != nil {
+			return fmt.Errorf("NietzscheDB save failed: %w", err)
+		}
+		memory.ID = id
+
+		log.Printf("✅ [STORAGE] Memória salva no NietzscheDB: ID=%d, idoso=%d, speaker=%s",
 			memory.ID, memory.IdosoID, memory.Speaker)
 	} else {
-		log.Printf("⚠️ [STORAGE] NietzscheDB unavailable — skipping Postgres save for memory")
+		log.Printf("⚠️ [STORAGE] NietzscheDB unavailable — skipping save for memory")
 		memory.Timestamp = time.Now()
 	}
 
@@ -105,7 +108,7 @@ func (m *MemoryStore) Store(ctx context.Context, memory *Memory) error {
 		if err := m.graphStore.AddEpisodicMemory(ctx, memory); err != nil {
 			// NÃO falhar a operação, mas logar claramente
 			log.Printf("❌ [GRAPH] Falha ao salvar relações para memória %d: %v", memory.ID, err)
-			log.Printf("⚠️ [GRAPH] Memória salva no Postgres MAS relações NietzscheDB graph falharam!")
+			log.Printf("⚠️ [GRAPH] Memória salva no NietzscheDB MAS relações graph falharam!")
 		} else {
 			log.Printf("✅ [GRAPH] Relações salvas: %d topics, emoção=%s (memória %d)",
 				len(memory.Topics), memory.Emotion, memory.ID)
@@ -151,65 +154,51 @@ func (m *MemoryStore) Store(ctx context.Context, memory *Memory) error {
 			}
 		}
 	} else {
-		log.Printf("⚠️ [VECTOR] VectorAdapter não disponível ou embedding vazio - vetor NÃO salvo (apenas Postgres)")
+		log.Printf("⚠️ [VECTOR] VectorAdapter não disponível ou embedding vazio - vetor NÃO salvo")
 	}
 
 	return nil
 }
 
 // GetByID recupera uma memória por ID.
-// Tenta NietzscheDB primeiro (mais rápido, sem round-trip PG), fallback para Postgres.
+// Tenta VectorAdapter primeiro, fallback para NietzscheDB primary.
 func (m *MemoryStore) GetByID(ctx context.Context, id int64) (*Memory, error) {
-	// 1. Tentar NietzscheDB primeiro
+	// 1. Tentar VectorAdapter primeiro (cache de vetores)
 	if m.vectorAdapter != nil {
 		payload, found, err := m.vectorAdapter.GetNodeByID(ctx, "memories", fmt.Sprintf("%d", id))
 		if err == nil && found && payload != nil {
 			mem := memoryFromPayload(payload)
 			if mem != nil && mem.ID > 0 {
-				log.Printf("✅ [STORAGE] GetByID %d servido do NietzscheDB", id)
+				log.Printf("✅ [STORAGE] GetByID %d servido do VectorAdapter", id)
 				return mem, nil
 			}
 		}
 	}
 
-	// 2. Fallback para Postgres
+	// 2. Fallback para NietzscheDB primary
 	if m.db == nil {
 		return nil, fmt.Errorf("memory %d not found (NietzscheDB unavailable)", id)
 	}
 
-	query := `
-		SELECT id, idoso_id, timestamp, speaker, content, emotion,
-		       importance, topics, session_id, call_history_id, event_date, is_atomic
-		FROM episodic_memories
-		WHERE id = $1
-	`
-
-	memory := &Memory{}
-	var topics string
-
-	err := m.db.QueryRowContext(ctx, query, id).Scan(
-		&memory.ID,
-		&memory.IdosoID,
-		&memory.Timestamp,
-		&memory.Speaker,
-		&memory.Content,
-		&memory.Emotion,
-		&memory.Importance,
-		&topics,
-		&memory.SessionID,
-		&memory.IsAtomic,
-	)
-
+	content, err := m.db.GetNodeByID(ctx, "episodic_memories", id)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("GetByID %d failed: %w", id, err)
+	}
+	if content == nil {
+		return nil, fmt.Errorf("memory %d not found", id)
 	}
 
-	memory.Topics = parsePostgresArray(topics)
-	return memory, nil
+	mem := memoryFromPayload(content)
+	if mem == nil {
+		return nil, fmt.Errorf("memory %d: failed to parse content", id)
+	}
+
+	log.Printf("✅ [STORAGE] GetByID %d servido do NietzscheDB primary", id)
+	return mem, nil
 }
 
 // GetRecent retorna as N memórias mais recentes de um idoso.
-// Tenta NietzscheDB NQL primeiro, fallback para Postgres.
+// Tenta NietzscheDB NQL (VectorAdapter) primeiro, fallback para NietzscheDB primary.
 func (m *MemoryStore) GetRecent(ctx context.Context, idosoID int64, limit int) ([]*Memory, error) {
 	// 1. Tentar NietzscheDB NQL
 	if m.vectorAdapter != nil {
@@ -233,27 +222,37 @@ func (m *MemoryStore) GetRecent(ctx context.Context, idosoID int64, limit int) (
 		}
 	}
 
-	// 2. Fallback para Postgres
+	// 2. Fallback para NietzscheDB primary (QueryByLabel)
 	if m.db == nil {
 		return nil, fmt.Errorf("no recent memories (NietzscheDB unavailable)")
 	}
 
-	query := `
-		SELECT id, idoso_id, timestamp, speaker, content, emotion,
-		       importance, topics, session_id, call_history_id, event_date, is_atomic
-		FROM episodic_memories
-		WHERE idoso_id = $1
-		ORDER BY timestamp DESC
-		LIMIT $2
-	`
-
-	rows, err := m.db.QueryContext(ctx, query, idosoID, limit)
+	rows, err := m.db.QueryByLabel(ctx, "episodic_memories",
+		" AND n.idoso_id = $idoso_id",
+		map[string]interface{}{"idoso_id": float64(idosoID)}, 0)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("GetRecent query failed: %w", err)
 	}
-	defer rows.Close()
 
-	return m.scanMemories(rows)
+	var memories []*Memory
+	for _, row := range rows {
+		if mem := memoryFromPayload(row); mem != nil && mem.ID > 0 {
+			memories = append(memories, mem)
+		}
+	}
+
+	// Sort by timestamp DESC in Go
+	sort.Slice(memories, func(i, j int) bool {
+		return memories[i].Timestamp.After(memories[j].Timestamp)
+	})
+
+	// Apply limit
+	if limit > 0 && len(memories) > limit {
+		memories = memories[:limit]
+	}
+
+	log.Printf("✅ [STORAGE] GetRecent idoso=%d: %d memórias do NietzscheDB primary", idosoID, len(memories))
+	return memories, nil
 }
 
 // =============================================================================
@@ -305,38 +304,43 @@ func (m *MemoryStore) DeleteOld(ctx context.Context, requesterCPF string, idosoI
 		minImportance = 0.7
 	}
 
-	var query string
-	var result sql.Result
-	var err error
-
-	if idosoID == 0 {
-		// Deletar de TODOS os pacientes (usar com cuidado!)
-		query = `
-			DELETE FROM episodic_memories
-			WHERE timestamp < NOW() - INTERVAL '1 day' * $1
-			  AND importance < $2
-		`
-		result, err = m.db.ExecContext(ctx, query, olderThanDays, minImportance)
-	} else {
-		// Deletar apenas de um paciente específico
-		query = `
-			DELETE FROM episodic_memories
-			WHERE idoso_id = $1
-			  AND timestamp < NOW() - INTERVAL '1 day' * $2
-			  AND importance < $3
-		`
-		result, err = m.db.ExecContext(ctx, query, idosoID, olderThanDays, minImportance)
+	// Query all episodic_memories (optionally filtered by idoso_id)
+	extraWhere := ""
+	params := map[string]interface{}{}
+	if idosoID != 0 {
+		extraWhere = " AND n.idoso_id = $idoso_id"
+		params["idoso_id"] = float64(idosoID)
 	}
 
+	rows, err := m.db.QueryByLabel(ctx, "episodic_memories", extraWhere, params, 0)
 	if err != nil {
-		log.Printf("❌ [ADMIN] Erro em DeleteOld: %v", err)
+		log.Printf("❌ [ADMIN] Erro em DeleteOld query: %v", err)
 		return 0, err
 	}
 
-	rowsAffected, _ := result.RowsAffected()
-	log.Printf("✅ [ADMIN] DeleteOld concluído: %d memórias removidas", rowsAffected)
+	cutoff := time.Now().AddDate(0, 0, -olderThanDays)
+	var deleted int64
 
-	return rowsAffected, nil
+	for _, row := range rows {
+		mem := memoryFromPayload(row)
+		if mem == nil {
+			continue
+		}
+		// Filter: older than cutoff AND importance below threshold
+		if mem.Timestamp.Before(cutoff) && mem.Importance < minImportance {
+			err := m.db.SoftDelete(ctx, "episodic_memories", map[string]interface{}{
+				"id": float64(mem.ID),
+			})
+			if err != nil {
+				log.Printf("⚠️ [ADMIN] Falha ao soft-delete memória %d: %v", mem.ID, err)
+				continue
+			}
+			deleted++
+		}
+	}
+
+	log.Printf("✅ [ADMIN] DeleteOld concluído: %d memórias removidas (soft-delete)", deleted)
+	return deleted, nil
 }
 
 // DeleteAllMemories remove TODAS as memórias de um paciente
@@ -359,17 +363,32 @@ func (m *MemoryStore) DeleteAllMemories(ctx context.Context, requesterCPF string
 	log.Printf("🔧 [ADMIN] DeleteAllMemories autorizado para criador Jose R F Junior")
 	log.Printf("⚠️  [ADMIN] DELETANDO TODAS as memórias do idoso %d", idosoID)
 
-	query := `DELETE FROM episodic_memories WHERE idoso_id = $1`
-	result, err := m.db.ExecContext(ctx, query, idosoID)
+	rows, err := m.db.QueryByLabel(ctx, "episodic_memories",
+		" AND n.idoso_id = $idoso_id",
+		map[string]interface{}{"idoso_id": float64(idosoID)}, 0)
 	if err != nil {
-		log.Printf("❌ [ADMIN] Erro em DeleteAllMemories: %v", err)
+		log.Printf("❌ [ADMIN] Erro em DeleteAllMemories query: %v", err)
 		return 0, err
 	}
 
-	rowsAffected, _ := result.RowsAffected()
-	log.Printf("✅ [ADMIN] DeleteAllMemories concluído: %d memórias removidas do idoso %d", rowsAffected, idosoID)
+	var deleted int64
+	for _, row := range rows {
+		memID := database.GetInt64(row, "id")
+		if memID == 0 {
+			continue
+		}
+		err := m.db.SoftDelete(ctx, "episodic_memories", map[string]interface{}{
+			"id": float64(memID),
+		})
+		if err != nil {
+			log.Printf("⚠️ [ADMIN] Falha ao soft-delete memória %d: %v", memID, err)
+			continue
+		}
+		deleted++
+	}
 
-	return rowsAffected, nil
+	log.Printf("✅ [ADMIN] DeleteAllMemories concluído: %d memórias removidas do idoso %d (soft-delete)", deleted, idosoID)
+	return deleted, nil
 }
 
 // GetMemoryStats retorna estatísticas de memórias (função admin)
@@ -385,88 +404,70 @@ func (m *MemoryStore) GetMemoryStats(ctx context.Context, requesterCPF string) (
 
 	stats := make(map[string]interface{})
 
+	// Query all episodic_memories from NietzscheDB
+	allRows, err := m.db.QueryByLabel(ctx, "episodic_memories", "", nil, 0)
+	if err != nil {
+		return nil, fmt.Errorf("GetMemoryStats query failed: %w", err)
+	}
+
 	// Total de memórias
-	var totalMemories int64
-	m.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM episodic_memories").Scan(&totalMemories)
+	totalMemories := int64(len(allRows))
 	stats["total_memories"] = totalMemories
 
-	// Memórias por paciente
-	var totalPatients int64
-	m.db.QueryRowContext(ctx, "SELECT COUNT(DISTINCT idoso_id) FROM episodic_memories").Scan(&totalPatients)
+	// Compute stats in Go
+	patientsSet := make(map[int64]bool)
+	importanceStats := map[string]int64{
+		"critical (>=0.9)":  0,
+		"important (0.7-0.9)": 0,
+		"normal (0.5-0.7)":   0,
+		"low (<0.5)":         0,
+	}
+	var oldest, newest time.Time
+
+	for _, row := range allRows {
+		mem := memoryFromPayload(row)
+		if mem == nil {
+			continue
+		}
+
+		// Distinct patients
+		patientsSet[mem.IdosoID] = true
+
+		// Importance categories
+		switch {
+		case mem.Importance >= 0.9:
+			importanceStats["critical (>=0.9)"]++
+		case mem.Importance >= 0.7:
+			importanceStats["important (0.7-0.9)"]++
+		case mem.Importance >= 0.5:
+			importanceStats["normal (0.5-0.7)"]++
+		default:
+			importanceStats["low (<0.5)"]++
+		}
+
+		// Oldest / newest
+		if oldest.IsZero() || mem.Timestamp.Before(oldest) {
+			oldest = mem.Timestamp
+		}
+		if newest.IsZero() || mem.Timestamp.After(newest) {
+			newest = mem.Timestamp
+		}
+	}
+
+	totalPatients := int64(len(patientsSet))
 	stats["total_patients_with_memories"] = totalPatients
 
-	// Média por paciente
 	if totalPatients > 0 {
 		stats["avg_memories_per_patient"] = float64(totalMemories) / float64(totalPatients)
 	}
 
-	// Memórias por importance
-	rows, _ := m.db.QueryContext(ctx, `
-		SELECT
-			CASE
-				WHEN importance >= 0.9 THEN 'critical (>=0.9)'
-				WHEN importance >= 0.7 THEN 'important (0.7-0.9)'
-				WHEN importance >= 0.5 THEN 'normal (0.5-0.7)'
-				ELSE 'low (<0.5)'
-			END as category,
-			COUNT(*) as count
-		FROM episodic_memories
-		GROUP BY category
-		ORDER BY category
-	`)
-	if rows != nil {
-		defer rows.Close()
-		importanceStats := make(map[string]int64)
-		for rows.Next() {
-			var category string
-			var count int64
-			rows.Scan(&category, &count)
-			importanceStats[category] = count
-		}
-		stats["by_importance"] = importanceStats
-	}
-
-	// Memória mais antiga e mais recente
-	var oldest, newest time.Time
-	m.db.QueryRowContext(ctx, "SELECT MIN(timestamp), MAX(timestamp) FROM episodic_memories").Scan(&oldest, &newest)
+	stats["by_importance"] = importanceStats
 	stats["oldest_memory"] = oldest
 	stats["newest_memory"] = newest
 
 	log.Printf("🔧 [ADMIN] GetMemoryStats executado pelo criador")
 
 	return stats, nil
-}
-
-// scanMemories helper para converter rows em slice de Memory
-func (m *MemoryStore) scanMemories(rows *sql.Rows) ([]*Memory, error) {
-	var memories []*Memory
-
-	for rows.Next() {
-		memory := &Memory{}
-		var topics string
-
-		err := rows.Scan(
-			&memory.ID,
-			&memory.IdosoID,
-			&memory.Timestamp,
-			&memory.Speaker,
-			&memory.Content,
-			&memory.Topics,
-			&memory.SessionID,
-			&memory.CallHistoryID,
-			&memory.EventDate,
-			&memory.IsAtomic,
-		)
-
-		if err != nil {
-			return nil, err
-		}
-
-		memory.Topics = parsePostgresArray(topics)
-		memories = append(memories, memory)
-	}
-
-	return memories, rows.Err()
 }
 
 // memoryFromPayload constructs a Memory from a NietzscheDB node content payload.
@@ -565,116 +566,38 @@ func memoryFromPayload(payload map[string]interface{}) *Memory {
 	return mem
 }
 
-// Helpers para conversão de tipos NietzscheDB
-
-func vectorToPostgres(vec []float32) string {
-	if len(vec) == 0 {
-		return "[]"
-	}
-
-	result := "["
-	for i, v := range vec {
-		if i > 0 {
-			result += ","
-		}
-		result += fmt.Sprintf("%f", v)
-	}
-	result += "]"
-
-	return result
-}
-
-func pqArray(arr []string) string {
-	if len(arr) == 0 {
-		return "{}"
-	}
-
-	result := "{"
-	for i, s := range arr {
-		if i > 0 {
-			result += ","
-		}
-		result += fmt.Sprintf("\"%s\"", s)
-	}
-	result += "}"
-
-	return result
-}
-
-func parsePostgresArray(s string) []string {
-	if s == "{}" || s == "" {
-		return []string{}
-	}
-
-	// Remove {} e split por vírgula
-	s = s[1 : len(s)-1]
-	var result []string
-
-	// Parse manual para lidar com aspas
-	var current string
-	inQuotes := false
-
-	for _, c := range s {
-		switch c {
-		case '"':
-			inQuotes = !inQuotes
-		case ',':
-			if !inQuotes {
-				if current != "" {
-					result = append(result, current)
-					current = ""
-				}
-			} else {
-				current += string(c)
-			}
-		default:
-			current += string(c)
-		}
-	}
-
-	if current != "" {
-		result = append(result, current)
-	}
-
-	return result
-}
-
 // GetArchivalCandidates localiza memórias que podem ser movidas para o Cold Path
 func (m *MemoryStore) GetArchivalCandidates(ctx context.Context, idosoID int64, daysOld int, minImportance float64) ([]*Memory, error) {
 	if m.db == nil {
 		return nil, fmt.Errorf("NietzscheDB unavailable")
 	}
-	query := `
-		SELECT id, idoso_id, timestamp, speaker, content, emotion, importance, topics, session_id, call_history_id, event_date, is_atomic, is_archived
-		FROM episodic_memories
-		WHERE idoso_id = $1 
-		  AND is_archived = false
-		  AND importance <= $2
-		  AND event_date < $3
-		LIMIT 100
-	`
+
+	rows, err := m.db.QueryByLabel(ctx, "episodic_memories",
+		" AND n.idoso_id = $idoso_id",
+		map[string]interface{}{"idoso_id": float64(idosoID)}, 0)
+	if err != nil {
+		return nil, fmt.Errorf("GetArchivalCandidates query failed: %w", err)
+	}
 
 	archivalDate := time.Now().AddDate(0, 0, -daysOld)
-	rows, err := m.db.QueryContext(ctx, query, idosoID, minImportance, archivalDate)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
 	var memories []*Memory
-	for rows.Next() {
-		var mem Memory
-		var topics string
-		err := rows.Scan(
-			&mem.ID, &mem.IdosoID, &mem.Timestamp, &mem.Speaker, &mem.Content,
-			&mem.Emotion, &mem.Importance, &topics, &mem.SessionID,
-			&mem.CallHistoryID, &mem.EventDate, &mem.IsAtomic, &mem.IsArchived,
-		)
-		if err != nil {
-			return nil, err
+
+	for _, row := range rows {
+		mem := memoryFromPayload(row)
+		if mem == nil {
+			continue
 		}
-		mem.Topics = parsePostgresArray(topics)
-		memories = append(memories, &mem)
+		// Read is_archived from payload
+		if v, ok := row["is_archived"].(bool); ok {
+			mem.IsArchived = v
+		}
+		// Filter: not archived, importance <= threshold, event_date older than cutoff
+		if !mem.IsArchived && mem.Importance <= minImportance && mem.EventDate.Before(archivalDate) {
+			memories = append(memories, mem)
+		}
+		if len(memories) >= 100 {
+			break
+		}
 	}
 
 	return memories, nil
@@ -685,7 +608,7 @@ func (m *MemoryStore) MarkAsArchived(ctx context.Context, id int64) error {
 	if m.db == nil {
 		return fmt.Errorf("NietzscheDB unavailable")
 	}
-	query := `UPDATE episodic_memories SET is_archived = true WHERE id = $1`
-	_, err := m.db.ExecContext(ctx, query, id)
-	return err
+	return m.db.Update(ctx, "episodic_memories",
+		map[string]interface{}{"id": float64(id)},
+		map[string]interface{}{"is_archived": true})
 }

@@ -5,7 +5,7 @@ package lacan
 
 import (
 	"context"
-	"database/sql"
+	"eva/internal/brainstem/database"
 	"log"
 	"strings"
 
@@ -20,12 +20,12 @@ type InterpretationService struct {
 	grandAutre        *GrandAutreService
 	conflictSynthesis *ConflictSynthesisService
 
-	db          *sql.DB
+	db          *database.DB
 	graphClient *nietzscheInfra.GraphAdapter
 }
 
 // NewInterpretationService cria servico completo de interpretacao
-func NewInterpretationService(db *sql.DB, graphClient *nietzscheInfra.GraphAdapter) *InterpretationService {
+func NewInterpretationService(db *database.DB, graphClient *nietzscheInfra.GraphAdapter) *InterpretationService {
 	return &InterpretationService{
 		transferencia: NewTransferenceService(db),
 		significante:  NewSignifierService(graphClient),

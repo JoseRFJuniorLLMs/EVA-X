@@ -4,10 +4,13 @@
 package main
 
 import (
-	"database/sql"
+	"context"
 	"fmt"
 	"log"
 	"strings"
+	"time"
+
+	"eva/internal/brainstem/database"
 
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
@@ -15,116 +18,104 @@ import (
 
 // changeVoice troca a voz da EVA em tempo real
 func (s *SignalingServer) changeVoice(client *PCMClient, newVoice string) map[string]interface{} {
-	log.Printf("🎙️ [VOICE] Solicitação de troca de voz: %s → %s", client.CPF, newVoice)
+	log.Printf("[VOICE] Solicitacao de troca de voz: %s -> %s", client.CPF, newVoice)
+	ctx := context.Background()
 
-	// Validar se a voz existe
-	var exists bool
-	err := s.db.GetConnection().QueryRow(`
-		SELECT EXISTS(SELECT 1 FROM eva_voices WHERE voice_name = $1 AND is_active = true)
-	`, newVoice).Scan(&exists)
-
-	if err != nil || !exists {
-		log.Printf("❌ [VOICE] Voz inválida: %s", newVoice)
+	// Validar se a voz existe via NietzscheDB
+	voiceRows, err := s.db.QueryByLabel(ctx, "eva_voices",
+		" AND n.voice_name = $vname AND n.is_active = $active",
+		map[string]interface{}{
+			"vname":  newVoice,
+			"active": true,
+		}, 1)
+	if err != nil || len(voiceRows) == 0 {
+		log.Printf("[VOICE] Voz invalida: %s", newVoice)
 		return map[string]interface{}{
 			"success": false,
-			"error":   fmt.Sprintf("Voz '%s' não encontrada", newVoice),
+			"error":   fmt.Sprintf("Voz '%s' nao encontrada", newVoice),
 		}
 	}
 
-	// Obter voz atual
-	var currentVoice sql.NullString
-	if err := s.db.GetConnection().QueryRow(`
-		SELECT preferred_voice FROM idosos WHERE id = $1
-	`, client.IdosoID).Scan(&currentVoice); err != nil && err != sql.ErrNoRows {
-		log.Printf("⚠️ [VOICE] Erro ao buscar voz atual: %v", err)
+	// Obter voz atual do idoso
+	oldVoice := "Aoede" // Padrao
+	idosoNode, err := s.db.GetNodeByID(ctx, "idosos", client.IdosoID)
+	if err == nil && idosoNode != nil {
+		if pv := database.GetString(idosoNode, "preferred_voice"); pv != "" {
+			oldVoice = pv
+		}
 	}
 
-	oldVoice := "Aoede" // Padrão
-	if currentVoice.Valid {
-		oldVoice = currentVoice.String
-	}
-
-	// Atualizar preferência no banco
-	_, err = s.db.GetConnection().Exec(`
-		UPDATE idosos SET preferred_voice = $1 WHERE id = $2
-	`, newVoice, client.IdosoID)
-
+	// Atualizar preferencia no NietzscheDB
+	err = s.db.Update(ctx, "idosos",
+		map[string]interface{}{"id": float64(client.IdosoID)},
+		map[string]interface{}{
+			"preferred_voice": newVoice,
+		})
 	if err != nil {
-		log.Printf("❌ [VOICE] Erro ao atualizar banco: %v", err)
+		log.Printf("[VOICE] Erro ao atualizar banco: %v", err)
 		return map[string]interface{}{
 			"success": false,
-			"error":   "Erro ao salvar preferência",
+			"error":   "Erro ao salvar preferencia",
 		}
 	}
 
-	// Registrar histórico
-	if _, err := s.db.GetConnection().Exec(`
-		INSERT INTO voice_change_history (idoso_id, old_voice, new_voice, change_method)
-		VALUES ($1, $2, $3, 'voice_command')
-	`, client.IdosoID, oldVoice, newVoice); err != nil {
-		log.Printf("⚠️ [VOICE] Erro ao registrar historico de troca: %v", err)
+	// Registrar historico via NietzscheDB
+	if _, err := s.db.Insert(ctx, "voice_change_history", map[string]interface{}{
+		"idoso_id":      client.IdosoID,
+		"old_voice":     oldVoice,
+		"new_voice":     newVoice,
+		"change_method": "voice_command",
+		"criado_em":     time.Now().Format(time.RFC3339),
+	}); err != nil {
+		log.Printf("[VOICE] Erro ao registrar historico de troca: %v", err)
 	}
 
-	log.Printf("✅ [VOICE] Voz alterada: %s → %s (Idoso %d)", oldVoice, newVoice, client.IdosoID)
+	log.Printf("[VOICE] Voz alterada: %s -> %s (Idoso %d)", oldVoice, newVoice, client.IdosoID)
 
-	// Obter nome amigável da voz
-	var displayName string
-	if err := s.db.GetConnection().QueryRow(`
-		SELECT display_name FROM eva_voices WHERE voice_name = $1
-	`, newVoice).Scan(&displayName); err != nil {
-		log.Printf("⚠️ [VOICE] Erro ao buscar display_name: %v", err)
-		displayName = newVoice // fallback
+	// Obter nome amigavel da voz
+	displayName := newVoice // fallback
+	if len(voiceRows) > 0 {
+		if dn := database.GetString(voiceRows[0], "display_name"); dn != "" {
+			displayName = dn
+		}
 	}
 
-	// **CRÍTICO:** A mudança só afeta próxima sessão
-	// Para mudar EM TEMPO REAL, precisamos reconfigurar Gemini
-	// Infelizmente, Gemini não suporta mudança de voz mid-session
-	// Então vamos avisar que mudará na próxima chamada
-
+	// A mudanca so afeta proxima sessao
+	// Gemini nao suporta mudanca de voz mid-session
 	return map[string]interface{}{
 		"success":      true,
 		"old_voice":    oldVoice,
 		"new_voice":    newVoice,
 		"display_name": displayName,
-		"message":      fmt.Sprintf("Voz alterada para %s! A mudança será aplicada na próxima conversa.", displayName),
+		"message":      fmt.Sprintf("Voz alterada para %s! A mudanca sera aplicada na proxima conversa.", displayName),
 		"takes_effect": "next_session",
 	}
 }
 
-// getAvailableVoices retorna lista de vozes disponíveis
+// getAvailableVoices retorna lista de vozes disponiveis
 func (s *SignalingServer) getAvailableVoices() map[string]interface{} {
-	rows, err := s.db.GetConnection().Query(`
-		SELECT voice_name, display_name, gender, tone
-		FROM eva_voices
-		WHERE is_active = true
-		ORDER BY display_name
-	`)
+	ctx := context.Background()
 
+	rows, err := s.db.QueryByLabel(ctx, "eva_voices",
+		" AND n.is_active = $active",
+		map[string]interface{}{
+			"active": true,
+		}, 0)
 	if err != nil {
 		return map[string]interface{}{
 			"success": false,
 			"error":   "Erro ao buscar vozes",
 		}
 	}
-	defer rows.Close()
 
 	var voices []map[string]string
-	for rows.Next() {
-		var voiceName, displayName, gender, tone string
-		if err := rows.Scan(&voiceName, &displayName, &gender, &tone); err != nil {
-			log.Printf("⚠️ [VOICE] Erro ao ler voz: %v", err)
-			continue
-		}
-
+	for _, m := range rows {
 		voices = append(voices, map[string]string{
-			"voice_name":   voiceName,
-			"display_name": displayName,
-			"gender":       gender,
-			"tone":         tone,
+			"voice_name":   database.GetString(m, "voice_name"),
+			"display_name": database.GetString(m, "display_name"),
+			"gender":       database.GetString(m, "gender"),
+			"tone":         database.GetString(m, "tone"),
 		})
-	}
-	if err := rows.Err(); err != nil {
-		log.Printf("⚠️ [VOICE] Erro na iteração de vozes: %v", err)
 	}
 
 	return map[string]interface{}{
@@ -138,7 +129,7 @@ func (s *SignalingServer) getAvailableVoices() map[string]interface{} {
 func detectVoiceChangeCommand(text string) (bool, string) {
 	textLower := strings.ToLower(text)
 
-	// Padrões de comando
+	// Padroes de comando
 	patterns := []string{
 		"troque sua voz",
 		"mude sua voz",
@@ -150,9 +141,9 @@ func detectVoiceChangeCommand(text string) (bool, string) {
 
 	for _, pattern := range patterns {
 		if strings.Contains(textLower, pattern) {
-			// Detectar voz específica mencionada
+			// Detectar voz especifica mencionada
 			voiceNames := []string{
-				// Clássicas
+				// Classicas
 				"aoede", "charon", "fenrir", "kore", "puck",
 				// Novas Femininas
 				"zephyr", "leda", "callirrhoe", "autonoe", "despina",
@@ -164,13 +155,12 @@ func detectVoiceChangeCommand(text string) (bool, string) {
 
 			for _, voiceName := range voiceNames {
 				if strings.Contains(textLower, voiceName) {
-					// Capitalize primeira letra
 					return true, cases.Title(language.English).String(voiceName)
 				}
 			}
 
-			// Sem voz específica: retornar voz aleatória
-			return true, "" // Vazio = escolher aleatória
+			// Sem voz especifica: retornar voz aleatoria
+			return true, "" // Vazio = escolher aleatoria
 		}
 	}
 

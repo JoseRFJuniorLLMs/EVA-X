@@ -5,7 +5,6 @@ package brain
 
 import (
 	"context"
-	"database/sql"
 	"log"
 )
 
@@ -16,15 +15,7 @@ func (s *Service) BuildSystemPrompt(idosoID int64) string {
 	prompt, _, err := s.unifiedRetrieval.GetPromptForGemini(context.Background(), idosoID, "", "")
 	if err != nil {
 		log.Printf("⚠️ [Brain] Failed to build unified prompt: %v. Using fallback.", err)
-		return "VOCÊ É A EVA. Ocorreu um erro ao carregar sua memória completa. Apenas converse naturalmente."
+		return "VOCE E A EVA. Ocorreu um erro ao carregar sua memoria completa. Apenas converse naturalmente."
 	}
 	return prompt
-}
-
-// Helper seguro para NullString
-func getString(ns sql.NullString, def string) string {
-	if ns.Valid && ns.String != "" {
-		return ns.String
-	}
-	return def
 }

@@ -296,10 +296,15 @@ func (e *CoreMemoryEngine) ProcessSessionEnd(ctx context.Context, data SessionDa
 
 	// 3. Criar CoreMemory para cada licao aprendida
 	for _, lesson := range reflection.LessonsLearned {
-		// Gerar embedding
-		embedding, err := e.embeddingService.GenerateEmbedding(ctx, lesson)
-		if err != nil {
-			return fmt.Errorf("embedding generation failed: %w", err)
+		// Gerar embedding (nil-safe)
+		var embedding []float32
+		if e.embeddingService != nil {
+			emb, err := e.embeddingService.GenerateEmbedding(ctx, lesson)
+			if err != nil {
+				log.Printf("[CoreMemory] WARN: embedding generation failed (continuing without): %v", err)
+			} else {
+				embedding = emb
+			}
 		}
 
 		// Verificar duplicacao semantica

@@ -5,18 +5,19 @@ package tools
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
 	"strings"
 	"sync"
 	"time"
+
+	"eva/internal/brainstem/database"
 )
 
 // ToolDiscoveryService gerencia descoberta e combinação de ferramentas
 type ToolDiscoveryService struct {
 	repo       *ToolRepository
-	db         *sql.DB
+	db         *database.DB
 	cache      *toolCache
 	useDynamic bool // Se true, usa banco; se false, usa apenas código
 }
@@ -32,7 +33,7 @@ type toolCache struct {
 }
 
 // NewToolDiscoveryService cria o serviço de descoberta
-func NewToolDiscoveryService(db *sql.DB) *ToolDiscoveryService {
+func NewToolDiscoveryService(db *database.DB) *ToolDiscoveryService {
 	service := &ToolDiscoveryService{
 		db:         db,
 		useDynamic: db != nil,

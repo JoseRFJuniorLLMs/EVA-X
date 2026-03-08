@@ -4,7 +4,8 @@
 package gemini
 
 import (
-	"database/sql"
+	"context"
+	"eva/internal/brainstem/database"
 	"eva/internal/brainstem/push"
 	"fmt"
 	"log"
@@ -867,56 +868,59 @@ func GetDefaultTools() []interface{} {
 }
 
 // CheckUnacknowledgedAlerts verifica alertas não visualizados e escalona se necessário
-func CheckUnacknowledgedAlerts(db *sql.DB, pushService *push.FirebaseService) error {
-	query := `
-		SELECT 
-			a.id,
-			a.idoso_id,
-			a.mensagem,
-			a.severidade,
-			i.nome,
-			c.telefone
-		FROM alertas a
-		JOIN idosos i ON i.id = a.idoso_id
-		LEFT JOIN cuidadores c ON c.idoso_id = i.id AND c.prioridade = 1
-		WHERE a.visualizado = false
-		  AND a.necessita_escalamento = true
-		  AND a.tempo_escalamento <= NOW()
-		  AND a.severidade IN ('critica', 'alta')
-	`
+func CheckUnacknowledgedAlerts(db *database.DB, pushService *push.FirebaseService) error {
+	ctx := context.Background()
 
-	rows, err := db.Query(query)
+	// Query unacknowledged critical/high alerts that need escalation
+	rows, err := db.QueryByLabel(ctx, "alertas",
+		" AND n.visualizado = $vis AND n.necessita_escalamento = $esc AND n.severidade IN ($sev1, $sev2)",
+		map[string]interface{}{
+			"vis":  false,
+			"esc":  true,
+			"sev1": "critica",
+			"sev2": "alta",
+		}, 0)
 	if err != nil {
 		return fmt.Errorf("failed to query unacknowledged alerts: %w", err)
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var alertID, idosoID int64
-		var message, severity, elderName string
-		var phone sql.NullString
+	for _, row := range rows {
+		alertID := database.GetInt64(row, "id")
+		idosoID := database.GetInt64(row, "idoso_id")
+		severity := database.GetString(row, "severidade")
 
-		if err := rows.Scan(&alertID, &idosoID, &message, &severity, &elderName, &phone); err != nil {
-			log.Printf("❌ Error scanning alert: %v", err)
-			continue
+		// Fetch elder name
+		elderName := fmt.Sprintf("Idoso #%d", idosoID)
+		idoso, err := db.GetNodeByID(ctx, "idosos", idosoID)
+		if err == nil && idoso != nil {
+			elderName = database.GetString(idoso, "nome")
 		}
 
-		log.Printf("🚨 ESCALANDO alerta não visualizado - ID: %d, Idoso: %s", alertID, elderName)
+		// Fetch primary caregiver phone (best effort)
+		_ = severity // kept for future use
+		cuidadores, _ := db.QueryByLabel(ctx, "cuidadores",
+			" AND n.idoso_id = $iid AND n.prioridade = $prio",
+			map[string]interface{}{
+				"iid":  idosoID,
+				"prio": float64(1),
+			}, 1)
+		phone := ""
+		if len(cuidadores) > 0 {
+			phone = database.GetString(cuidadores[0], "telefone")
+		}
 
-		// TODO: Implementar ligação telefônica via Twilio para alertas críticos não visualizados
-		// if phone.Valid && phone.String != "" {
-		//     twilioService.MakeCall(phone.String, elderName, message)
-		// }
+		log.Printf("ESCALANDO alerta nao visualizado - ID: %d, Idoso: %s", alertID, elderName)
+
+		// TODO: Implementar ligacao telefonica via Twilio para alertas criticos nao visualizados
+		_ = phone // kept for future Twilio integration
 
 		// Marcar que o escalonamento foi tentado
-		_, _ = db.Exec(`
-			UPDATE alertas 
-			SET 
-				tentativas_envio = tentativas_envio + 1,
-				ultima_tentativa = NOW(),
-				tempo_escalamento = NOW() + INTERVAL '10 minutes'
-			WHERE id = $1
-		`, alertID)
+		_ = db.Update(ctx, "alertas",
+			map[string]interface{}{"id": alertID},
+			map[string]interface{}{
+				"tentativas_envio": database.GetInt64(row, "tentativas_envio") + 1,
+				"ultima_tentativa": "now",
+			})
 	}
 
 	return nil

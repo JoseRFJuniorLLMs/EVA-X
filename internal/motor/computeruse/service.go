@@ -5,11 +5,12 @@ package computeruse
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"time"
+
+	"eva/internal/brainstem/database"
 )
 
 // TaskType define os tipos de tarefas suportadas
@@ -94,11 +95,11 @@ type RideRequestParams struct {
 
 // Service gerencia tarefas de automação
 type Service struct {
-	db *sql.DB
+	db *database.DB
 }
 
 // NewService cria novo serviço de automação
-func NewService(db *sql.DB) *Service {
+func NewService(db *database.DB) *Service {
 	return &Service{db: db}
 }
 
@@ -106,19 +107,31 @@ func NewService(db *sql.DB) *Service {
 func (s *Service) CreateTask(ctx context.Context, idosoID int64, taskType TaskType, serviceName string, params interface{}, requiresApproval bool) (int64, error) {
 	paramsJSON, err := json.Marshal(params)
 	if err != nil {
-		return 0, fmt.Errorf("erro ao serializar parâmetros: %w", err)
+		return 0, fmt.Errorf("erro ao serializar parametros: %w", err)
 	}
 
-	query := `SELECT create_automation_task($1, $2, $3, $4, $5)`
+	now := time.Now().UTC().Format(time.RFC3339)
+	status := string(StatusPending)
+	if requiresApproval {
+		status = string(StatusRequiresApproval)
+	}
 
-	var taskID int64
-	err = s.db.QueryRowContext(ctx, query, idosoID, taskType, serviceName, paramsJSON, requiresApproval).Scan(&taskID)
+	taskID, err := s.db.Insert(ctx, "automation_tasks", map[string]interface{}{
+		"idoso_id":          idosoID,
+		"task_type":         string(taskType),
+		"service_name":      serviceName,
+		"task_params":       string(paramsJSON),
+		"status":            status,
+		"approval_required": requiresApproval,
+		"created_at":        now,
+		"updated_at":        now,
+	})
 
 	if err != nil {
 		return 0, fmt.Errorf("erro ao criar tarefa: %w", err)
 	}
 
-	log.Printf("🤖 [COMPUTER USE] Tarefa criada: ID=%d, Tipo=%s, Serviço=%s, Aprovação=%v",
+	log.Printf("[COMPUTER USE] Tarefa criada: ID=%d, Tipo=%s, Servico=%s, Aprovacao=%v",
 		taskID, taskType, serviceName, requiresApproval)
 
 	return taskID, nil
@@ -126,40 +139,64 @@ func (s *Service) CreateTask(ctx context.Context, idosoID int64, taskType TaskTy
 
 // ApproveTask aprova uma tarefa
 func (s *Service) ApproveTask(ctx context.Context, taskID, approverID int64) error {
-	query := `SELECT approve_automation_task($1, $2)`
-
-	_, err := s.db.ExecContext(ctx, query, taskID, approverID)
+	now := time.Now().UTC().Format(time.RFC3339)
+	err := s.db.Update(ctx, "automation_tasks",
+		map[string]interface{}{"id": taskID},
+		map[string]interface{}{
+			"status":      string(StatusApproved),
+			"approved_by": approverID,
+			"approved_at": now,
+			"updated_at":  now,
+		})
 	if err != nil {
 		return fmt.Errorf("erro ao aprovar tarefa: %w", err)
 	}
 
-	log.Printf("✅ [COMPUTER USE] Tarefa %d aprovada por usuário %d", taskID, approverID)
+	log.Printf("[COMPUTER USE] Tarefa %d aprovada por usuario %d", taskID, approverID)
 	return nil
 }
 
 // RejectTask rejeita uma tarefa
 func (s *Service) RejectTask(ctx context.Context, taskID, approverID int64, reason string) error {
-	query := `SELECT reject_automation_task($1, $2, $3)`
-
-	_, err := s.db.ExecContext(ctx, query, taskID, approverID, reason)
+	now := time.Now().UTC().Format(time.RFC3339)
+	err := s.db.Update(ctx, "automation_tasks",
+		map[string]interface{}{"id": taskID},
+		map[string]interface{}{
+			"status":        string(StatusCancelled),
+			"approved_by":   approverID,
+			"error_message": reason,
+			"updated_at":    now,
+			"completed_at":  now,
+		})
 	if err != nil {
 		return fmt.Errorf("erro ao rejeitar tarefa: %w", err)
 	}
 
-	log.Printf("❌ [COMPUTER USE] Tarefa %d rejeitada por usuário %d: %s", taskID, approverID, reason)
+	log.Printf("[COMPUTER USE] Tarefa %d rejeitada por usuario %d: %s", taskID, approverID, reason)
 	return nil
 }
 
 // LogStep registra um passo da execução
 func (s *Service) LogStep(ctx context.Context, taskID int64, stepNumber int, stepName, stepStatus string, screenshotURL *string, stepData interface{}, errorMsg *string) error {
-	var stepDataJSON interface{}
-	if stepData != nil {
-		stepDataJSON = stepData
+	stepDataJSON, _ := json.Marshal(stepData)
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	content := map[string]interface{}{
+		"task_id":     taskID,
+		"step_number": stepNumber,
+		"step_name":   stepName,
+		"step_status": stepStatus,
+		"step_data":   string(stepDataJSON),
+		"created_at":  now,
+	}
+	if screenshotURL != nil {
+		content["screenshot_url"] = *screenshotURL
+	}
+	if errorMsg != nil {
+		content["error_message"] = *errorMsg
 	}
 
-	query := `SELECT log_automation_step($1, $2, $3, $4, $5, $6, $7)`
-
-	_, err := s.db.ExecContext(ctx, query, taskID, stepNumber, stepName, stepStatus, screenshotURL, stepDataJSON, errorMsg)
+	_, err := s.db.Insert(ctx, "automation_steps", content)
 	if err != nil {
 		return fmt.Errorf("erro ao registrar passo: %w", err)
 	}
@@ -170,60 +207,45 @@ func (s *Service) LogStep(ctx context.Context, taskID int64, stepNumber int, ste
 // UpdateTaskStatus atualiza status da tarefa
 func (s *Service) UpdateTaskStatus(ctx context.Context, taskID int64, status TaskStatus, result interface{}, errorMsg *string) error {
 	resultJSON, _ := json.Marshal(result)
+	now := time.Now().UTC().Format(time.RFC3339)
 
-	query := `
-		UPDATE automation_tasks
-		SET status = $1,
-		    result = $2,
-		    error_message = $3,
-		    updated_at = NOW(),
-		    completed_at = CASE WHEN $1 IN ('completed', 'failed', 'cancelled') THEN NOW() ELSE NULL END
-		WHERE id = $4
-	`
+	updates := map[string]interface{}{
+		"status":     string(status),
+		"result":     string(resultJSON),
+		"updated_at": now,
+	}
+	if errorMsg != nil {
+		updates["error_message"] = *errorMsg
+	}
 
-	_, err := s.db.ExecContext(ctx, query, status, resultJSON, errorMsg, taskID)
+	// Set completed_at for terminal states
+	if status == StatusCompleted || status == StatusFailed || status == StatusCancelled {
+		updates["completed_at"] = now
+	}
+
+	err := s.db.Update(ctx, "automation_tasks",
+		map[string]interface{}{"id": taskID},
+		updates)
 	if err != nil {
 		return fmt.Errorf("erro ao atualizar status: %w", err)
 	}
 
-	log.Printf("📝 [COMPUTER USE] Tarefa %d atualizada: status=%s", taskID, status)
+	log.Printf("[COMPUTER USE] Tarefa %d atualizada: status=%s", taskID, status)
 	return nil
 }
 
 // GetPendingApprovals retorna tarefas aguardando aprovação
 func (s *Service) GetPendingApprovals(ctx context.Context) ([]AutomationTask, error) {
-	query := `
-		SELECT 
-			id, idoso_id, task_type, service_name, task_params,
-			status, approval_required, created_at, updated_at
-		FROM automation_tasks
-		WHERE status = 'pending' AND approval_required = true
-		ORDER BY created_at ASC
-	`
-
-	rows, err := s.db.QueryContext(ctx, query)
+	rows, err := s.db.QueryByLabel(ctx, "automation_tasks",
+		" AND n.status = $status AND n.approval_required = $approval",
+		map[string]interface{}{"status": string(StatusPending), "approval": true}, 0)
 	if err != nil {
-		return nil, fmt.Errorf("erro ao buscar aprovações pendentes: %w", err)
+		return nil, fmt.Errorf("erro ao buscar aprovacoes pendentes: %w", err)
 	}
-	defer rows.Close()
 
 	var tasks []AutomationTask
-	for rows.Next() {
-		var task AutomationTask
-		err := rows.Scan(
-			&task.ID,
-			&task.IdosoID,
-			&task.TaskType,
-			&task.ServiceName,
-			&task.TaskParams,
-			&task.Status,
-			&task.ApprovalRequired,
-			&task.CreatedAt,
-			&task.UpdatedAt,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("erro ao escanear tarefa: %w", err)
-		}
+	for _, m := range rows {
+		task := mapToAutomationTask(m)
 		tasks = append(tasks, task)
 	}
 
@@ -232,40 +254,54 @@ func (s *Service) GetPendingApprovals(ctx context.Context) ([]AutomationTask, er
 
 // GetTask retorna uma tarefa específica
 func (s *Service) GetTask(ctx context.Context, taskID int64) (*AutomationTask, error) {
-	query := `
-		SELECT 
-			id, idoso_id, task_type, service_name, task_params,
-			status, approval_required, approved_by, approved_at,
-			execution_log, screenshots, result, error_message,
-			created_at, updated_at, executed_at, completed_at
-		FROM automation_tasks
-		WHERE id = $1
-	`
-
-	var task AutomationTask
-	err := s.db.QueryRowContext(ctx, query, taskID).Scan(
-		&task.ID,
-		&task.IdosoID,
-		&task.TaskType,
-		&task.ServiceName,
-		&task.TaskParams,
-		&task.Status,
-		&task.ApprovalRequired,
-		&task.ApprovedBy,
-		&task.ApprovedAt,
-		&task.ExecutionLog,
-		&task.Screenshots,
-		&task.Result,
-		&task.ErrorMessage,
-		&task.CreatedAt,
-		&task.UpdatedAt,
-		&task.ExecutedAt,
-		&task.CompletedAt,
-	)
-
+	m, err := s.db.GetNodeByID(ctx, "automation_tasks", taskID)
 	if err != nil {
 		return nil, fmt.Errorf("erro ao buscar tarefa: %w", err)
 	}
+	if m == nil {
+		return nil, fmt.Errorf("tarefa nao encontrada: %d", taskID)
+	}
 
+	task := mapToAutomationTask(m)
 	return &task, nil
+}
+
+// mapToAutomationTask converts a NietzscheDB content map to an AutomationTask
+func mapToAutomationTask(m map[string]interface{}) AutomationTask {
+	task := AutomationTask{
+		ID:               database.GetInt64(m, "id"),
+		IdosoID:          database.GetInt64(m, "idoso_id"),
+		TaskType:         TaskType(database.GetString(m, "task_type")),
+		ServiceName:      database.GetString(m, "service_name"),
+		Status:           TaskStatus(database.GetString(m, "status")),
+		ApprovalRequired: database.GetBool(m, "approval_required"),
+		CreatedAt:        database.GetTime(m, "created_at"),
+		UpdatedAt:        database.GetTime(m, "updated_at"),
+		ApprovedAt:       database.GetTimePtr(m, "approved_at"),
+		ExecutedAt:       database.GetTimePtr(m, "executed_at"),
+		CompletedAt:      database.GetTimePtr(m, "completed_at"),
+	}
+
+	if raw := database.GetString(m, "task_params"); raw != "" {
+		task.TaskParams = json.RawMessage(raw)
+	}
+	if raw := database.GetString(m, "execution_log"); raw != "" {
+		task.ExecutionLog = json.RawMessage(raw)
+	}
+	if raw := database.GetString(m, "screenshots"); raw != "" {
+		task.Screenshots = json.RawMessage(raw)
+	}
+	if raw := database.GetString(m, "result"); raw != "" {
+		task.Result = json.RawMessage(raw)
+	}
+	if errMsg := database.GetString(m, "error_message"); errMsg != "" {
+		task.ErrorMessage = &errMsg
+	}
+
+	approvedBy := database.GetInt64(m, "approved_by")
+	if approvedBy > 0 {
+		task.ApprovedBy = &approvedBy
+	}
+
+	return task
 }

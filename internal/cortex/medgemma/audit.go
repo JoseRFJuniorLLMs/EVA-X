@@ -5,203 +5,166 @@ package medgemma
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
+	"time"
+
+	"eva/internal/brainstem/database"
 )
 
-// AuditLogger gerencia o log de análises de imagens médicas
+// AuditLogger gerencia o log de analises de imagens medicas
 type AuditLogger struct {
-	db *sql.DB
+	db *database.DB
 }
 
 // NewAuditLogger cria um novo logger de auditoria
-func NewAuditLogger(db *sql.DB) *AuditLogger {
+func NewAuditLogger(db *database.DB) *AuditLogger {
 	return &AuditLogger{db: db}
 }
 
-// LogPrescriptionAnalysis registra análise de receita
+// LogPrescriptionAnalysis registra analise de receita
 func (al *AuditLogger) LogPrescriptionAnalysis(ctx context.Context, idosoID int64, imageURL string, analysis *PrescriptionAnalysis) (int64, error) {
 	analysisJSON, err := json.Marshal(analysis)
 	if err != nil {
-		return 0, fmt.Errorf("erro ao serializar análise: %w", err)
+		return 0, fmt.Errorf("erro ao serializar analise: %w", err)
 	}
 
-	query := `
-		INSERT INTO medical_image_analysis (
-			idoso_id,
-			image_type,
-			image_url,
-			analysis_result,
-			requires_medical_attention
-		) VALUES ($1, $2, $3, $4, $5)
-		RETURNING id
-	`
+	content := map[string]interface{}{
+		"idoso_id":                  idosoID,
+		"image_type":               "prescription",
+		"image_url":                imageURL,
+		"analysis_result":          string(analysisJSON),
+		"requires_medical_attention": analysis.ControlledMedications,
+		"created_at":               time.Now().Format(time.RFC3339),
+	}
 
-	var analysisID int64
-	err = al.db.QueryRowContext(
-		ctx,
-		query,
-		idosoID,
-		"prescription",
-		imageURL,
-		analysisJSON,
-		analysis.ControlledMedications, // Receitas controladas requerem atenção
-	).Scan(&analysisID)
-
+	analysisID, err := al.db.Insert(ctx, "medical_image_analysis", content)
 	if err != nil {
-		return 0, fmt.Errorf("erro ao inserir análise: %w", err)
+		return 0, fmt.Errorf("erro ao inserir analise: %w", err)
 	}
 
-	log.Printf("✅ Análise de receita salva: ID %d, %d medicamentos", analysisID, len(analysis.Medications))
+	log.Printf("Analise de receita salva: ID %d, %d medicamentos", analysisID, len(analysis.Medications))
 	return analysisID, nil
 }
 
-// LogWoundAnalysis registra análise de ferida
+// LogWoundAnalysis registra analise de ferida
 func (al *AuditLogger) LogWoundAnalysis(ctx context.Context, idosoID int64, imageURL string, analysis *WoundAnalysis) (int64, error) {
 	analysisJSON, err := json.Marshal(analysis)
 	if err != nil {
-		return 0, fmt.Errorf("erro ao serializar análise: %w", err)
+		return 0, fmt.Errorf("erro ao serializar analise: %w", err)
 	}
 
-	query := `
-		INSERT INTO medical_image_analysis (
-			idoso_id,
-			image_type,
-			image_url,
-			analysis_result,
-			severity,
-			requires_medical_attention
-		) VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING id
-	`
+	content := map[string]interface{}{
+		"idoso_id":                  idosoID,
+		"image_type":               "wound",
+		"image_url":                imageURL,
+		"analysis_result":          string(analysisJSON),
+		"severity":                 analysis.Severity,
+		"requires_medical_attention": analysis.SeekMedicalCare,
+		"created_at":               time.Now().Format(time.RFC3339),
+	}
 
-	var analysisID int64
-	err = al.db.QueryRowContext(
-		ctx,
-		query,
-		idosoID,
-		"wound",
-		imageURL,
-		analysisJSON,
-		analysis.Severity,
-		analysis.SeekMedicalCare,
-	).Scan(&analysisID)
-
+	analysisID, err := al.db.Insert(ctx, "medical_image_analysis", content)
 	if err != nil {
-		return 0, fmt.Errorf("erro ao inserir análise: %w", err)
+		return 0, fmt.Errorf("erro ao inserir analise: %w", err)
 	}
 
-	log.Printf("✅ Análise de ferida salva: ID %d, gravidade %s", analysisID, analysis.Severity)
+	log.Printf("Analise de ferida salva: ID %d, gravidade %s", analysisID, analysis.Severity)
 	return analysisID, nil
 }
 
 // MarkNotified marca que o cuidador foi notificado
 func (al *AuditLogger) MarkNotified(ctx context.Context, analysisID int64) error {
-	query := `SELECT mark_medical_image_notified($1)`
-
-	_, err := al.db.ExecContext(ctx, query, analysisID)
+	err := al.db.Update(ctx, "medical_image_analysis",
+		map[string]interface{}{"id": analysisID},
+		map[string]interface{}{
+			"notified":    true,
+			"notified_at": time.Now().Format(time.RFC3339),
+		})
 	if err != nil {
-		return fmt.Errorf("erro ao marcar notificação: %w", err)
+		return fmt.Errorf("erro ao marcar notificacao: %w", err)
 	}
 
 	return nil
 }
 
-// GetPendingAlerts retorna alertas pendentes de notificação
+// GetPendingAlerts retorna alertas pendentes de notificacao
 func (al *AuditLogger) GetPendingAlerts(ctx context.Context) ([]MedicalAlert, error) {
-	query := `
-		SELECT 
-			id,
-			idoso_id,
-			idoso_nome,
-			image_type,
-			severity,
-			created_at,
-			minutes_since_analysis
-		FROM v_medical_image_alerts
-		ORDER BY severity DESC, created_at DESC
-	`
-
-	rows, err := al.db.QueryContext(ctx, query)
+	rows, err := al.db.QueryByLabel(ctx, "medical_image_analysis",
+		" AND n.requires_medical_attention = $req AND n.notified = $notified",
+		map[string]interface{}{"req": true, "notified": false}, 0)
 	if err != nil {
 		return nil, fmt.Errorf("erro ao buscar alertas: %w", err)
 	}
-	defer rows.Close()
 
 	var alerts []MedicalAlert
-	for rows.Next() {
-		var alert MedicalAlert
-		var severity sql.NullString
+	for _, m := range rows {
+		createdAt := database.GetTime(m, "created_at")
+		minutesSince := time.Since(createdAt).Minutes()
 
-		err := rows.Scan(
-			&alert.ID,
-			&alert.IdosoID,
-			&alert.IdosoNome,
-			&alert.ImageType,
-			&severity,
-			&alert.CreatedAt,
-			&alert.MinutesSinceAnalysis,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("erro ao escanear alerta: %w", err)
+		alert := MedicalAlert{
+			ID:                   database.GetInt64(m, "id"),
+			IdosoID:              database.GetInt64(m, "idoso_id"),
+			IdosoNome:            database.GetString(m, "idoso_nome"),
+			ImageType:            database.GetString(m, "image_type"),
+			Severity:             database.GetString(m, "severity"),
+			CreatedAt:            createdAt.Format(time.RFC3339),
+			MinutesSinceAnalysis: minutesSince,
 		}
-
-		if severity.Valid {
-			alert.Severity = severity.String
-		}
-
 		alerts = append(alerts, alert)
 	}
 
 	return alerts, nil
 }
 
-// SaveMedicationsFromPrescription salva medicamentos extraídos de receita
+// SaveMedicationsFromPrescription salva medicamentos extraidos de receita
 func (al *AuditLogger) SaveMedicationsFromPrescription(ctx context.Context, idosoID int64, medications []Medication) error {
 	for _, med := range medications {
-		// Inserir ou atualizar medicamento
-		query := `
-			INSERT INTO medicamentos (
-				idoso_id,
-				nome,
-				dosagem,
-				frequencia,
-				horarios,
-				ativo
-			) VALUES ($1, $2, $3, $4, $5, true)
-			ON CONFLICT (idoso_id, nome) 
-			DO UPDATE SET
-				dosagem = EXCLUDED.dosagem,
-				frequencia = EXCLUDED.frequencia,
-				horarios = EXCLUDED.horarios,
-				ativo = true,
-				updated_at = NOW()
-		`
+		// Check if medication exists
+		rows, _ := al.db.QueryByLabel(ctx, "medicamentos",
+			" AND n.idoso_id = $idoso_id AND n.nome = $nome",
+			map[string]interface{}{"idoso_id": idosoID, "nome": med.Name}, 1)
 
-		_, err := al.db.ExecContext(
-			ctx,
-			query,
-			idosoID,
-			med.Name,
-			med.Dosage,
-			med.Frequency,
-			med.Schedule,
-		)
-
-		if err != nil {
-			log.Printf("⚠️ Erro ao salvar medicamento %s: %v", med.Name, err)
-			continue
+		if len(rows) > 0 {
+			// Update existing
+			err := al.db.Update(ctx, "medicamentos",
+				map[string]interface{}{"idoso_id": idosoID, "nome": med.Name},
+				map[string]interface{}{
+					"dosagem":    med.Dosage,
+					"frequencia": med.Frequency,
+					"horarios":   med.Schedule,
+					"ativo":      true,
+					"updated_at": time.Now().Format(time.RFC3339),
+				})
+			if err != nil {
+				log.Printf("Erro ao atualizar medicamento %s: %v", med.Name, err)
+				continue
+			}
+		} else {
+			// Insert new
+			_, err := al.db.Insert(ctx, "medicamentos", map[string]interface{}{
+				"idoso_id":   idosoID,
+				"nome":       med.Name,
+				"dosagem":    med.Dosage,
+				"frequencia": med.Frequency,
+				"horarios":   med.Schedule,
+				"ativo":      true,
+				"created_at": time.Now().Format(time.RFC3339),
+			})
+			if err != nil {
+				log.Printf("Erro ao salvar medicamento %s: %v", med.Name, err)
+				continue
+			}
 		}
 
-		log.Printf("✅ Medicamento salvo: %s %s", med.Name, med.Dosage)
+		log.Printf("Medicamento salvo: %s %s", med.Name, med.Dosage)
 	}
 
 	return nil
 }
 
-// MedicalAlert representa um alerta de imagem médica
+// MedicalAlert representa um alerta de imagem medica
 type MedicalAlert struct {
 	ID                   int64   `json:"id"`
 	IdosoID              int64   `json:"idoso_id"`

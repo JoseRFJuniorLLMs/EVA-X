@@ -19,70 +19,59 @@ import (
 func (h *ToolsHandler) handleQueryNietzscheDB(idosoID int64, args map[string]interface{}) (map[string]interface{}, error) {
 	query, _ := args["query"].(string)
 	if query == "" {
-		return map[string]interface{}{"error": "Informe a query SQL"}, nil
+		return map[string]interface{}{"error": "Informe a query NQL"}, nil
 	}
 
 	normalized := strings.TrimSpace(strings.ToUpper(query))
 
-	// SECURITY: Bloquear DML/DDL — apenas SELECT/WITH permitidos
-	isSelect := strings.HasPrefix(normalized, "SELECT") || strings.HasPrefix(normalized, "WITH")
-	if !isSelect {
+	// SECURITY: Bloquear mutacoes — apenas MATCH/RETURN permitidos
+	isRead := strings.HasPrefix(normalized, "MATCH") || strings.HasPrefix(normalized, "SELECT") || strings.HasPrefix(normalized, "WITH")
+	if !isRead {
 		return map[string]interface{}{
-			"error":   "Apenas queries SELECT sao permitidas por seguranca",
-			"message": "Use SELECT ou WITH para consultar dados. INSERT/UPDATE/DELETE/CREATE/ALTER/DROP nao sao permitidos via MCP.",
+			"error":   "Apenas queries de leitura (MATCH ... RETURN) sao permitidas por seguranca",
+			"message": "Use NQL MATCH para consultar dados. Mutacoes nao sao permitidas via MCP.",
 		}, nil
 	}
 
-	// SELECT — retorna linhas
-	{
-		rows, err := h.db.Conn.Query(query)
-		if err != nil {
-			return map[string]interface{}{"error": fmt.Sprintf("Erro na query: %v", err)}, nil
-		}
-		defer rows.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 
-		columns, err := rows.Columns()
-		if err != nil {
-			return map[string]interface{}{"error": fmt.Sprintf("Erro ao ler colunas: %v", err)}, nil
-		}
+	// Execute via NietzscheDB NQL
+	result, err := h.db.NQL(ctx, query, nil)
+	if err != nil {
+		return map[string]interface{}{"error": fmt.Sprintf("Erro na query NQL: %v", err)}, nil
+	}
 
-		var results []map[string]interface{}
-		for rows.Next() {
-			values := make([]interface{}, len(columns))
-			valuePtrs := make([]interface{}, len(columns))
-			for i := range values {
-				valuePtrs[i] = &values[i]
+	var results []map[string]interface{}
+	if result != nil {
+		for _, node := range result.Nodes {
+			row := map[string]interface{}{
+				"id":        node.ID,
+				"node_type": node.NodeType,
+				"energy":    node.Energy,
 			}
-
-			if err := rows.Scan(valuePtrs...); err != nil {
-				continue
-			}
-
-			row := make(map[string]interface{})
-			for i, col := range columns {
-				val := values[i]
-				switch v := val.(type) {
-				case []byte:
-					row[col] = string(v)
-				default:
-					row[col] = v
+			if node.Content != nil {
+				for k, v := range node.Content {
+					row[k] = fmt.Sprintf("%v", v)
 				}
 			}
 			results = append(results, row)
-
 			if len(results) >= 100 {
 				break
 			}
 		}
-
-		return map[string]interface{}{
-			"status":  "sucesso",
-			"columns": columns,
-			"rows":    results,
-			"count":   len(results),
-			"message": fmt.Sprintf("Query retornou %d resultados.", len(results)),
-		}, nil
 	}
+
+	if results == nil {
+		results = []map[string]interface{}{}
+	}
+
+	return map[string]interface{}{
+		"status":  "sucesso",
+		"rows":    results,
+		"count":   len(results),
+		"message": fmt.Sprintf("Query NQL retornou %d resultados.", len(results)),
+	}, nil
 }
 
 func min(a, b int) int {

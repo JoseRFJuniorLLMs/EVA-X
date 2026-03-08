@@ -5,8 +5,8 @@ package actions
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
+	"eva/internal/brainstem/database"
 	"eva/internal/brainstem/push"
 	"eva/internal/motor/email"
 	"fmt"
@@ -17,7 +17,7 @@ import (
 	"firebase.google.com/go/v4/messaging"
 )
 
-// PendingSchedule armazena um agendamento aguardando confirmação
+// PendingSchedule armazena um agendamento aguardando confirmacao
 type PendingSchedule struct {
 	Timestamp   string
 	Tipo        string
@@ -29,80 +29,76 @@ type PendingSchedule struct {
 var pendingSchedules = make(map[int64]*PendingSchedule)
 var pendingMu sync.RWMutex
 
-// AlertFamily envia notificação push para cuidadores com sistema de fallback
-func AlertFamily(db *sql.DB, pushService *push.FirebaseService, emailService *email.EmailService, idosoID int64, reason string) error {
+// AlertFamily envia notificacao push para cuidadores com sistema de fallback
+func AlertFamily(db *database.DB, pushService *push.FirebaseService, emailService *email.EmailService, idosoID int64, reason string) error {
 	return AlertFamilyWithSeverity(db, pushService, emailService, idosoID, reason, "alta")
 }
 
-// AlertFamilyWithSeverity envia alertas com níveis de severidade
-func AlertFamilyWithSeverity(db *sql.DB, pushService *push.FirebaseService, emailService *email.EmailService, idosoID int64, reason, severity string) error {
-	// 1. Buscar todos os cuidadores ativos (primários e secundários)
-	query := `
-		SELECT 
-			c.device_token, 
-			c.telefone,
-			c.email,
-			c.prioridade,
-			i.nome 
-		FROM cuidadores c
-		JOIN idosos i ON i.id = c.idoso_id
-		WHERE c.idoso_id = $1 AND c.ativo = true
-		ORDER BY c.prioridade ASC
-	`
+// AlertFamilyWithSeverity envia alertas com niveis de severidade
+func AlertFamilyWithSeverity(db *database.DB, pushService *push.FirebaseService, emailService *email.EmailService, idosoID int64, reason, severity string) error {
+	ctx := context.Background()
 
-	rows, err := db.Query(query, idosoID)
+	// 1. Buscar todos os cuidadores ativos (primarios e secundarios)
+	cuidadorRows, err := db.QueryByLabel(ctx, "cuidadores",
+		" AND n.idoso_id = $idoso_id AND n.ativo = $ativo",
+		map[string]interface{}{
+			"idoso_id": idosoID,
+			"ativo":    true,
+		}, 0)
 	if err != nil {
 		return fmt.Errorf("failed to query caregivers: %w", err)
 	}
-	defer rows.Close()
+
+	// Fetch the elder's name from idosos table
+	idosoNode, err := db.GetNodeByID(ctx, "idosos", idosoID)
+	if err != nil {
+		return fmt.Errorf("failed to get idoso: %w", err)
+	}
+
+	var elderName string
+	if idosoNode != nil {
+		elderName = database.GetString(idosoNode, "nome")
+	}
 
 	type Caregiver struct {
-		Token     sql.NullString
-		Phone     sql.NullString
-		Email     sql.NullString
-		Priority  int
-		ElderName string
+		Token    string
+		Phone    string
+		Email    string
+		Priority int64
 	}
 
 	var caregivers []Caregiver
 
-	for rows.Next() {
-		var cg Caregiver
-		err := rows.Scan(&cg.Token, &cg.Phone, &cg.Email, &cg.Priority, &cg.ElderName)
-		if err != nil {
-			log.Printf("Error scanning caregiver: %v", err)
-			continue
+	for _, m := range cuidadorRows {
+		cg := Caregiver{
+			Token:    database.GetString(m, "device_token"),
+			Phone:    database.GetString(m, "telefone"),
+			Email:    database.GetString(m, "email"),
+			Priority: database.GetInt64(m, "prioridade"),
 		}
 		caregivers = append(caregivers, cg)
 	}
 
 	if len(caregivers) == 0 {
-		log.Printf("⚠️ No active caregivers found for idoso %d", idosoID)
+		log.Printf("WARNING: No active caregivers found for idoso %d", idosoID)
 		return fmt.Errorf("no caregivers registered")
 	}
 
-	elderName := caregivers[0].ElderName
-
 	// 2. Registrar alerta no banco ANTES de enviar
-	var alertID int64
-	insertQuery := `
-		INSERT INTO alertas (
-			idoso_id, 
-			tipo, 
-			severidade,
-			mensagem, 
-			visualizado,
-			criado_em
-		) 
-		VALUES ($1, 'familia', $2, $3, false, NOW())
-		RETURNING id
-	`
+	now := time.Now().Format(time.RFC3339)
+	alertID, err := db.Insert(ctx, "alertas", map[string]interface{}{
+		"idoso_id":    idosoID,
+		"tipo":        "familia",
+		"severidade":  severity,
+		"mensagem":    reason,
+		"visualizado": false,
+		"criado_em":   now,
+	})
 
-	err = db.QueryRow(insertQuery, idosoID, severity, reason).Scan(&alertID)
 	if err != nil {
-		log.Printf("⚠️ Failed to log alert in database: %v", err)
+		log.Printf("WARNING: Failed to log alert in database: %v", err)
 	} else {
-		log.Printf("📝 Alert registered in DB with ID: %d", alertID)
+		log.Printf("Alert registered in DB with ID: %d", alertID)
 	}
 
 	// 3. Tentar enviar push notifications para todos os cuidadores
@@ -110,13 +106,13 @@ func AlertFamilyWithSeverity(db *sql.DB, pushService *push.FirebaseService, emai
 	var tokens []string
 
 	for _, cg := range caregivers {
-		if cg.Token.Valid && cg.Token.String != "" {
-			tokens = append(tokens, cg.Token.String)
+		if cg.Token != "" {
+			tokens = append(tokens, cg.Token)
 		}
 	}
 
 	if len(tokens) > 0 {
-		log.Printf("📱 Enviando push para %d cuidador(es)", len(tokens))
+		log.Printf("Enviando push para %d cuidador(es)", len(tokens))
 
 		for _, token := range tokens {
 			result, err := pushService.SendAlertNotification(token, elderName, reason)
@@ -125,54 +121,58 @@ func AlertFamilyWithSeverity(db *sql.DB, pushService *push.FirebaseService, emai
 				successCount++
 
 				// Registrar envio no banco
-				_, _ = db.Exec(`
-					UPDATE alertas 
-					SET enviado = true, data_envio = NOW()
-					WHERE id = $1
-				`, alertID)
+				_ = db.Update(ctx, "alertas",
+					map[string]interface{}{"id": alertID},
+					map[string]interface{}{
+						"enviado":    true,
+						"data_envio": time.Now().Format(time.RFC3339),
+					})
 
-				log.Printf("✅ Alert sent successfully to caregiver for %s", elderName)
+				log.Printf("Alert sent successfully to caregiver for %s", elderName)
 			} else {
-				log.Printf("❌ Failed to send alert to caregiver: %v", err)
+				log.Printf("Failed to send alert to caregiver: %v", err)
 			}
 		}
 	}
 
 	// 4. Se NENHUM push funcionou, tentar fallbacks
 	if successCount == 0 {
-		log.Printf("⚠️ Nenhum push notification enviado com sucesso. Tentando fallbacks...")
+		log.Printf("WARNING: Nenhum push notification enviado com sucesso. Tentando fallbacks...")
 
 		// Registrar que o alerta precisa de escalamento
-		_, _ = db.Exec(`
-			UPDATE alertas 
-			SET 
-				necessita_escalamento = true,
-				tentativas_envio = tentativas_envio + 1,
-				ultima_tentativa = NOW()
-			WHERE id = $1
-		`, alertID)
+		_ = db.Update(ctx, "alertas",
+			map[string]interface{}{"id": alertID},
+			map[string]interface{}{
+				"necessita_escalamento": true,
+				"ultima_tentativa":      time.Now().Format(time.RFC3339),
+			})
 
-		// 📧 ESCUDO DE SEGURANÇA: Fallback para Email
+		// Fallback para Email
 		if emailService != nil {
 			for _, cg := range caregivers {
-				if cg.Email.Valid && cg.Email.String != "" {
-					subject := fmt.Sprintf("🚨 ALERTA DE EMERGÊNCIA (%s): %s", severity, elderName)
+				if cg.Email != "" {
+					subject := fmt.Sprintf("ALERTA DE EMERGENCIA (%s): %s", severity, elderName)
 					body := fmt.Sprintf(`
-						<h2>Atenção! Alerta de Emergência Detectado</h2>
-						<p>O sistema EVA-Mind detectou uma situação de urgência para <b>%s</b>.</p>
+						<h2>Atencao! Alerta de Emergencia Detectado</h2>
+						<p>O sistema EVA-Mind detectou uma situacao de urgencia para <b>%s</b>.</p>
 						<p><b>Motivo do Alerta:</b> %s</p>
 						<hr>
-						<p>Como não conseguimos confirmar a entrega via aplicativo móvel, este email de segurança foi enviado.</p>
-						<p>Por favor, verifique a situação imediatamente.</p>
+						<p>Como nao conseguimos confirmar a entrega via aplicativo movel, este email de seguranca foi enviado.</p>
+						<p>Por favor, verifique a situacao imediatamente.</p>
 					`, elderName, reason)
 
-					if errEmail := emailService.SendEmail(cg.Email.String, subject, body); errEmail != nil {
-						log.Printf("❌ Falha ao enviar email de fallback para %s: %v", cg.Email.String, errEmail)
+					if errEmail := emailService.SendEmail(cg.Email, subject, body); errEmail != nil {
+						log.Printf("Falha ao enviar email de fallback para %s: %v", cg.Email, errEmail)
 					} else {
-						log.Printf("📧 Email de fallback enviado com sucesso para %s", cg.Email.String)
+						log.Printf("Email de fallback enviado com sucesso para %s", cg.Email)
 						successCount++
 						// Marcar como enviado
-						_, _ = db.Exec(`UPDATE alertas SET enviado = true, data_envio = NOW() WHERE id = $1`, alertID)
+						_ = db.Update(ctx, "alertas",
+							map[string]interface{}{"id": alertID},
+							map[string]interface{}{
+								"enviado":    true,
+								"data_envio": time.Now().Format(time.RFC3339),
+							})
 					}
 				}
 			}
@@ -183,82 +183,100 @@ func AlertFamilyWithSeverity(db *sql.DB, pushService *push.FirebaseService, emai
 		}
 	}
 
-	log.Printf("✅ Alert sent to %d of %d caregivers", successCount, len(tokens))
+	log.Printf("Alert sent to %d of %d caregivers", successCount, len(tokens))
 
-	// 5. Para alertas críticos, marcar para escalonamento automático
+	// 5. Para alertas criticos, marcar para escalonamento automatico
 	if severity == "critica" {
-		_, _ = db.Exec(`
-			UPDATE alertas 
-			SET 
-				necessita_escalamento = true,
-				tempo_escalamento = NOW() + INTERVAL '5 minutes'
-			WHERE id = $1
-		`, alertID)
+		escalTime := time.Now().Add(5 * time.Minute).Format(time.RFC3339)
+		_ = db.Update(ctx, "alertas",
+			map[string]interface{}{"id": alertID},
+			map[string]interface{}{
+				"necessita_escalamento": true,
+				"tempo_escalamento":     escalTime,
+			})
 
-		log.Printf("🚨 Alert crítico - configurado para escalonamento em 5 minutos se não visualizado")
+		log.Printf("Alert critico - configurado para escalonamento em 5 minutos se nao visualizado")
 	}
 
 	return nil
 }
 
-// ConfirmMedication registra que o idoso tomou o remédio
-func ConfirmMedication(db *sql.DB, pushService *push.FirebaseService, idosoID int64, medicationName string) error {
-	// 1. Registrar no histórico
-	_, err := db.Exec(`
-		INSERT INTO historico_medicamentos (idoso_id, medicamento, tomado_em) 
-		VALUES ($1, $2, NOW())
-	`, idosoID, medicationName)
+// ConfirmMedication registra que o idoso tomou o remedio
+func ConfirmMedication(db *database.DB, pushService *push.FirebaseService, idosoID int64, medicationName string) error {
+	ctx := context.Background()
+
+	// 1. Registrar no historico
+	now := time.Now().Format(time.RFC3339)
+	_, err := db.Insert(ctx, "historico_medicamentos", map[string]interface{}{
+		"idoso_id":    idosoID,
+		"medicamento": medicationName,
+		"tomado_em":   now,
+	})
 
 	if err != nil {
 		return fmt.Errorf("failed to log medication: %w", err)
 	}
 
-	log.Printf("💊 Medication logged: %d took %s", idosoID, medicationName)
+	log.Printf("Medication logged: %d took %s", idosoID, medicationName)
 
 	// 2. Atualizar status do agendamento de hoje
-	_, err = db.Exec(`
-		UPDATE agendamentos 
-		SET medicamento_tomado = true,
-		    status = 'concluido'
-		WHERE idoso_id = $1 
-		  AND DATE(data_hora_agendada) = CURRENT_DATE
-		  AND status = 'em_andamento'
-	`, idosoID)
-
+	// Query agendamentos for this idoso that are in progress today
+	todayStr := time.Now().Format("2006-01-02")
+	agRows, err := db.QueryByLabel(ctx, "agendamentos",
+		" AND n.idoso_id = $idoso_id AND n.status = $status",
+		map[string]interface{}{
+			"idoso_id": idosoID,
+			"status":   "em_andamento",
+		}, 0)
 	if err != nil {
-		log.Printf("⚠️ Failed to update schedule: %v", err)
+		log.Printf("WARNING: Failed to query agendamentos: %v", err)
+	} else {
+		for _, ag := range agRows {
+			dataHora := database.GetString(ag, "data_hora_agendada")
+			// Check if the agendamento is for today
+			if len(dataHora) >= 10 && dataHora[:10] == todayStr {
+				agID := database.GetInt64(ag, "id")
+				_ = db.Update(ctx, "agendamentos",
+					map[string]interface{}{"id": agID},
+					map[string]interface{}{
+						"medicamento_tomado": true,
+						"status":             "concluido",
+					})
+			}
+		}
 	}
 
 	// 3. Notificar TODOS os cuidadores ativos
-	query := `
-		SELECT c.device_token, i.nome 
-		FROM cuidadores c
-		JOIN idosos i ON i.id = c.idoso_id
-		WHERE c.idoso_id = $1 AND c.ativo = true
-	`
-
-	rows, err := db.Query(query, idosoID)
+	cuidadorRows, err := db.QueryByLabel(ctx, "cuidadores",
+		" AND n.idoso_id = $idoso_id AND n.ativo = $ativo",
+		map[string]interface{}{
+			"idoso_id": idosoID,
+			"ativo":    true,
+		}, 0)
 	if err != nil {
-		log.Printf("⚠️ Failed to query caregivers: %v", err)
+		log.Printf("WARNING: Failed to query caregivers: %v", err)
 		return nil
 	}
-	defer rows.Close()
 
+	// Fetch elder name
+	idosoNode, _ := db.GetNodeByID(ctx, "idosos", idosoID)
 	var elderName string
+	if idosoNode != nil {
+		elderName = database.GetString(idosoNode, "nome")
+	}
+
 	notificationsSent := 0
 
-	for rows.Next() {
-		var token sql.NullString
-		err := rows.Scan(&token, &elderName)
-
-		if err != nil || !token.Valid || token.String == "" {
+	for _, m := range cuidadorRows {
+		token := database.GetString(m, "device_token")
+		if token == "" {
 			continue
 		}
 
 		message := &messaging.Message{
-			Token: token.String,
+			Token: token,
 			Notification: &messaging.Notification{
-				Title: "✅ Medicamento Confirmado",
+				Title: "Medicamento Confirmado",
 				Body:  fmt.Sprintf("%s tomou %s", elderName, medicationName),
 			},
 			Data: map[string]string{
@@ -278,27 +296,28 @@ func ConfirmMedication(db *sql.DB, pushService *push.FirebaseService, idosoID in
 			},
 		}
 
-		// ✅ Criar contexto local com timeout
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		pushCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		_, err = pushService.GetClient().Send(ctx, message)
+		_, err = pushService.GetClient().Send(pushCtx, message)
 		if err != nil {
-			log.Printf("⚠️ Failed to notify caregiver: %v", err)
+			log.Printf("WARNING: Failed to notify caregiver: %v", err)
 		} else {
 			notificationsSent++
 		}
 	}
 
 	if notificationsSent > 0 {
-		log.Printf("✅ %d caregiver(s) notified about medication", notificationsSent)
+		log.Printf("%d caregiver(s) notified about medication", notificationsSent)
 	}
 
 	return nil
 }
 
 // ScheduleAppointment insere um novo agendamento no banco de dados
-func ScheduleAppointment(db *sql.DB, idosoID int64, timestampStr, tipo, descricao string) error {
+func ScheduleAppointment(db *database.DB, idosoID int64, timestampStr, tipo, descricao string) error {
+	ctx := context.Background()
+
 	// 1. Parse convertendo string ISO para time.Time
 	// Suporta formatos ISO parciais ou completos
 	layouts := []string{
@@ -318,7 +337,7 @@ func ScheduleAppointment(db *sql.DB, idosoID int64, timestampStr, tipo, descrica
 	}
 
 	if err != nil {
-		return fmt.Errorf("formato de data inválido (%s): %w", timestampStr, err)
+		return fmt.Errorf("formato de data invalido (%s): %w", timestampStr, err)
 	}
 
 	// 2. Preparar dados_tarefa como JSON
@@ -327,40 +346,34 @@ func ScheduleAppointment(db *sql.DB, idosoID int64, timestampStr, tipo, descrica
 		"original_request": timestampStr,
 	})
 	if err != nil {
-		// Fallback para JSON vazio válido se der erro no marshal
+		// Fallback para JSON vazio valido se der erro no marshal
 		dadosJSON = []byte("{}")
 	}
 
 	// 3. Inserir no banco
-	query := `
-		INSERT INTO agendamentos (
-			idoso_id, 
-			tipo, 
-			data_hora_agendada, 
-			status, 
-			prioridade, 
-			dados_tarefa, 
-			criado_em, 
-			atualizado_em,
-			max_retries,
-			tentativas_realizadas
-		) 
-		VALUES ($1, $2, $3, 'agendado', 'media', $4, NOW(), NOW(), 3, 0)
-		RETURNING id
-	`
-
-	var id int64
-	err = db.QueryRow(query, idosoID, tipo, dataHora, dadosJSON).Scan(&id)
+	now := time.Now().Format(time.RFC3339)
+	id, err := db.Insert(ctx, "agendamentos", map[string]interface{}{
+		"idoso_id":              idosoID,
+		"tipo":                  tipo,
+		"data_hora_agendada":    dataHora.Format(time.RFC3339),
+		"status":                "agendado",
+		"prioridade":            "media",
+		"dados_tarefa":          string(dadosJSON),
+		"criado_em":             now,
+		"atualizado_em":         now,
+		"max_retries":           int64(3),
+		"tentativas_realizadas": int64(0),
+	})
 	if err != nil {
 		return fmt.Errorf("failed to insert appointment: %w", err)
 	}
 
-	log.Printf("📅 Appointment scheduled: ID %d for Idoso %d at %s", id, idosoID, dataHora)
+	log.Printf("Appointment scheduled: ID %d for Idoso %d at %s", id, idosoID, dataHora)
 	return nil
 }
 
-// StorePendingSchedule armazena um agendamento pendente aguardando confirmação
-// Retorna uma mensagem para EVA pedir confirmação ao usuário
+// StorePendingSchedule armazena um agendamento pendente aguardando confirmacao
+// Retorna uma mensagem para EVA pedir confirmacao ao usuario
 func StorePendingSchedule(idosoID int64, timestampStr, tipo, description string) string {
 	pendingMu.Lock()
 	defer pendingMu.Unlock()
@@ -372,27 +385,27 @@ func StorePendingSchedule(idosoID int64, timestampStr, tipo, description string)
 		CreatedAt:   time.Now(),
 	}
 
-	// Parse para mostrar horário amigável
+	// Parse para mostrar horario amigavel
 	timestamp, err := time.Parse(time.RFC3339, timestampStr)
 	if err != nil {
 		timestamp, _ = time.Parse("2006-01-02 15:04:05", timestampStr)
 	}
 
 	horaFormatada := timestamp.Format("15:04")
-	log.Printf("⏳ Agendamento pendente armazenado para idoso %d: %s às %s", idosoID, description, horaFormatada)
+	log.Printf("Agendamento pendente armazenado para idoso %d: %s as %s", idosoID, description, horaFormatada)
 
-	// Retorna mensagem para EVA pedir confirmação
+	// Retorna mensagem para EVA pedir confirmacao
 	return fmt.Sprintf("[[CONFIRM_SCHEDULE:%s|%s|%s]]", horaFormatada, tipo, description)
 }
 
 // ConfirmPendingSchedule confirma ou cancela um agendamento pendente
-func ConfirmPendingSchedule(db *sql.DB, idosoID int64, confirmed bool) (bool, string, error) {
+func ConfirmPendingSchedule(db *database.DB, idosoID int64, confirmed bool) (bool, string, error) {
 	pendingMu.Lock()
 	defer pendingMu.Unlock()
 
 	pending, exists := pendingSchedules[idosoID]
 	if !exists {
-		log.Printf("⚠️ Nenhum agendamento pendente para idoso %d", idosoID)
+		log.Printf("WARNING: Nenhum agendamento pendente para idoso %d", idosoID)
 		return false, "", nil
 	}
 
@@ -400,12 +413,12 @@ func ConfirmPendingSchedule(db *sql.DB, idosoID int64, confirmed bool) (bool, st
 	delete(pendingSchedules, idosoID)
 
 	if !confirmed {
-		log.Printf("❌ Agendamento cancelado pelo usuário: %s", pending.Description)
+		log.Printf("Agendamento cancelado pelo usuario: %s", pending.Description)
 		return false, pending.Description, nil
 	}
 
 	// Confirma - executa o agendamento
-	log.Printf("✅ Agendamento confirmado: %s", pending.Description)
+	log.Printf("Agendamento confirmado: %s", pending.Description)
 
 	err := ScheduleAppointment(db, idosoID, pending.Timestamp, pending.Tipo, pending.Description)
 	if err != nil {
@@ -415,7 +428,7 @@ func ConfirmPendingSchedule(db *sql.DB, idosoID int64, confirmed bool) (bool, st
 	return true, pending.Description, nil
 }
 
-// HasPendingSchedule verifica se há agendamento pendente para um idoso
+// HasPendingSchedule verifica se ha agendamento pendente para um idoso
 func HasPendingSchedule(idosoID int64) bool {
 	pendingMu.RLock()
 	defer pendingMu.RUnlock()
@@ -438,82 +451,192 @@ func CleanExpiredPendingSchedules() {
 	now := time.Now()
 	for id, pending := range pendingSchedules {
 		if now.Sub(pending.CreatedAt) > 5*time.Minute {
-			log.Printf("🧹 Limpando agendamento pendente expirado para idoso %d", id)
+			log.Printf("Limpando agendamento pendente expirado para idoso %d", id)
 			delete(pendingSchedules, id)
 		}
 	}
 }
 
-// InteracaoRisco representa uma interação perigosa entre medicamentos
+// InteracaoRisco representa uma interacao perigosa entre medicamentos
 type InteracaoRisco struct {
-	MedicamentoA     string
-	MedicamentoB     string
-	NivelPerigo      string // MODERADO, GRAVE, FATAL
-	MensagemAlerta   string
-	AcaoRecomendada  string
+	MedicamentoA    string
+	MedicamentoB    string
+	NivelPerigo     string // MODERADO, GRAVE, FATAL
+	MensagemAlerta  string
+	AcaoRecomendada string
 }
 
-// CheckMedicationInteractions verifica se um medicamento tem interações perigosas
+// CheckMedicationInteractions verifica se um medicamento tem interacoes perigosas
 // com os medicamentos atuais do idoso
-func CheckMedicationInteractions(db *sql.DB, idosoID int64, novoMedicamento string) ([]InteracaoRisco, error) {
-	log.Printf("🔍 [SAFETY] Verificando interações para: %s (Idoso: %d)", novoMedicamento, idosoID)
+func CheckMedicationInteractions(db *database.DB, idosoID int64, novoMedicamento string) ([]InteracaoRisco, error) {
+	ctx := context.Background()
+	log.Printf("[SAFETY] Verificando interacoes para: %s (Idoso: %d)", novoMedicamento, idosoID)
 
-	query := `
-		SELECT
-			m_atual.nome AS medicamento_atual,
-			ir.nivel_perigo,
-			ir.mensagem_alerta,
-			COALESCE(ir.acao_recomendada, 'Consultar médico imediatamente') AS acao_recomendada
-		FROM medicamentos m_atual
-		JOIN catalogo_farmaceutico cf_atual ON m_atual.catalogo_ref_id = cf_atual.id
-		JOIN catalogo_farmaceutico cf_novo ON (
-			LOWER(cf_novo.nome_comercial) LIKE LOWER('%' || $2 || '%')
-			OR LOWER(cf_novo.principio_ativo) LIKE LOWER('%' || $2 || '%')
-		)
-		JOIN interacoes_risco ir ON (
-			(ir.catalogo_id_a = cf_atual.id AND ir.catalogo_id_b = cf_novo.id)
-			OR (ir.catalogo_id_a = cf_novo.id AND ir.catalogo_id_b = cf_atual.id)
-		)
-		WHERE m_atual.idoso_id = $1
-		  AND m_atual.ativo = true
-		  AND ir.nivel_perigo IN ('GRAVE', 'FATAL')
-		ORDER BY
-			CASE ir.nivel_perigo
-				WHEN 'FATAL' THEN 1
-				WHEN 'GRAVE' THEN 2
-				ELSE 3
-			END
-	`
-
-	rows, err := db.Query(query, idosoID, novoMedicamento)
+	// 1. Get active medications for this idoso
+	medRows, err := db.QueryByLabel(ctx, "medicamentos",
+		" AND n.idoso_id = $idoso_id AND n.ativo = $ativo",
+		map[string]interface{}{
+			"idoso_id": idosoID,
+			"ativo":    true,
+		}, 0)
 	if err != nil {
-		log.Printf("⚠️ [SAFETY] Erro ao verificar interações: %v", err)
+		log.Printf("WARNING: [SAFETY] Erro ao buscar medicamentos ativos: %v", err)
 		return nil, err
 	}
-	defer rows.Close()
 
-	var interacoes []InteracaoRisco
-	for rows.Next() {
-		var ir InteracaoRisco
-		ir.MedicamentoB = novoMedicamento
-		if err := rows.Scan(&ir.MedicamentoA, &ir.NivelPerigo, &ir.MensagemAlerta, &ir.AcaoRecomendada); err != nil {
-			log.Printf("⚠️ [SAFETY] Erro ao ler interação: %v", err)
-			continue
-		}
-		interacoes = append(interacoes, ir)
-		log.Printf("🚨 [SAFETY] INTERAÇÃO %s DETECTADA: %s + %s", ir.NivelPerigo, ir.MedicamentoA, ir.MedicamentoB)
+	if len(medRows) == 0 {
+		log.Printf("[SAFETY] Nenhuma interacao perigosa detectada (sem medicamentos ativos)")
+		return nil, nil
 	}
 
+	// 2. For each active medication, get its catalogo_ref_id
+	// and look up interactions in interacoes_risco
+	var interacoes []InteracaoRisco
+
+	// Get the catalogo entry for the new medication
+	novoCatRows, err := db.QueryByLabel(ctx, "catalogo_farmaceutico", "", nil, 0)
+	if err != nil {
+		log.Printf("WARNING: [SAFETY] Erro ao buscar catalogo farmaceutico: %v", err)
+		return nil, err
+	}
+
+	// Find catalogo IDs matching the new medication name
+	var novoCatalogoIDs []int64
+	novoMedLower := fmt.Sprintf("%s", novoMedicamento)
+	for _, cat := range novoCatRows {
+		nomeComercial := database.GetString(cat, "nome_comercial")
+		principioAtivo := database.GetString(cat, "principio_ativo")
+		if containsIgnoreCase(nomeComercial, novoMedLower) || containsIgnoreCase(principioAtivo, novoMedLower) {
+			novoCatalogoIDs = append(novoCatalogoIDs, database.GetInt64(cat, "id"))
+		}
+	}
+
+	if len(novoCatalogoIDs) == 0 {
+		log.Printf("[SAFETY] Nenhuma interacao perigosa detectada (medicamento nao encontrado no catalogo)")
+		return nil, nil
+	}
+
+	// Get all interaction rules
+	interacoesRows, err := db.QueryByLabel(ctx, "interacoes_risco", "", nil, 0)
+	if err != nil {
+		log.Printf("WARNING: [SAFETY] Erro ao buscar interacoes_risco: %v", err)
+		return nil, err
+	}
+
+	// For each active medication, check interactions
+	for _, medRow := range medRows {
+		catRefID := database.GetInt64(medRow, "catalogo_ref_id")
+		medNome := database.GetString(medRow, "nome")
+
+		for _, ir := range interacoesRows {
+			catIDA := database.GetInt64(ir, "catalogo_id_a")
+			catIDB := database.GetInt64(ir, "catalogo_id_b")
+			nivelPerigo := database.GetString(ir, "nivel_perigo")
+
+			// Only check GRAVE and FATAL
+			if nivelPerigo != "GRAVE" && nivelPerigo != "FATAL" {
+				continue
+			}
+
+			for _, novoID := range novoCatalogoIDs {
+				if (catIDA == catRefID && catIDB == novoID) || (catIDA == novoID && catIDB == catRefID) {
+					acaoRecomendada := database.GetString(ir, "acao_recomendada")
+					if acaoRecomendada == "" {
+						acaoRecomendada = "Consultar medico imediatamente"
+					}
+
+					interacao := InteracaoRisco{
+						MedicamentoA:    medNome,
+						MedicamentoB:    novoMedicamento,
+						NivelPerigo:     nivelPerigo,
+						MensagemAlerta:  database.GetString(ir, "mensagem_alerta"),
+						AcaoRecomendada: acaoRecomendada,
+					}
+					interacoes = append(interacoes, interacao)
+					log.Printf("ALERT: [SAFETY] INTERACAO %s DETECTADA: %s + %s", nivelPerigo, medNome, novoMedicamento)
+				}
+			}
+		}
+	}
+
+	// Sort: FATAL first, then GRAVE
+	sortInteracoes(interacoes)
+
 	if len(interacoes) > 0 {
-		log.Printf("⛔ [SAFETY] %d interações perigosas encontradas!", len(interacoes))
+		log.Printf("ALERT: [SAFETY] %d interacoes perigosas encontradas!", len(interacoes))
 	} else {
-		log.Printf("✅ [SAFETY] Nenhuma interação perigosa detectada")
+		log.Printf("[SAFETY] Nenhuma interacao perigosa detectada")
 	}
 
 	return interacoes, nil
 }
 
-// FormatInteractionWarning formata alerta de interação para EVA falar
+// sortInteracoes sorts interactions with FATAL first, then GRAVE
+func sortInteracoes(interacoes []InteracaoRisco) {
+	for i := 0; i < len(interacoes); i++ {
+		for j := i + 1; j < len(interacoes); j++ {
+			if nivelPriority(interacoes[j].NivelPerigo) < nivelPriority(interacoes[i].NivelPerigo) {
+				interacoes[i], interacoes[j] = interacoes[j], interacoes[i]
+			}
+		}
+	}
+}
+
+func nivelPriority(nivel string) int {
+	switch nivel {
+	case "FATAL":
+		return 1
+	case "GRAVE":
+		return 2
+	default:
+		return 3
+	}
+}
+
+// containsIgnoreCase checks if s contains substr (case-insensitive)
+func containsIgnoreCase(s, substr string) bool {
+	sLower := make([]byte, len(s))
+	subLower := make([]byte, len(substr))
+	for i := range s {
+		if s[i] >= 'A' && s[i] <= 'Z' {
+			sLower[i] = s[i] + 32
+		} else {
+			sLower[i] = s[i]
+		}
+	}
+	for i := range substr {
+		if substr[i] >= 'A' && substr[i] <= 'Z' {
+			subLower[i] = substr[i] + 32
+		} else {
+			subLower[i] = substr[i]
+		}
+	}
+	return len(subLower) > 0 && bytesContains(sLower, subLower)
+}
+
+func bytesContains(s, sub []byte) bool {
+	if len(sub) == 0 {
+		return true
+	}
+	if len(sub) > len(s) {
+		return false
+	}
+	for i := 0; i <= len(s)-len(sub); i++ {
+		match := true
+		for j := range sub {
+			if s[i+j] != sub[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
+
+// FormatInteractionWarning formata alerta de interacao para EVA falar
 func FormatInteractionWarning(interacoes []InteracaoRisco) string {
 	if len(interacoes) == 0 {
 		return ""
@@ -522,13 +645,13 @@ func FormatInteractionWarning(interacoes []InteracaoRisco) string {
 	// Priorizar FATAL
 	for _, ir := range interacoes {
 		if ir.NivelPerigo == "FATAL" {
-			return fmt.Sprintf("[[BLOCKED:FATAL]] ATENÇÃO! Não posso agendar %s porque pode causar uma interação FATAL com %s que você já toma. %s. %s",
+			return fmt.Sprintf("[[BLOCKED:FATAL]] ATENCAO! Nao posso agendar %s porque pode causar uma interacao FATAL com %s que voce ja toma. %s. %s",
 				ir.MedicamentoB, ir.MedicamentoA, ir.MensagemAlerta, ir.AcaoRecomendada)
 		}
 	}
 
-	// Se não tem FATAL, pegar GRAVE
+	// Se nao tem FATAL, pegar GRAVE
 	ir := interacoes[0]
-	return fmt.Sprintf("[[BLOCKED:GRAVE]] Cuidado! %s pode ter uma interação GRAVE com %s. %s. Recomendo: %s",
+	return fmt.Sprintf("[[BLOCKED:GRAVE]] Cuidado! %s pode ter uma interacao GRAVE com %s. %s. Recomendo: %s",
 		ir.MedicamentoB, ir.MedicamentoA, ir.MensagemAlerta, ir.AcaoRecomendada)
 }

@@ -5,20 +5,21 @@ package workers
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"time"
+
+	"eva/internal/brainstem/database"
 )
 
 // PredictionWorker prediz emergências
 type PredictionWorker struct {
-	db *sql.DB
+	db *database.DB
 }
 
 // NewPredictionWorker cria um novo worker de predições
-func NewPredictionWorker(db *sql.DB) *PredictionWorker {
+func NewPredictionWorker(db *database.DB) *PredictionWorker {
 	return &PredictionWorker{db: db}
 }
 
@@ -34,7 +35,7 @@ func (pw *PredictionWorker) Interval() time.Duration {
 
 // Run executa a predição de emergências
 func (pw *PredictionWorker) Run(ctx context.Context) error {
-	log.Println("🔮 Iniciando predição de emergências...")
+	log.Println("Iniciando predicao de emergencias...")
 
 	// Buscar todos os idosos ativos
 	idosos, err := pw.getActiveIdosos(ctx)
@@ -42,7 +43,7 @@ func (pw *PredictionWorker) Run(ctx context.Context) error {
 		return fmt.Errorf("erro ao buscar idosos: %w", err)
 	}
 
-	log.Printf("📊 Analisando riscos para %d idoso(s)...", len(idosos))
+	log.Printf("Analisando riscos para %d idoso(s)...", len(idosos))
 
 	totalPredicoes := 0
 	for _, idosoID := range idosos {
@@ -68,27 +69,25 @@ func (pw *PredictionWorker) Run(ctx context.Context) error {
 		}
 	}
 
-	log.Printf("✅ Predição concluída: %d predição(ões) gerada(s)", totalPredicoes)
+	log.Printf("Predicao concluida: %d predicao(oes) gerada(s)", totalPredicoes)
 	return nil
 }
 
 // getActiveIdosos retorna lista de idosos ativos
 func (pw *PredictionWorker) getActiveIdosos(ctx context.Context) ([]int, error) {
-	query := `SELECT id FROM idosos WHERE ativo = true`
-
-	rows, err := pw.db.QueryContext(ctx, query)
+	rows, err := pw.db.QueryByLabel(ctx, "idosos",
+		" AND n.ativo = $ativo",
+		map[string]interface{}{"ativo": true}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	var idosos []int
-	for rows.Next() {
-		var id int
-		if err := rows.Scan(&id); err != nil {
-			continue
+	for _, m := range rows {
+		id := int(database.GetInt64(m, "id"))
+		if id > 0 {
+			idosos = append(idosos, id)
 		}
-		idosos = append(idosos, id)
 	}
 
 	return idosos, nil
@@ -107,26 +106,33 @@ type EmergencyPrediction struct {
 
 // predictDepression prediz risco de depressão
 func (pw *PredictionWorker) predictDepression(ctx context.Context, idosoID int) (*EmergencyPrediction, error) {
-	query := `
-		SELECT 
-			COUNT(CASE WHEN sentimento_geral IN ('triste', 'apatico') THEN 1 END) as sentimentos_negativos,
-			COUNT(*) as total_ligacoes,
-			AVG(CASE WHEN sentimento_geral IN ('triste', 'apatico') THEN sentimento_intensidade ELSE 0 END) as intensidade_media
-		FROM historico_ligacoes
-		WHERE idoso_id = $1
-		  AND inicio_chamada > NOW() - INTERVAL '14 days'
-	`
+	fourteenDaysAgo := time.Now().AddDate(0, 0, -14).UTC().Format(time.RFC3339)
 
-	var negativos, total int
-	var intensidade float64
-
-	err := pw.db.QueryRowContext(ctx, query, idosoID).Scan(&negativos, &total, &intensidade)
+	rows, err := pw.db.QueryByLabel(ctx, "historico_ligacoes",
+		" AND n.idoso_id = $idoso AND n.inicio_chamada > $since",
+		map[string]interface{}{"idoso": idosoID, "since": fourteenDaysAgo}, 0)
 	if err != nil {
 		return nil, err
 	}
 
+	total := len(rows)
 	if total < 5 {
 		return nil, nil // Dados insuficientes
+	}
+
+	negativos := 0
+	var somaIntensidade float64
+	for _, m := range rows {
+		sentimento := database.GetString(m, "sentimento_geral")
+		if sentimento == "triste" || sentimento == "apatico" {
+			negativos++
+			somaIntensidade += database.GetFloat64(m, "sentimento_intensidade")
+		}
+	}
+
+	var intensidade float64
+	if negativos > 0 {
+		intensidade = somaIntensidade / float64(negativos)
 	}
 
 	// Calcular probabilidade
@@ -154,9 +160,9 @@ func (pw *PredictionWorker) predictDepression(ctx context.Context, idosoID int) 
 			Probabilidade:  probabilidade,
 			NivelRisco:     nivelRisco,
 			FatoresContribuintes: []string{
-				fmt.Sprintf("%.0f%% de sentimentos negativos nos últimos 14 dias", percentualNegativo*100),
-				fmt.Sprintf("Intensidade média de tristeza: %.1f/10", intensidade),
-				fmt.Sprintf("Total de %d ligações analisadas", total),
+				fmt.Sprintf("%.0f%% de sentimentos negativos nos ultimos 14 dias", percentualNegativo*100),
+				fmt.Sprintf("Intensidade media de tristeza: %.1f/10", intensidade),
+				fmt.Sprintf("Total de %d ligacoes analisadas", total),
 			},
 			SinaisDetectados: map[string]interface{}{
 				"sentimentos_negativos": negativos,
@@ -165,9 +171,9 @@ func (pw *PredictionWorker) predictDepression(ctx context.Context, idosoID int) 
 				"intensidade_media":     intensidade,
 			},
 			Recomendacoes: []string{
-				"Agendar consulta com psicólogo ou psiquiatra",
-				"Aumentar frequência de ligações e monitoramento",
-				"Notificar familiares sobre mudança de humor",
+				"Agendar consulta com psicologo ou psiquiatra",
+				"Aumentar frequencia de ligacoes e monitoramento",
+				"Notificar familiares sobre mudanca de humor",
 				"Avaliar necessidade de suporte emocional adicional",
 			},
 		}
@@ -180,26 +186,32 @@ func (pw *PredictionWorker) predictDepression(ctx context.Context, idosoID int) 
 
 // predictConfusion prediz risco de confusão mental
 func (pw *PredictionWorker) predictConfusion(ctx context.Context, idosoID int) (*EmergencyPrediction, error) {
-	query := `
-		SELECT 
-			COUNT(CASE WHEN sentimento_geral = 'confuso' THEN 1 END) as episodios_confusao,
-			COUNT(*) as total_ligacoes,
-			AVG(CASE WHEN sentimento_geral = 'confuso' THEN sentimento_intensidade ELSE 0 END) as intensidade_media
-		FROM historico_ligacoes
-		WHERE idoso_id = $1
-		  AND inicio_chamada > NOW() - INTERVAL '7 days'
-	`
+	sevenDaysAgo := time.Now().AddDate(0, 0, -7).UTC().Format(time.RFC3339)
 
-	var confusao, total int
-	var intensidade float64
-
-	err := pw.db.QueryRowContext(ctx, query, idosoID).Scan(&confusao, &total, &intensidade)
+	rows, err := pw.db.QueryByLabel(ctx, "historico_ligacoes",
+		" AND n.idoso_id = $idoso AND n.inicio_chamada > $since",
+		map[string]interface{}{"idoso": idosoID, "since": sevenDaysAgo}, 0)
 	if err != nil {
 		return nil, err
 	}
 
+	total := len(rows)
 	if total < 3 {
 		return nil, nil
+	}
+
+	confusao := 0
+	var somaIntensidade float64
+	for _, m := range rows {
+		if database.GetString(m, "sentimento_geral") == "confuso" {
+			confusao++
+			somaIntensidade += database.GetFloat64(m, "sentimento_intensidade")
+		}
+	}
+
+	var intensidade float64
+	if confusao > 0 {
+		intensidade = somaIntensidade / float64(confusao)
 	}
 
 	percentualConfusao := float64(confusao) / float64(total)
@@ -224,8 +236,8 @@ func (pw *PredictionWorker) predictConfusion(ctx context.Context, idosoID int) (
 			Probabilidade:  probabilidade,
 			NivelRisco:     nivelRisco,
 			FatoresContribuintes: []string{
-				fmt.Sprintf("%d episódio(s) de confusão em 7 dias", confusao),
-				fmt.Sprintf("%.0f%% das ligações com sinais de confusão", percentualConfusao*100),
+				fmt.Sprintf("%d episodio(s) de confusao em 7 dias", confusao),
+				fmt.Sprintf("%.0f%% das ligacoes com sinais de confusao", percentualConfusao*100),
 			},
 			SinaisDetectados: map[string]interface{}{
 				"episodios_confusao": confusao,
@@ -233,10 +245,10 @@ func (pw *PredictionWorker) predictConfusion(ctx context.Context, idosoID int) (
 				"percentual":         percentualConfusao,
 			},
 			Recomendacoes: []string{
-				"Avaliação médica urgente para descartar causas reversíveis",
-				"Verificar medicações que podem causar confusão",
-				"Aumentar supervisão e monitoramento",
-				"Considerar avaliação neurológica",
+				"Avaliacao medica urgente para descartar causas reversiveis",
+				"Verificar medicacoes que podem causar confusao",
+				"Aumentar supervisao e monitoramento",
+				"Considerar avaliacao neurologica",
 			},
 		}
 
@@ -248,31 +260,25 @@ func (pw *PredictionWorker) predictConfusion(ctx context.Context, idosoID int) (
 
 // predictFallRisk prediz risco de queda baseado em mobilidade
 func (pw *PredictionWorker) predictFallRisk(ctx context.Context, idosoID int) (*EmergencyPrediction, error) {
-	// Buscar informações de mobilidade e histórico
-	query := `
-		SELECT 
-			i.mobilidade,
-			i.limitacoes_visuais,
-			i.limitacoes_auditivas,
-			COUNT(a.id) as total_alertas_queda
-		FROM idosos i
-		LEFT JOIN alertas a ON a.idoso_id = i.id 
-			AND a.tipo = 'queda' 
-			AND a.criado_em > NOW() - INTERVAL '90 days'
-		WHERE i.id = $1
-		GROUP BY i.mobilidade, i.limitacoes_visuais, i.limitacoes_auditivas
-	`
-
-	var mobilidade string
-	var limitacoesVisuais, limitacoesAuditivas bool
-	var totalAlertasQueda int
-
-	err := pw.db.QueryRowContext(ctx, query, idosoID).Scan(
-		&mobilidade, &limitacoesVisuais, &limitacoesAuditivas, &totalAlertasQueda,
-	)
+	// Buscar informações do idoso
+	m, err := pw.db.GetNodeByID(ctx, "idosos", idosoID)
 	if err != nil {
 		return nil, err
 	}
+	if m == nil {
+		return nil, nil
+	}
+
+	mobilidade := database.GetString(m, "mobilidade")
+	limitacoesVisuais := database.GetBool(m, "limitacoes_visuais")
+	limitacoesAuditivas := database.GetBool(m, "limitacoes_auditivas")
+
+	// Contar alertas de queda nos últimos 90 dias
+	ninetyDaysAgo := time.Now().AddDate(0, 0, -90).UTC().Format(time.RFC3339)
+	alertRows, _ := pw.db.QueryByLabel(ctx, "alertas",
+		" AND n.idoso_id = $idoso AND n.tipo = $tipo AND n.criado_em > $since",
+		map[string]interface{}{"idoso": idosoID, "tipo": "queda", "since": ninetyDaysAgo}, 0)
+	totalAlertasQueda := len(alertRows)
 
 	// Calcular probabilidade baseada em fatores de risco
 	probabilidade := 0.0
@@ -288,7 +294,7 @@ func (pw *PredictionWorker) predictFallRisk(ctx context.Context, idosoID int) (*
 		fatores = append(fatores, "Mobilidade: cadeira de rodas")
 	case "auxiliado":
 		probabilidade += 0.35
-		fatores = append(fatores, "Mobilidade: necessita auxílio")
+		fatores = append(fatores, "Mobilidade: necessita auxilio")
 	case "independente":
 		probabilidade += 0.05
 	}
@@ -296,17 +302,17 @@ func (pw *PredictionWorker) predictFallRisk(ctx context.Context, idosoID int) (*
 	// Limitações sensoriais
 	if limitacoesVisuais {
 		probabilidade += 0.25
-		fatores = append(fatores, "Limitações visuais")
+		fatores = append(fatores, "Limitacoes visuais")
 	}
 	if limitacoesAuditivas {
 		probabilidade += 0.10
-		fatores = append(fatores, "Limitações auditivas")
+		fatores = append(fatores, "Limitacoes auditivas")
 	}
 
 	// Histórico de quedas
 	if totalAlertasQueda > 0 {
 		probabilidade += float64(totalAlertasQueda) * 0.15
-		fatores = append(fatores, fmt.Sprintf("%d queda(s) nos últimos 90 dias", totalAlertasQueda))
+		fatores = append(fatores, fmt.Sprintf("%d queda(s) nos ultimos 90 dias", totalAlertasQueda))
 	}
 
 	// Limitar probabilidade a 1.0
@@ -340,9 +346,9 @@ func (pw *PredictionWorker) predictFallRisk(ctx context.Context, idosoID int) (*
 				"historico_quedas":     totalAlertasQueda,
 			},
 			Recomendacoes: []string{
-				"Avaliar ambiente doméstico para riscos de queda",
-				"Considerar uso de dispositivos de auxílio (andador, bengala)",
-				"Fisioterapia para fortalecimento e equilíbrio",
+				"Avaliar ambiente domestico para riscos de queda",
+				"Considerar uso de dispositivos de auxilio (andador, bengala)",
+				"Fisioterapia para fortalecimento e equilibrio",
 				"Instalar barras de apoio em banheiro e corredores",
 			},
 		}
@@ -359,27 +365,23 @@ func (pw *PredictionWorker) savePrediction(ctx context.Context, pred *EmergencyP
 	sinaisJSON, _ := json.Marshal(pred.SinaisDetectados)
 	recomendacoesJSON, _ := json.Marshal(pred.Recomendacoes)
 
-	query := `
-		INSERT INTO predicoes_emergencia (
-			idoso_id, tipo_emergencia, probabilidade, nivel_risco,
-			fatores_contribuintes, sinais_detectados, recomendacoes,
-			validade_ate
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW() + INTERVAL '7 days')
-		ON CONFLICT DO NOTHING
-	`
+	now := time.Now().UTC().Format(time.RFC3339)
+	validadeAte := time.Now().AddDate(0, 0, 7).UTC().Format(time.RFC3339)
 
-	_, err := pw.db.ExecContext(ctx, query,
-		pred.IdosoID,
-		pred.TipoEmergencia,
-		pred.Probabilidade,
-		pred.NivelRisco,
-		fatoresJSON,
-		sinaisJSON,
-		recomendacoesJSON,
-	)
+	_, err := pw.db.Insert(ctx, "predicoes_emergencia", map[string]interface{}{
+		"idoso_id":              pred.IdosoID,
+		"tipo_emergencia":       pred.TipoEmergencia,
+		"probabilidade":         pred.Probabilidade,
+		"nivel_risco":           pred.NivelRisco,
+		"fatores_contribuintes": string(fatoresJSON),
+		"sinais_detectados":     string(sinaisJSON),
+		"recomendacoes":         string(recomendacoesJSON),
+		"validade_ate":          validadeAte,
+		"criado_em":             now,
+	})
 
 	if err == nil {
-		log.Printf("⚠️ Predição '%s' salva para idoso %d (risco: %s, prob: %.0f%%)",
+		log.Printf("Predicao '%s' salva para idoso %d (risco: %s, prob: %.0f%%)",
 			pred.TipoEmergencia, pred.IdosoID, pred.NivelRisco, pred.Probabilidade*100)
 	}
 

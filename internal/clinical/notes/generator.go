@@ -5,21 +5,22 @@ package notes
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"strings"
 	"time"
+
+	"eva/internal/brainstem/database"
 
 	"github.com/rs/zerolog/log"
 )
 
 // ClinicalNoteGenerator generates clinical insights for psychologists
 type ClinicalNoteGenerator struct {
-	db *sql.DB
+	db *database.DB
 }
 
 // NewClinicalNoteGenerator creates a new clinical note generator
-func NewClinicalNoteGenerator(db *sql.DB) *ClinicalNoteGenerator {
+func NewClinicalNoteGenerator(db *database.DB) *ClinicalNoteGenerator {
 	return &ClinicalNoteGenerator{db: db}
 }
 
@@ -161,38 +162,48 @@ func (g *ClinicalNoteGenerator) findRelatedMemories(ctx context.Context, patient
 		return []Memory{}, nil
 	}
 
-	// Build query with keyword search
-	query := `
-		SELECT m.id, m.content, c.id as session_id, m.created_at
-		FROM memories m
-		JOIN conversations c ON m.patient_id = c.patient_id
-		WHERE m.patient_id = $1
-		AND (
-	`
-
-	conditions := []string{}
-	for _, keyword := range keywords {
-		conditions = append(conditions, "LOWER(m.content) LIKE '%' || LOWER('"+keyword+"') || '%'")
-	}
-	query += strings.Join(conditions, " OR ")
-	query += `) ORDER BY m.created_at DESC LIMIT 5`
-
-	rows, err := g.db.QueryContext(ctx, query, patientID)
+	// Query all memories for this patient, then filter by keywords in Go
+	rows, err := g.db.QueryByLabel(ctx, "memories",
+		" AND n.patient_id = $pid",
+		map[string]interface{}{
+			"pid": float64(patientID),
+		}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	var memories []Memory
-	for rows.Next() {
-		var m Memory
-		if err := rows.Scan(&m.ID, &m.Content, &m.SessionID, &m.Timestamp); err == nil {
-			m.Similarity = 0.7 // Placeholder
-			memories = append(memories, m)
+	for _, m := range rows {
+		content := database.GetString(m, "content")
+		contentLower := strings.ToLower(content)
+
+		// Check if any keyword matches
+		matched := false
+		for _, keyword := range keywords {
+			if strings.Contains(contentLower, strings.ToLower(keyword)) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+
+		mem := Memory{
+			ID:         database.GetInt64(m, "id"),
+			Content:    content,
+			SessionID:  database.GetInt64(m, "session_id"),
+			Timestamp:  database.GetTime(m, "created_at"),
+			Similarity: 0.7, // Placeholder
+		}
+		memories = append(memories, mem)
+
+		if len(memories) >= 5 {
+			break
 		}
 	}
 
-	return memories, rows.Err()
+	return memories, nil
 }
 
 // extractKeywords extracts important keywords from statement
@@ -310,55 +321,74 @@ func (g *ClinicalNoteGenerator) storeNote(ctx context.Context, note *ClinicalNot
 	memoriesJSON, _ := json.Marshal(note.RelatedMemories)
 	themesJSON, _ := json.Marshal(note.ClinicalThemes)
 
-	return g.db.QueryRowContext(ctx, `
-		INSERT INTO clinical_notes (
-			patient_id, session_id, raw_statement, possible_meanings,
-			related_memories, sentiment_delta, alert_level, clinical_themes,
-			recommended_focus, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		RETURNING id
-	`, note.PatientID, note.SessionID, note.RawStatement, meaningsJSON,
-		memoriesJSON, note.SentimentDelta, note.AlertLevel, themesJSON,
-		note.RecommendedFocus, note.CreatedAt,
-	).Scan(&note.ID)
+	id, err := g.db.Insert(ctx, "clinical_notes", map[string]interface{}{
+		"patient_id":        note.PatientID,
+		"session_id":        note.SessionID,
+		"raw_statement":     note.RawStatement,
+		"possible_meanings": string(meaningsJSON),
+		"related_memories":  string(memoriesJSON),
+		"sentiment_delta":   note.SentimentDelta,
+		"alert_level":       note.AlertLevel,
+		"clinical_themes":   string(themesJSON),
+		"recommended_focus": note.RecommendedFocus,
+		"created_at":        note.CreatedAt.Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		return err
+	}
+	note.ID = id
+	return nil
 }
 
 // GetNotesForSession retrieves all clinical notes for a session
 func (g *ClinicalNoteGenerator) GetNotesForSession(ctx context.Context, sessionID int64) ([]*ClinicalNote, error) {
-	rows, err := g.db.QueryContext(ctx, `
-		SELECT id, patient_id, session_id, raw_statement, possible_meanings,
-		       related_memories, sentiment_delta, alert_level, clinical_themes,
-		       recommended_focus, created_at
-		FROM clinical_notes
-		WHERE session_id = $1
-		ORDER BY created_at ASC
-	`, sessionID)
-
+	rows, err := g.db.QueryByLabel(ctx, "clinical_notes",
+		" AND n.session_id = $sid",
+		map[string]interface{}{
+			"sid": float64(sessionID),
+		}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	var notes []*ClinicalNote
-	for rows.Next() {
-		var note ClinicalNote
-		var meaningsJSON, memoriesJSON, themesJSON []byte
-
-		err := rows.Scan(
-			&note.ID, &note.PatientID, &note.SessionID, &note.RawStatement,
-			&meaningsJSON, &memoriesJSON, &note.SentimentDelta, &note.AlertLevel,
-			&themesJSON, &note.RecommendedFocus, &note.CreatedAt,
-		)
-		if err != nil {
-			continue
+	for _, m := range rows {
+		note := &ClinicalNote{
+			ID:               database.GetInt64(m, "id"),
+			PatientID:        database.GetInt64(m, "patient_id"),
+			SessionID:        database.GetInt64(m, "session_id"),
+			RawStatement:     database.GetString(m, "raw_statement"),
+			SentimentDelta:   database.GetFloat64(m, "sentiment_delta"),
+			AlertLevel:       int(database.GetInt64(m, "alert_level")),
+			RecommendedFocus: database.GetString(m, "recommended_focus"),
+			CreatedAt:        database.GetTime(m, "created_at"),
 		}
 
-		json.Unmarshal(meaningsJSON, &note.PossibleMeanings)
-		json.Unmarshal(memoriesJSON, &note.RelatedMemories)
-		json.Unmarshal(themesJSON, &note.ClinicalThemes)
+		// Parse JSON string fields
+		meaningsStr := database.GetString(m, "possible_meanings")
+		if meaningsStr != "" {
+			json.Unmarshal([]byte(meaningsStr), &note.PossibleMeanings)
+		}
+		memoriesStr := database.GetString(m, "related_memories")
+		if memoriesStr != "" {
+			json.Unmarshal([]byte(memoriesStr), &note.RelatedMemories)
+		}
+		themesStr := database.GetString(m, "clinical_themes")
+		if themesStr != "" {
+			json.Unmarshal([]byte(themesStr), &note.ClinicalThemes)
+		}
 
-		notes = append(notes, &note)
+		notes = append(notes, note)
 	}
 
-	return notes, rows.Err()
+	// Sort by created_at ASC
+	for i := 0; i < len(notes); i++ {
+		for j := i + 1; j < len(notes); j++ {
+			if notes[j].CreatedAt.Before(notes[i].CreatedAt) {
+				notes[i], notes[j] = notes[j], notes[i]
+			}
+		}
+	}
+
+	return notes, nil
 }

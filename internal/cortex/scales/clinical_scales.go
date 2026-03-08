@@ -4,6 +4,7 @@
 package scales
 
 import (
+	"context"
 	"eva/internal/brainstem/database"
 	"fmt"
 	"log"
@@ -128,37 +129,29 @@ func (m *ClinicalScalesManager) getPHQ9Recommendations(score int, suicideRisk bo
 
 // SavePHQ9Assessment saves assessment to database
 func (m *ClinicalScalesManager) SavePHQ9Assessment(patientID int64, result *PHQ9Result) error {
-	// Insert into clinical_assessments table
-	query := `
-		INSERT INTO clinical_assessments (
-			patient_id, assessment_type, score, severity_level,
-			assessed_at, created_at
-		) VALUES ($1, 'PHQ-9', $2, $3, $4, NOW())
-		RETURNING id
-	`
+	ctx := context.Background()
 
-	var assessmentID int64
-	err := m.db.Conn.QueryRow(
-		query,
-		patientID,
-		result.TotalScore,
-		result.SeverityLevel,
-		result.AssessedAt,
-	).Scan(&assessmentID)
-
+	// Insert into clinical_assessments
+	assessmentID, err := m.db.Insert(ctx, "clinical_assessments", map[string]interface{}{
+		"patient_id":      patientID,
+		"assessment_type": "PHQ-9",
+		"score":           result.TotalScore,
+		"severity_level":  result.SeverityLevel,
+		"assessed_at":     result.AssessedAt,
+		"created_at":      time.Now(),
+	})
 	if err != nil {
 		return err
 	}
 
 	// Save individual responses
 	for _, resp := range result.Responses {
-		queryResp := `
-			INSERT INTO assessment_responses (
-				assessment_id, question_number, response_value, created_at
-			) VALUES ($1, $2, $3, NOW())
-		`
-
-		_, err = m.db.Conn.Exec(queryResp, assessmentID, resp.Question, resp.Score)
+		_, err = m.db.Insert(ctx, "assessment_responses", map[string]interface{}{
+			"assessment_id":   assessmentID,
+			"question_number": resp.Question,
+			"response_value":  resp.Score,
+			"created_at":      time.Now(),
+		})
 		if err != nil {
 			log.Printf("⚠️ Erro ao salvar resposta da questão %d: %v", resp.Question, err)
 		}
@@ -253,35 +246,29 @@ func (m *ClinicalScalesManager) getGAD7Recommendations(score int) []string {
 }
 
 func (m *ClinicalScalesManager) SaveGAD7Assessment(patientID int64, result *GAD7Result) error {
-	query := `
-		INSERT INTO clinical_assessments (
-			patient_id, assessment_type, score, severity_level,
-			assessed_at, created_at
-		) VALUES ($1, 'GAD-7', $2, $3, $4, NOW())
-		RETURNING id
-	`
+	ctx := context.Background()
 
-	var assessmentID int64
-	err := m.db.Conn.QueryRow(
-		query,
-		patientID,
-		result.TotalScore,
-		result.SeverityLevel,
-		result.AssessedAt,
-	).Scan(&assessmentID)
-
+	// Insert into clinical_assessments
+	assessmentID, err := m.db.Insert(ctx, "clinical_assessments", map[string]interface{}{
+		"patient_id":      patientID,
+		"assessment_type": "GAD-7",
+		"score":           result.TotalScore,
+		"severity_level":  result.SeverityLevel,
+		"assessed_at":     result.AssessedAt,
+		"created_at":      time.Now(),
+	})
 	if err != nil {
 		return err
 	}
 
 	// Save responses
 	for _, resp := range result.Responses {
-		queryResp := `
-			INSERT INTO assessment_responses (
-				assessment_id, question_number, response_value, created_at
-			) VALUES ($1, $2, $3, NOW())
-		`
-		_, err = m.db.Conn.Exec(queryResp, assessmentID, resp.Question, resp.Score)
+		_, err = m.db.Insert(ctx, "assessment_responses", map[string]interface{}{
+			"assessment_id":   assessmentID,
+			"question_number": resp.Question,
+			"response_value":  resp.Score,
+			"created_at":      time.Now(),
+		})
 		if err != nil {
 			log.Printf("⚠️ Erro ao salvar resposta: %v", err)
 		}
@@ -409,39 +396,33 @@ func (m *ClinicalScalesManager) getCSSRSInterventions(riskLevel string) []string
 }
 
 func (m *ClinicalScalesManager) SaveCSSRSAssessment(patientID int64, result *CSSRSResult) error {
-	query := `
-		INSERT INTO clinical_assessments (
-			patient_id, assessment_type, score, severity_level,
-			assessed_at, created_at
-		) VALUES ($1, 'C-SSRS', $2, $3, $4, NOW())
-		RETURNING id
-	`
+	ctx := context.Background()
 
-	var assessmentID int64
-	err := m.db.Conn.QueryRow(
-		query,
-		patientID,
-		result.IdeationLevel,
-		result.RiskLevel,
-		result.AssessedAt,
-	).Scan(&assessmentID)
-
+	// Insert into clinical_assessments
+	assessmentID, err := m.db.Insert(ctx, "clinical_assessments", map[string]interface{}{
+		"patient_id":      patientID,
+		"assessment_type": "C-SSRS",
+		"score":           result.IdeationLevel,
+		"severity_level":  result.RiskLevel,
+		"assessed_at":     result.AssessedAt,
+		"created_at":      time.Now(),
+	})
 	if err != nil {
 		return err
 	}
 
 	// Save responses
 	for _, resp := range result.Responses {
-		queryResp := `
-			INSERT INTO assessment_responses (
-				assessment_id, question_number, response_value, created_at
-			) VALUES ($1, $2, $3, NOW())
-		`
 		value := 0
 		if resp.Answer {
 			value = 1
 		}
-		_, err = m.db.Conn.Exec(queryResp, assessmentID, resp.Question, value)
+		_, err = m.db.Insert(ctx, "assessment_responses", map[string]interface{}{
+			"assessment_id":   assessmentID,
+			"question_number": resp.Question,
+			"response_value":  value,
+			"created_at":      time.Now(),
+		})
 		if err != nil {
 			log.Printf("⚠️ Erro ao salvar resposta: %v", err)
 		}
@@ -463,13 +444,15 @@ func (m *ClinicalScalesManager) createCriticalAlert(patientID int64, scaleType s
 		message = fmt.Sprintf("RISCO SUICIDA - %s", message)
 	}
 
-	query := `
-		INSERT INTO clinical_alerts (
-			patient_id, alert_type, severity, message, score, created_at
-		) VALUES ($1, $2, 'critical', $3, $4, NOW())
-	`
-
-	_, err := m.db.Conn.Exec(query, patientID, scaleType, message, score)
+	ctx := context.Background()
+	_, err := m.db.Insert(ctx, "clinical_alerts", map[string]interface{}{
+		"patient_id": patientID,
+		"alert_type": scaleType,
+		"severity":   "critical",
+		"message":    message,
+		"score":      score,
+		"created_at": time.Now(),
+	})
 	if err != nil {
 		log.Printf("❌ Erro ao criar alerta crítico: %v", err)
 	}

@@ -5,23 +5,24 @@ package thinking
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"eva/internal/brainstem/database"
 )
 
-// AuditLogger gerencia o log de análises de saúde no banco de dados
+// AuditLogger gerencia o log de analises de saude no banco de dados
 type AuditLogger struct {
-	db *sql.DB
+	db *database.DB
 }
 
 // NewAuditLogger cria um novo logger de auditoria
-func NewAuditLogger(db *sql.DB) *AuditLogger {
+func NewAuditLogger(db *database.DB) *AuditLogger {
 	return &AuditLogger{db: db}
 }
 
-// LogHealthAnalysis registra uma análise de saúde no banco
+// LogHealthAnalysis registra uma analise de saude no banco
 func (al *AuditLogger) LogHealthAnalysis(ctx context.Context, idosoID int64, concern string, response *ThinkingResponse) (int64, error) {
 	// Converter thought_process para JSON
 	thoughtProcessJSON, err := json.Marshal(response.ThoughtProcess)
@@ -35,34 +36,19 @@ func (al *AuditLogger) LogHealthAnalysis(ctx context.Context, idosoID int64, con
 		return 0, fmt.Errorf("erro ao serializar recommended_actions: %w", err)
 	}
 
-	query := `
-		INSERT INTO health_thinking_audit (
-			idoso_id,
-			concern,
-			thought_process,
-			risk_level,
-			recommended_actions,
-			seek_medical_care,
-			urgency_level,
-			final_answer
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		RETURNING id
-	`
+	content := map[string]interface{}{
+		"idoso_id":            idosoID,
+		"concern":             concern,
+		"thought_process":     string(thoughtProcessJSON),
+		"risk_level":          response.RiskLevel.String(),
+		"recommended_actions": string(actionsJSON),
+		"seek_medical_care":   response.SeekMedicalCare,
+		"urgency_level":       response.UrgencyLevel,
+		"final_answer":        response.FinalAnswer,
+		"created_at":          time.Now().Format(time.RFC3339),
+	}
 
-	var auditID int64
-	err = al.db.QueryRowContext(
-		ctx,
-		query,
-		idosoID,
-		concern,
-		thoughtProcessJSON,
-		response.RiskLevel.String(),
-		actionsJSON,
-		response.SeekMedicalCare,
-		response.UrgencyLevel,
-		response.FinalAnswer,
-	).Scan(&auditID)
-
+	auditID, err := al.db.Insert(ctx, "health_thinking_audit", content)
 	if err != nil {
 		return 0, fmt.Errorf("erro ao inserir auditoria: %w", err)
 	}
@@ -72,53 +58,46 @@ func (al *AuditLogger) LogHealthAnalysis(ctx context.Context, idosoID int64, con
 
 // MarkCaregiverNotified marca que o cuidador foi notificado
 func (al *AuditLogger) MarkCaregiverNotified(ctx context.Context, auditID int64) error {
-	query := `SELECT mark_caregiver_notified($1)`
-
-	_, err := al.db.ExecContext(ctx, query, auditID)
+	err := al.db.Update(ctx, "health_thinking_audit",
+		map[string]interface{}{"id": auditID},
+		map[string]interface{}{
+			"caregiver_notified":    true,
+			"caregiver_notified_at": time.Now().Format(time.RFC3339),
+		})
 	if err != nil {
-		return fmt.Errorf("erro ao marcar notificação: %w", err)
+		return fmt.Errorf("erro ao marcar notificacao: %w", err)
 	}
 
 	return nil
 }
 
-// GetPendingCriticalAlerts retorna alertas críticos não notificados
+// GetPendingCriticalAlerts retorna alertas criticos nao notificados
 func (al *AuditLogger) GetPendingCriticalAlerts(ctx context.Context) ([]CriticalAlert, error) {
-	query := `
-		SELECT 
-			id,
-			idoso_id,
-			idoso_nome,
-			concern,
-			risk_level,
-			urgency_level,
-			created_at,
-			minutes_since_alert
-		FROM v_critical_alerts_pending
-		ORDER BY created_at DESC
-	`
-
-	rows, err := al.db.QueryContext(ctx, query)
+	rows, err := al.db.QueryByLabel(ctx, "health_thinking_audit",
+		" AND n.caregiver_notified = $notified AND (n.risk_level = $critical OR n.risk_level = $high)",
+		map[string]interface{}{
+			"notified": false,
+			"critical": "CRITICO",
+			"high":     "ALTO",
+		}, 0)
 	if err != nil {
 		return nil, fmt.Errorf("erro ao buscar alertas: %w", err)
 	}
-	defer rows.Close()
 
 	var alerts []CriticalAlert
-	for rows.Next() {
-		var alert CriticalAlert
-		err := rows.Scan(
-			&alert.ID,
-			&alert.IdosoID,
-			&alert.IdosoNome,
-			&alert.Concern,
-			&alert.RiskLevel,
-			&alert.UrgencyLevel,
-			&alert.CreatedAt,
-			&alert.MinutesSinceAlert,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("erro ao escanear alerta: %w", err)
+	for _, m := range rows {
+		createdAt := database.GetTime(m, "created_at")
+		minutesSince := time.Since(createdAt).Minutes()
+
+		alert := CriticalAlert{
+			ID:                database.GetInt64(m, "id"),
+			IdosoID:           database.GetInt64(m, "idoso_id"),
+			IdosoNome:         database.GetString(m, "idoso_nome"),
+			Concern:           database.GetString(m, "concern"),
+			RiskLevel:         database.GetString(m, "risk_level"),
+			UrgencyLevel:      database.GetString(m, "urgency_level"),
+			CreatedAt:         createdAt,
+			MinutesSinceAlert: minutesSince,
 		}
 		alerts = append(alerts, alert)
 	}
@@ -126,51 +105,58 @@ func (al *AuditLogger) GetPendingCriticalAlerts(ctx context.Context) ([]Critical
 	return alerts, nil
 }
 
-// GetHealthSummary retorna resumo de preocupações de saúde de um idoso
+// GetHealthSummary retorna resumo de preocupacoes de saude de um idoso
 func (al *AuditLogger) GetHealthSummary(ctx context.Context, idosoID int64) (*HealthSummary, error) {
-	query := `
-		SELECT 
-			total_concerns,
-			critical_count,
-			high_count,
-			medium_count,
-			low_count,
-			notified_count,
-			last_concern_date
-		FROM v_health_concerns_summary
-		WHERE idoso_id = $1
-	`
-
-	var summary HealthSummary
-	var lastConcern sql.NullTime
-
-	err := al.db.QueryRowContext(ctx, query, idosoID).Scan(
-		&summary.TotalConcerns,
-		&summary.CriticalCount,
-		&summary.HighCount,
-		&summary.MediumCount,
-		&summary.LowCount,
-		&summary.NotifiedCount,
-		&lastConcern,
-	)
-
-	if err == sql.ErrNoRows {
-		// Nenhuma preocupação registrada
-		return &HealthSummary{}, nil
-	}
-
+	rows, err := al.db.QueryByLabel(ctx, "health_thinking_audit",
+		" AND n.idoso_id = $idoso_id",
+		map[string]interface{}{"idoso_id": idosoID}, 0)
 	if err != nil {
 		return nil, fmt.Errorf("erro ao buscar resumo: %w", err)
 	}
 
-	if lastConcern.Valid {
-		summary.LastConcernDate = &lastConcern.Time
+	if len(rows) == 0 {
+		// Nenhuma preocupacao registrada
+		return &HealthSummary{}, nil
 	}
 
-	return &summary, nil
+	summary := &HealthSummary{
+		TotalConcerns: len(rows),
+	}
+
+	var lastConcernTime time.Time
+
+	for _, m := range rows {
+		riskLevel := database.GetString(m, "risk_level")
+		switch riskLevel {
+		case "CRITICO":
+			summary.CriticalCount++
+		case "ALTO":
+			summary.HighCount++
+		case "MEDIO":
+			summary.MediumCount++
+		default:
+			summary.LowCount++
+		}
+
+		notified := database.GetBool(m, "caregiver_notified")
+		if notified {
+			summary.NotifiedCount++
+		}
+
+		created := database.GetTime(m, "created_at")
+		if created.After(lastConcernTime) {
+			lastConcernTime = created
+		}
+	}
+
+	if !lastConcernTime.IsZero() {
+		summary.LastConcernDate = &lastConcernTime
+	}
+
+	return summary, nil
 }
 
-// CriticalAlert representa um alerta crítico pendente
+// CriticalAlert representa um alerta critico pendente
 type CriticalAlert struct {
 	ID                int64     `json:"id"`
 	IdosoID           int64     `json:"idoso_id"`
@@ -182,7 +168,7 @@ type CriticalAlert struct {
 	MinutesSinceAlert float64   `json:"minutes_since_alert"`
 }
 
-// HealthSummary representa um resumo de saúde de um idoso
+// HealthSummary representa um resumo de saude de um idoso
 type HealthSummary struct {
 	TotalConcerns   int        `json:"total_concerns"`
 	CriticalCount   int        `json:"critical_count"`

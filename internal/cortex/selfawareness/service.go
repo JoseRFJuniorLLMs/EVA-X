@@ -5,7 +5,6 @@ package selfawareness
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -17,6 +16,7 @@ import (
 	"time"
 
 	"eva/internal/brainstem/config"
+	"eva/internal/brainstem/database"
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	"eva/internal/hippocampus/knowledge"
 
@@ -32,14 +32,14 @@ const (
 // SelfAwarenessService provides EVA with introspection capabilities:
 // search own codebase, query own databases, update self-knowledge.
 type SelfAwarenessService struct {
-	db            *sql.DB
+	db            *database.DB
 	vectorAdapter *nietzscheInfra.VectorAdapter
 	embedSvc      *knowledge.EmbeddingService
 	cfg           *config.Config
 }
 
 // NewSelfAwarenessService creates the self-awareness service.
-func NewSelfAwarenessService(db *sql.DB, vectorAdapter *nietzscheInfra.VectorAdapter, embedSvc *knowledge.EmbeddingService, cfg *config.Config) *SelfAwarenessService {
+func NewSelfAwarenessService(db *database.DB, vectorAdapter *nietzscheInfra.VectorAdapter, embedSvc *knowledge.EmbeddingService, cfg *config.Config) *SelfAwarenessService {
 	if db == nil {
 		log.Warn().Msg("⚠️ [SELF-AWARENESS] NietzscheDB unavailable — running in degraded mode")
 	}
@@ -513,57 +513,26 @@ func (s *SelfAwarenessService) SearchDocs(ctx context.Context, query string, lim
 
 // ======================== Database Queries (read-only) ========================
 
-// QueryPostgres executes a read-only SELECT query on NietzscheDB.
-func (s *SelfAwarenessService) QueryPostgres(ctx context.Context, query string) ([]map[string]interface{}, error) {
+// QueryNietzsche executes a read-only query against NietzscheDB by label.
+// The query parameter is treated as a label name; results are returned as maps.
+func (s *SelfAwarenessService) QueryNietzsche(ctx context.Context, query string) ([]map[string]interface{}, error) {
 	if s.db == nil {
 		return nil, fmt.Errorf("NietzscheDB unavailable")
 	}
-	normalized := strings.TrimSpace(strings.ToUpper(query))
-	if !strings.HasPrefix(normalized, "SELECT") {
-		return nil, fmt.Errorf("apenas queries SELECT sao permitidas")
-	}
-	for _, kw := range []string{"UPDATE ", "DELETE ", "DROP ", "INSERT ", "ALTER ", "TRUNCATE ", "CREATE ", "GRANT "} {
-		if strings.Contains(normalized, kw) {
-			return nil, fmt.Errorf("query contem keyword proibida: %s", kw)
-		}
+
+	// The query is used as a node_label to fetch nodes from NietzscheDB.
+	// This replaces the old SQL SELECT-only approach.
+	label := strings.TrimSpace(query)
+	if label == "" {
+		return nil, fmt.Errorf("label vazio")
 	}
 
-	rows, err := s.db.QueryContext(ctx, query)
+	rows, err := s.db.QueryByLabel(ctx, label, "", nil, 50)
 	if err != nil {
 		return nil, fmt.Errorf("query failed: %w", err)
 	}
-	defer rows.Close()
 
-	cols, err := rows.Columns()
-	if err != nil {
-		return nil, err
-	}
-
-	var results []map[string]interface{}
-	for rows.Next() {
-		values := make([]interface{}, len(cols))
-		pointers := make([]interface{}, len(cols))
-		for i := range values {
-			pointers[i] = &values[i]
-		}
-		if err := rows.Scan(pointers...); err != nil {
-			return nil, err
-		}
-		row := make(map[string]interface{})
-		for i, col := range cols {
-			val := values[i]
-			if b, ok := val.([]byte); ok {
-				row[col] = string(b)
-			} else {
-				row[col] = val
-			}
-		}
-		results = append(results, row)
-		if len(results) >= 50 {
-			break
-		}
-	}
-	return results, rows.Err()
+	return rows, nil
 }
 
 // ======================== NietzscheDB Collections ========================
@@ -603,7 +572,7 @@ func (s *SelfAwarenessService) ListCollections(_ context.Context) ([]CollectionI
 
 // SystemStats represents EVA's overall system statistics.
 type SystemStats struct {
-	PostgresTables       int    `json:"postgres_tables"`
+	NietzscheLabels      int    `json:"nietzsche_labels"`
 	NietzscheCollections int    `json:"nietzsche_collections"`
 	NietzscheTotalNodes  int64  `json:"nietzsche_total_nodes"`
 	CurriculumPending    int    `json:"curriculum_pending"`
@@ -628,17 +597,27 @@ func (s *SelfAwarenessService) GetSystemStats(ctx context.Context) (*SystemStats
 	stats.MemAllocMB = m.Alloc / 1024 / 1024
 
 	if s.db != nil {
-		row := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public'")
-		row.Scan(&stats.PostgresTables)
+		// Count curriculum pending
+		pending, err := s.db.Count(ctx, "eva_curriculum", " AND n.status = $status", map[string]interface{}{"status": "pending"})
+		if err == nil {
+			stats.CurriculumPending = pending
+		}
 
-		row = s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM eva_curriculum WHERE status = 'pending'")
-		row.Scan(&stats.CurriculumPending)
+		// Count curriculum completed
+		done, err := s.db.Count(ctx, "eva_curriculum", " AND n.status = $status", map[string]interface{}{"status": "completed"})
+		if err == nil {
+			stats.CurriculumDone = done
+		}
 
-		row = s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM eva_curriculum WHERE status = 'completed'")
-		row.Scan(&stats.CurriculumDone)
+		// Count episodic memories
+		memories, err := s.db.Count(ctx, "episodic_memories", "", nil)
+		if err == nil {
+			stats.TotalMemories = memories
+		}
 
-		row = s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM episodic_memories")
-		row.Scan(&stats.TotalMemories)
+		// NietzscheDB labels — hard-coded estimate since there is no
+		// information_schema equivalent in NietzscheDB.
+		stats.NietzscheLabels = 21
 	}
 
 	collections, err := s.ListCollections(ctx)
@@ -667,7 +646,7 @@ type SelfKnowledgeItem struct {
 }
 
 // SearchSelfKnowledge searches EVA's self-knowledge using semantic search (NietzscheDB vector)
-// with NietzscheDB ILIKE as fallback.
+// with NietzscheDB QueryByLabel + Go-side string matching as fallback.
 func (s *SelfAwarenessService) SearchSelfKnowledge(ctx context.Context, query string, limit int) ([]SelfKnowledgeItem, error) {
 	if limit <= 0 {
 		limit = 5
@@ -729,35 +708,47 @@ func (s *SelfAwarenessService) SearchSelfKnowledge(ctx context.Context, query st
 		}
 	}
 
-	// Fallback: NietzscheDB ILIKE
+	// Fallback: NietzscheDB QueryByLabel + Go-side string matching
 	if s.db == nil {
 		return nil, fmt.Errorf("nenhum backend de busca disponivel")
 	}
 
-	sqlQuery := `
-		SELECT id, knowledge_type, knowledge_key, title, summary, detailed_content,
-			   COALESCE(code_location, ''), importance
-		FROM eva_self_knowledge
-		WHERE title ILIKE $1 OR summary ILIKE $1 OR detailed_content ILIKE $1
-		ORDER BY importance DESC
-		LIMIT $2
-	`
-
-	rows, err := s.db.QueryContext(ctx, sqlQuery, "%"+query+"%", limit)
+	rows, err := s.db.QueryByLabel(ctx, "eva_self_knowledge", "", nil, 0)
 	if err != nil {
 		return nil, fmt.Errorf("search failed: %w", err)
 	}
-	defer rows.Close()
 
+	queryLower := strings.ToLower(query)
 	var items []SelfKnowledgeItem
-	for rows.Next() {
-		var item SelfKnowledgeItem
-		if err := rows.Scan(&item.ID, &item.Type, &item.Key, &item.Title, &item.Summary, &item.Content, &item.CodeLocation, &item.Importance); err != nil {
-			return nil, err
+	for _, m := range rows {
+		title := database.GetString(m, "title")
+		summary := database.GetString(m, "summary")
+		content := database.GetString(m, "detailed_content")
+
+		// Match against title, summary, or content (case-insensitive)
+		if !strings.Contains(strings.ToLower(title), queryLower) &&
+			!strings.Contains(strings.ToLower(summary), queryLower) &&
+			!strings.Contains(strings.ToLower(content), queryLower) {
+			continue
+		}
+
+		item := SelfKnowledgeItem{
+			ID:           database.GetInt64(m, "id"),
+			Type:         database.GetString(m, "knowledge_type"),
+			Key:          database.GetString(m, "knowledge_key"),
+			Title:        title,
+			Summary:      summary,
+			Content:      content,
+			CodeLocation: database.GetString(m, "code_location"),
+			Importance:   int(database.GetInt64(m, "importance")),
 		}
 		items = append(items, item)
+
+		if len(items) >= limit {
+			break
+		}
 	}
-	return items, rows.Err()
+	return items, nil
 }
 
 // UpdateSelfKnowledge upserts an entry in eva_self_knowledge.
@@ -765,18 +756,31 @@ func (s *SelfAwarenessService) UpdateSelfKnowledge(ctx context.Context, knowledg
 	if s.db == nil {
 		return fmt.Errorf("NietzscheDB unavailable")
 	}
-	query := `
-		INSERT INTO eva_self_knowledge (knowledge_type, knowledge_key, title, summary, detailed_content, importance, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, NOW())
-		ON CONFLICT (knowledge_key) DO UPDATE SET
-			title = EXCLUDED.title,
-			summary = EXCLUDED.summary,
-			detailed_content = EXCLUDED.detailed_content,
-			importance = EXCLUDED.importance,
-			updated_at = NOW()
-	`
-	_, err := s.db.ExecContext(ctx, query, knowledgeType, key, title, summary, content, importance)
-	return err
+
+	// Try to update existing entry by knowledge_key first
+	err := s.db.Update(ctx, "eva_self_knowledge",
+		map[string]interface{}{"knowledge_key": key},
+		map[string]interface{}{
+			"title":            title,
+			"summary":          summary,
+			"detailed_content": content,
+			"importance":       importance,
+			"updated_at":       time.Now().Format(time.RFC3339),
+		})
+	if err != nil {
+		// If update fails (no match), insert a new entry
+		_, insertErr := s.db.Insert(ctx, "eva_self_knowledge", map[string]interface{}{
+			"knowledge_type":   knowledgeType,
+			"knowledge_key":    key,
+			"title":            title,
+			"summary":          summary,
+			"detailed_content": content,
+			"importance":       importance,
+			"updated_at":       time.Now().Format(time.RFC3339),
+		})
+		return insertErr
+	}
+	return nil
 }
 
 // ======================== Introspect ========================
@@ -804,13 +808,11 @@ func (s *SelfAwarenessService) Introspect(ctx context.Context) (*IntrospectionRe
 	}
 
 	if s.db != nil {
-		rows, err := s.db.QueryContext(ctx,
-			"SELECT topic FROM eva_curriculum WHERE status = 'completed' ORDER BY completed_at DESC LIMIT 5")
+		rows, err := s.db.QueryByLabel(ctx, "eva_curriculum", " AND n.status = $status", map[string]interface{}{"status": "completed"}, 5)
 		if err == nil {
-			defer rows.Close()
-			for rows.Next() {
-				var topic string
-				if rows.Scan(&topic) == nil {
+			for _, m := range rows {
+				topic := database.GetString(m, "topic")
+				if topic != "" {
 					report.RecentLearnings = append(report.RecentLearnings, topic)
 				}
 			}

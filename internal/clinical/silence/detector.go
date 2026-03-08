@@ -5,20 +5,22 @@ package silence
 
 import (
 	"context"
-	"database/sql"
+	"sort"
 	"strings"
 	"time"
+
+	"eva/internal/brainstem/database"
 
 	"github.com/rs/zerolog/log"
 )
 
 // SilenceDetector detects when a child stops talking about a previously frequent topic
 type SilenceDetector struct {
-	db *sql.DB
+	db *database.DB
 }
 
 // NewSilenceDetector creates a new silence detector
-func NewSilenceDetector(db *sql.DB) *SilenceDetector {
+func NewSilenceDetector(db *database.DB) *SilenceDetector {
 	return &SilenceDetector{db: db}
 }
 
@@ -109,33 +111,47 @@ func (s *SilenceDetector) AnalyzeTopicFrequencies(ctx context.Context, patientID
 
 // getRecentSessions retrieves recent session IDs
 func (s *SilenceDetector) getRecentSessions(ctx context.Context, patientID int64, limit int) ([]int64, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id 
-		FROM conversations 
-		WHERE patient_id = $1 
-		ORDER BY started_at DESC 
-		LIMIT $2
-	`, patientID, limit)
-
+	rows, err := s.db.QueryByLabel(ctx, "conversations",
+		" AND n.patient_id = $pid", map[string]interface{}{
+			"pid": patientID,
+		}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	var sessions []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err == nil {
-			sessions = append(sessions, id)
-		}
+	// Build sortable entries
+	type convEntry struct {
+		id        int64
+		startedAt time.Time
+	}
+	var entries []convEntry
+	for _, m := range rows {
+		entries = append(entries, convEntry{
+			id:        database.GetInt64(m, "id"),
+			startedAt: database.GetTime(m, "started_at"),
+		})
 	}
 
-	// Reverse to get chronological order
+	// Sort by started_at DESC
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].startedAt.After(entries[j].startedAt)
+	})
+
+	// Apply limit
+	if limit > 0 && len(entries) > limit {
+		entries = entries[:limit]
+	}
+
+	// Extract IDs and reverse to chronological order
+	sessions := make([]int64, len(entries))
+	for i, e := range entries {
+		sessions[i] = e.id
+	}
 	for i, j := 0, len(sessions)-1; i < j; i, j = i+1, j-1 {
 		sessions[i], sessions[j] = sessions[j], sessions[i]
 	}
 
-	return sessions, rows.Err()
+	return sessions, nil
 }
 
 // countTopicsInSession counts topic mentions in a session
@@ -152,24 +168,19 @@ func (s *SilenceDetector) countTopicsInSession(ctx context.Context, sessionID in
 	counts := make(map[string]int)
 
 	// Get all messages in session
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT content 
-		FROM messages 
-		WHERE conversation_id = $1
-	`, sessionID)
-
+	msgRows, err := s.db.QueryByLabel(ctx, "messages",
+		" AND n.conversation_id = $cid", map[string]interface{}{
+			"cid": sessionID,
+		}, 0)
 	if err != nil {
 		return counts
 	}
-	defer rows.Close()
 
 	var allContent strings.Builder
-	for rows.Next() {
-		var content string
-		if err := rows.Scan(&content); err == nil {
-			allContent.WriteString(" ")
-			allContent.WriteString(strings.ToLower(content))
-		}
+	for _, m := range msgRows {
+		content := database.GetString(m, "content")
+		allContent.WriteString(" ")
+		allContent.WriteString(strings.ToLower(content))
 	}
 
 	text := allContent.String()
@@ -195,17 +206,44 @@ func (s *SilenceDetector) calculateAlertLevel(expected, actual float64) string {
 
 // createSilenceAlert creates a silence alert in database
 func (s *SilenceDetector) createSilenceAlert(ctx context.Context, patientID int64, freq *TopicFrequency) error {
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO silence_alerts (
-			patient_id, topic, expected_frequency, actual_frequency,
-			sessions_silent, alert_level, first_detected
-		) VALUES ($1, $2, $3, $4, $5, $6, $7)
-		ON CONFLICT (patient_id, topic) WHERE NOT resolved
-		DO UPDATE SET
-			sessions_silent = silence_alerts.sessions_silent + 1,
-			last_checked = NOW()
-	`, patientID, freq.Topic, freq.ExpectedFrequency, freq.ActualFrequency,
-		freq.SessionsSilent, freq.AlertLevel, freq.FirstDetected)
+	// Check for existing unresolved alert for this patient+topic (upsert logic)
+	existing, err := s.db.QueryByLabel(ctx, "silence_alerts",
+		" AND n.patient_id = $pid AND n.topic = $topic AND n.resolved = $resolved",
+		map[string]interface{}{
+			"pid":      patientID,
+			"topic":    freq.Topic,
+			"resolved": false,
+		}, 1)
+	if err != nil {
+		return err
+	}
+
+	if len(existing) > 0 {
+		// Update existing: increment sessions_silent
+		currentSilent := int(database.GetInt64(existing[0], "sessions_silent"))
+		err = s.db.Update(ctx, "silence_alerts",
+			map[string]interface{}{
+				"patient_id": patientID,
+				"topic":      freq.Topic,
+				"resolved":   false,
+			},
+			map[string]interface{}{
+				"sessions_silent": currentSilent + 1,
+				"last_checked":    time.Now().Format(time.RFC3339),
+			})
+	} else {
+		// Insert new alert
+		_, err = s.db.Insert(ctx, "silence_alerts", map[string]interface{}{
+			"patient_id":         patientID,
+			"topic":              freq.Topic,
+			"expected_frequency": freq.ExpectedFrequency,
+			"actual_frequency":   freq.ActualFrequency,
+			"sessions_silent":    freq.SessionsSilent,
+			"alert_level":        freq.AlertLevel,
+			"first_detected":     freq.FirstDetected.Format(time.RFC3339),
+			"resolved":           false,
+		})
+	}
 
 	if err == nil {
 		log.Warn().
@@ -213,7 +251,7 @@ func (s *SilenceDetector) createSilenceAlert(ctx context.Context, patientID int6
 			Str("topic", freq.Topic).
 			Float64("expected", freq.ExpectedFrequency).
 			Str("alert_level", freq.AlertLevel).
-			Msg("🔇 SILENCE ALERT: Topic disappeared")
+			Msg("SILENCE ALERT: Topic disappeared")
 	}
 
 	return err
@@ -221,42 +259,50 @@ func (s *SilenceDetector) createSilenceAlert(ctx context.Context, patientID int6
 
 // GetActiveAlerts retrieves active silence alerts for a patient
 func (s *SilenceDetector) GetActiveAlerts(ctx context.Context, patientID int64) ([]*SilenceAlert, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, patient_id, topic, expected_frequency, actual_frequency,
-		       sessions_silent, alert_level, first_detected, resolved
-		FROM silence_alerts
-		WHERE patient_id = $1 AND NOT resolved
-		ORDER BY alert_level DESC, first_detected DESC
-	`, patientID)
-
+	rows, err := s.db.QueryByLabel(ctx, "silence_alerts",
+		" AND n.patient_id = $pid AND n.resolved = $resolved",
+		map[string]interface{}{
+			"pid":      patientID,
+			"resolved": false,
+		}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	var alerts []*SilenceAlert
-	for rows.Next() {
-		var alert SilenceAlert
-		err := rows.Scan(
-			&alert.ID, &alert.PatientID, &alert.Topic, &alert.ExpectedFrequency,
-			&alert.ActualFrequency, &alert.SessionsSilent, &alert.AlertLevel,
-			&alert.FirstDetected, &alert.Resolved,
-		)
-		if err == nil {
-			alerts = append(alerts, &alert)
+	for _, m := range rows {
+		alert := &SilenceAlert{
+			ID:                database.GetInt64(m, "id"),
+			PatientID:         database.GetInt64(m, "patient_id"),
+			Topic:             database.GetString(m, "topic"),
+			ExpectedFrequency: database.GetFloat64(m, "expected_frequency"),
+			ActualFrequency:   database.GetFloat64(m, "actual_frequency"),
+			SessionsSilent:    int(database.GetInt64(m, "sessions_silent")),
+			AlertLevel:        database.GetString(m, "alert_level"),
+			FirstDetected:     database.GetTime(m, "first_detected"),
+			Resolved:          database.GetBool(m, "resolved"),
 		}
+		alerts = append(alerts, alert)
 	}
 
-	return alerts, rows.Err()
+	// Sort by alert_level DESC (CRITICAL > HIGH > MODERATE > LOW), then first_detected DESC
+	alertPriority := map[string]int{"CRITICAL": 4, "HIGH": 3, "MODERATE": 2, "LOW": 1}
+	sort.Slice(alerts, func(i, j int) bool {
+		pi := alertPriority[alerts[i].AlertLevel]
+		pj := alertPriority[alerts[j].AlertLevel]
+		if pi != pj {
+			return pi > pj
+		}
+		return alerts[i].FirstDetected.After(alerts[j].FirstDetected)
+	})
+
+	return alerts, nil
 }
 
 // ResolveAlert marks a silence alert as resolved
 func (s *SilenceDetector) ResolveAlert(ctx context.Context, alertID int64) error {
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE silence_alerts 
-		SET resolved = TRUE 
-		WHERE id = $1
-	`, alertID)
-
-	return err
+	return s.db.Update(ctx, "silence_alerts",
+		map[string]interface{}{"id": alertID},
+		map[string]interface{}{"resolved": true},
+	)
 }

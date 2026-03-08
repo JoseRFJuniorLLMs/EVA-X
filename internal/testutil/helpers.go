@@ -5,75 +5,65 @@ package testutil
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"os"
 	"testing"
 	"time"
 
-	_ "github.com/lib/pq"
+	"eva/internal/brainstem/database"
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 )
 
 // TestDB fornece uma conexão de banco de dados para testes
 type TestDB struct {
-	Conn *sql.DB
+	DB *database.DB
 }
 
-// SetupTestDB cria uma conexão de teste com o banco
-// Usa variável de ambiente TEST_DATABASE_URL ou fallback para local
+// SetupTestDB cria uma conexão de teste com NietzscheDB
+// Usa variável de ambiente TEST_NIETZSCHE_URL ou fallback para local
 func SetupTestDB(t *testing.T) *TestDB {
 	t.Helper()
 
-	dbURL := os.Getenv("TEST_DATABASE_URL")
-	if dbURL == "" {
-		// Fallback para banco local de teste
-		dbURL = "postgres://postgres:postgres@localhost:5432/eva_test?sslmode=disable"
+	addr := os.Getenv("TEST_NIETZSCHE_URL")
+	if addr == "" {
+		addr = "localhost:50051"
 	}
 
-	db, err := sql.Open("postgres", dbURL)
+	client, err := nietzscheInfra.NewClient(addr)
 	if err != nil {
-		t.Fatalf("Falha ao conectar ao banco de teste: %v", err)
+		t.Skipf("NietzscheDB de teste não disponível: %v", err)
 	}
 
-	// Verificar conexão
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	db := database.NewNietzscheDB(client.SDK(), nil)
 
-	if err := db.PingContext(ctx); err != nil {
-		t.Skipf("Banco de teste não disponível: %v", err)
-	}
-
-	return &TestDB{Conn: db}
+	return &TestDB{DB: db}
 }
 
 // Cleanup fecha a conexão e limpa dados de teste
 func (tdb *TestDB) Cleanup(t *testing.T) {
 	t.Helper()
-	if tdb.Conn != nil {
-		tdb.Conn.Close()
-	}
+	// NietzscheDB client cleanup if needed
 }
 
-// TruncateTable limpa uma tabela específica
+// TruncateTable is a no-op for NietzscheDB (no TRUNCATE support)
 func (tdb *TestDB) TruncateTable(t *testing.T, tableName string) {
 	t.Helper()
-	_, err := tdb.Conn.Exec(fmt.Sprintf("TRUNCATE TABLE %s CASCADE", tableName))
-	if err != nil {
-		t.Logf("Aviso: não foi possível truncar tabela %s: %v", tableName, err)
-	}
+	t.Logf("TruncateTable: NietzscheDB does not support TRUNCATE, skipping %s", tableName)
 }
 
 // InsertTestIdoso cria um idoso de teste e retorna o ID
 func (tdb *TestDB) InsertTestIdoso(t *testing.T, nome, cpf string) int64 {
 	t.Helper()
 
-	var id int64
-	err := tdb.Conn.QueryRow(`
-		INSERT INTO idosos (nome, cpf, email, telefone)
-		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (cpf) DO UPDATE SET nome = EXCLUDED.nome
-		RETURNING id
-	`, nome, cpf, "test@test.com", "11999999999").Scan(&id)
+	ctx := context.Background()
+	id, err := tdb.DB.Insert(ctx, "idosos", map[string]interface{}{
+		"nome":       nome,
+		"cpf":        cpf,
+		"email":      "test@test.com",
+		"telefone":   "11999999999",
+		"ativo":      true,
+		"created_at": time.Now().Format(time.RFC3339),
+	})
 
 	if err != nil {
 		t.Fatalf("Falha ao criar idoso de teste: %v", err)
@@ -82,10 +72,10 @@ func (tdb *TestDB) InsertTestIdoso(t *testing.T, nome, cpf string) int64 {
 	return id
 }
 
-// CleanupTestIdoso remove o idoso de teste
+// CleanupTestIdoso remove o idoso de teste (note: NietzscheDB delete not always available)
 func (tdb *TestDB) CleanupTestIdoso(t *testing.T, idosoID int64) {
 	t.Helper()
-	tdb.Conn.Exec("DELETE FROM idosos WHERE id = $1", idosoID)
+	t.Logf("CleanupTestIdoso: skipping delete for idoso %d (NietzscheDB)", idosoID)
 }
 
 // TestContext cria um contexto com timeout para testes
@@ -149,3 +139,6 @@ func AssertInRange(t *testing.T, value, min, max int, msg string) {
 		t.Fatalf("%s: valor %d deveria estar entre %d e %d", msg, value, min, max)
 	}
 }
+
+// Ensure fmt is used (for backward compatibility)
+var _ = fmt.Sprintf

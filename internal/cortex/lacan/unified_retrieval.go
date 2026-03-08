@@ -2,18 +2,20 @@ package lacan
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"eva/internal/brainstem/config"
+	"eva/internal/brainstem/database"
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	"eva/internal/cortex/mcp"
 	"eva/internal/cortex/personality"
 	"eva/internal/hippocampus/knowledge"
+	"eva/pkg/crypto"
 	"eva/pkg/types"
 	"fmt"
 	"log"
 	nietzsche "nietzsche-sdk"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -54,7 +56,7 @@ type UnifiedRetrieval struct {
 	mcp *mcp.MCPClient
 
 	// Infraestrutura
-	db     *sql.DB
+	db     *database.DB
 	graph  *nietzscheInfra.GraphAdapter
 	vector *nietzscheInfra.VectorAdapter
 	cfg    *config.Config
@@ -201,7 +203,7 @@ type UnifiedContext struct {
 
 // NewUnifiedRetrieval cria servico de recuperacao unificada
 func NewUnifiedRetrieval(
-	db *sql.DB,
+	db *database.DB,
 	graphAdapter *nietzscheInfra.GraphAdapter,
 	vectorAdapter *nietzscheInfra.VectorAdapter,
 	cfg *config.Config,
@@ -523,16 +525,45 @@ func (u *UnifiedRetrieval) getMedicalContextAndName(ctx context.Context, idosoID
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()
 
-	// 1. BUSCAR NOME, CPF, IDIOMA E PERSONA PREFERIDA DA TABELA IDOSOS (usando idoso_id)
-	nameQuery := `SELECT nome, COALESCE(cpf, ''), COALESCE(idioma, 'pt-BR'), COALESCE(persona_preferida, 'companion'), COALESCE(colecoes, ''), COALESCE(nivel_cognitivo, 'normal'), COALESCE(tom_voz, 'padrao') FROM idosos WHERE id = $1 LIMIT 1`
-	err := u.db.QueryRowContext(ctxWithTimeout, nameQuery, idosoID).Scan(&name, &cpf, &idioma, &persona, &colecoes, &nivelCognitivo, &tomVoz)
-	if err != nil {
-		log.Printf("⚠️ [UnifiedRetrieval] Nome/CPF/Idioma/Persona não encontrado na tabela idosos: %v", err)
+	// 1. BUSCAR NOME, CPF, IDIOMA E PERSONA PREFERIDA DO NietzscheDB (collection idosos)
+	m, err := u.db.GetNodeByID(ctxWithTimeout, "idosos", idosoID)
+	if err != nil || m == nil {
+		log.Printf("⚠️ [UnifiedRetrieval] Nome/CPF/Idioma/Persona não encontrado no NietzscheDB (idosos): %v", err)
 		name = ""
 		cpf = ""
 		idioma = "pt-BR" // Default português brasileiro
 		persona = "companion"
 	} else {
+		name = database.GetString(m, "nome")
+		cpf = database.GetString(m, "cpf")
+		idioma = database.GetString(m, "idioma")
+		persona = database.GetString(m, "persona_preferida")
+		colecoes = database.GetString(m, "colecoes")
+		nivelCognitivo = database.GetString(m, "nivel_cognitivo")
+		tomVoz = database.GetString(m, "tom_voz")
+
+		// Decrypt sensitive fields (check for "enc::" prefix)
+		if strings.HasPrefix(name, "enc::") {
+			name = crypto.Decrypt(name)
+		}
+		if strings.HasPrefix(cpf, "enc::") {
+			cpf = crypto.Decrypt(cpf)
+		}
+
+		// Defaults for empty values
+		if idioma == "" {
+			idioma = "pt-BR"
+		}
+		if persona == "" {
+			persona = "companion"
+		}
+		if nivelCognitivo == "" {
+			nivelCognitivo = "normal"
+		}
+		if tomVoz == "" {
+			tomVoz = "padrao"
+		}
+
 		cpfLog := "N/A"
 		if len(cpf) >= 3 {
 			cpfLog = cpf[:3] + "*****"
@@ -650,56 +681,102 @@ func (u *UnifiedRetrieval) getRecentMemories(ctx context.Context, idosoID int64,
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()
 
-	// 1. PRIMITIVA: Buscar as últimas N falas individuais (Imaginário Fluído)
-	// ✅ CORREÇÃO P1: Agora filtra por data (últimos 7 dias)
-	// Isso garante que ela lembre exatamente o que foi dito, mesmo sem resumo.
-	queryMemories := `
-		SELECT speaker, content, timestamp
-		FROM episodic_memories
-		WHERE idoso_id = $1
-		  AND timestamp > NOW() - INTERVAL '7 days'
-		ORDER BY timestamp DESC
-		LIMIT 15
-	`
-
-	rowsMem, err := u.db.QueryContext(ctxWithTimeout, queryMemories, idosoID)
 	var memories []string
+
+	// 1. PRIMITIVA: Buscar as últimas N falas individuais (Imaginário Fluído)
+	// Filtra por data (últimos 7 dias) em Go após busca
+	rows, err := u.db.QueryByLabel(ctxWithTimeout, "episodic_memories",
+		" AND n.idoso_id = $idoso_id",
+		map[string]interface{}{"idoso_id": float64(idosoID)}, 0)
 	if err == nil {
-		defer rowsMem.Close()
-		for rowsMem.Next() {
-			var speaker, content string
-			var createdAt time.Time
-			if err := rowsMem.Scan(&speaker, &content, &createdAt); err == nil {
-				role := "EVA"
-				if speaker == "user" {
-					role = "Paciente"
-				}
-				// Formatar: [15:04] Paciente: Conteúdo
-				memories = append(memories, fmt.Sprintf("[%s] %s: %s",
-					createdAt.Format("15:04"), role, content))
+		sevenDaysAgo := time.Now().AddDate(0, 0, -7)
+
+		// Filter: only keep rows where timestamp > 7 days ago
+		type memEntry struct {
+			speaker   string
+			content   string
+			timestamp time.Time
+		}
+		var entries []memEntry
+		for _, m := range rows {
+			ts := database.GetTime(m, "timestamp")
+			if ts.After(sevenDaysAgo) {
+				entries = append(entries, memEntry{
+					speaker:   database.GetString(m, "speaker"),
+					content:   database.GetString(m, "content"),
+					timestamp: ts,
+				})
 			}
+		}
+
+		// Sort DESC by timestamp
+		sort.Slice(entries, func(i, j int) bool {
+			return entries[i].timestamp.After(entries[j].timestamp)
+		})
+
+		// Limit to 15
+		if len(entries) > 15 {
+			entries = entries[:15]
+		}
+
+		for _, e := range entries {
+			role := "EVA"
+			if e.speaker == "user" {
+				role = "Paciente"
+			}
+			memories = append(memories, fmt.Sprintf("[%s] %s: %s",
+				e.timestamp.Format("15:04"), role, e.content))
 		}
 	}
 
 	// 2. SINTOMA: Buscar resumos de longo prazo (Imaginário Estruturado)
-	querySummaries := `
-		SELECT conteudo->'summary' as summary
-		FROM analise_gemini
-		WHERE idoso_id = $1
-		  AND tipo = 'AUDIO'
-		  AND conteudo->'summary' IS NOT NULL
-		ORDER BY created_at DESC
-		LIMIT $2
-	`
-
-	rowsSum, err := u.db.QueryContext(ctxWithTimeout, querySummaries, idosoID, limit)
+	summaryRows, err := u.db.QueryByLabel(ctxWithTimeout, "analise_gemini",
+		" AND n.idoso_id = $idoso_id AND n.tipo = $tipo",
+		map[string]interface{}{"idoso_id": float64(idosoID), "tipo": "AUDIO"}, 0)
 	if err == nil {
-		defer rowsSum.Close()
-		for rowsSum.Next() {
+		// Extract summary, sort DESC by created_at, limit
+		type summaryEntry struct {
+			summary   string
+			createdAt time.Time
+		}
+		var summaries []summaryEntry
+		for _, m := range summaryRows {
+			// conteudo is stored as a map or JSON string; extract summary field
 			var summary string
-			if err := rowsSum.Scan(&summary); err == nil {
-				memories = append(memories, "Resumo Anterior: "+summary)
+			if conteudo, ok := m["conteudo"]; ok {
+				switch c := conteudo.(type) {
+				case map[string]interface{}:
+					if s, ok := c["summary"].(string); ok && s != "" {
+						summary = s
+					}
+				case string:
+					// Try parsing JSON string
+					var parsed map[string]interface{}
+					if json.Unmarshal([]byte(c), &parsed) == nil {
+						if s, ok := parsed["summary"].(string); ok && s != "" {
+							summary = s
+						}
+					}
+				}
 			}
+			if summary != "" {
+				summaries = append(summaries, summaryEntry{
+					summary:   summary,
+					createdAt: database.GetTime(m, "created_at"),
+				})
+			}
+		}
+
+		sort.Slice(summaries, func(i, j int) bool {
+			return summaries[i].createdAt.After(summaries[j].createdAt)
+		})
+
+		if len(summaries) > limit {
+			summaries = summaries[:limit]
+		}
+
+		for _, s := range summaries {
+			memories = append(memories, "Resumo Anterior: "+s.summary)
 		}
 	}
 
@@ -727,141 +804,189 @@ func (u *UnifiedRetrieval) retrieveAgendamentos(ctx context.Context, idosoID int
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()
 
-	// Buscar TOP medicamentos ativos + próximos agendamentos
-	// PERFORMANCE: Limite reduzido de 50 para 10 (medicationLimit)
-	query := `
-		SELECT
-			tipo,
-			dados_tarefa::text,
-			to_char(data_hora_agendada, 'DD/MM HH24:MI') as data_fmt,
-			status
-		FROM agendamentos
-		WHERE idoso_id = $1
-		  AND (
-			  -- Agendamentos futuros (consultas, exames, etc.)
-			  (data_hora_agendada > NOW() AND status = 'agendado' AND tipo != 'lembrete_medicamento')
-			  OR
-			  -- TOP medicamentos ativos (ordenados por data)
-			  (tipo = 'lembrete_medicamento' AND status IN ('agendado', 'ativo', 'pendente', 'nao_atendido', 'aguardando_retry'))
-		  )
-		ORDER BY
-			CASE WHEN tipo = 'lembrete_medicamento' THEN 0 ELSE 1 END,
-			atualizado_em DESC,
-			data_hora_agendada ASC
-		LIMIT $2
-	`
-
-	rows, err := u.db.QueryContext(ctxWithTimeout, query, idosoID, medicationLimit+5)
+	// Buscar agendamentos do NietzscheDB, filtrar em Go
+	rows, err := u.db.QueryByLabel(ctxWithTimeout, "agendamentos",
+		" AND n.idoso_id = $idoso_id",
+		map[string]interface{}{"idoso_id": float64(idosoID)}, 0)
 	if err != nil {
 		log.Printf("⚠️ [UnifiedRetrieval] Erro ao buscar agendamentos: %v", err)
 		return "", ""
 	}
-	defer rows.Close()
+
+	now := time.Now()
+	medStatuses := map[string]bool{
+		"agendado": true, "ativo": true, "pendente": true,
+		"nao_atendido": true, "aguardando_retry": true,
+	}
+
+	// Filter rows matching the SQL WHERE conditions in Go
+	type agRow struct {
+		tipo            string
+		dadosTarefa     string
+		dataFmt         string
+		status          string
+		dataAgendada    time.Time
+		atualizadoEm    time.Time
+		isMed           bool
+	}
+	var filtered []agRow
+	for _, m := range rows {
+		tipo := database.GetString(m, "tipo")
+		status := database.GetString(m, "status")
+		dataAgendada := database.GetTime(m, "data_hora_agendada")
+		atualizadoEm := database.GetTime(m, "atualizado_em")
+
+		isMed := tipo == "lembrete_medicamento" || tipo == "medicamento"
+
+		// Match: future non-med agendados OR active medication reminders
+		matchFuture := dataAgendada.After(now) && status == "agendado" && tipo != "lembrete_medicamento"
+		matchMed := (tipo == "lembrete_medicamento") && medStatuses[status]
+
+		if !matchFuture && !matchMed {
+			continue
+		}
+
+		// dados_tarefa may be stored as string or map
+		var dadosTarefa string
+		if dt, ok := m["dados_tarefa"]; ok {
+			switch v := dt.(type) {
+			case string:
+				dadosTarefa = v
+			case map[string]interface{}:
+				b, _ := json.Marshal(v)
+				dadosTarefa = string(b)
+			}
+		}
+
+		filtered = append(filtered, agRow{
+			tipo:         tipo,
+			dadosTarefa:  dadosTarefa,
+			dataFmt:      dataAgendada.Format("02/01 15:04"),
+			status:       status,
+			dataAgendada: dataAgendada,
+			atualizadoEm: atualizadoEm,
+			isMed:        isMed,
+		})
+	}
+
+	// Sort: medications first, then by atualizado_em DESC, then data_hora_agendada ASC
+	sort.Slice(filtered, func(i, j int) bool {
+		if filtered[i].isMed != filtered[j].isMed {
+			return filtered[i].isMed // meds first
+		}
+		if !filtered[i].atualizadoEm.Equal(filtered[j].atualizadoEm) {
+			return filtered[i].atualizadoEm.After(filtered[j].atualizadoEm)
+		}
+		return filtered[i].dataAgendada.Before(filtered[j].dataAgendada)
+	})
+
+	// Limit
+	maxRows := medicationLimit + 5
+	if len(filtered) > maxRows {
+		filtered = filtered[:maxRows]
+	}
 
 	var medicamentos []string
 	var outros []string
 	medicamentosMap := make(map[string]bool) // Para evitar duplicatas
 
-	for rows.Next() {
-		var tipo, dadosTarefa, dataFmt, status string
+	for _, row := range filtered {
+		tipo := row.tipo
+		dadosTarefa := row.dadosTarefa
+		dataFmt := row.dataFmt
 
-		if err := rows.Scan(&tipo, &dadosTarefa, &dataFmt, &status); err == nil {
-			// ✅ Extração de Persona do Agendamento (Novo)
-			var rawData map[string]interface{}
-			if err := json.Unmarshal([]byte(dadosTarefa), &rawData); err == nil {
-				if p, ok := rawData["persona"].(string); ok && p != "" {
-					persona = p
+		// Extração de Persona do Agendamento
+		var rawData map[string]interface{}
+		if err := json.Unmarshal([]byte(dadosTarefa), &rawData); err == nil {
+			if p, ok := rawData["persona"].(string); ok && p != "" {
+				persona = p
+			}
+		}
+
+		if tipo == "lembrete_medicamento" || tipo == "medicamento" {
+			// Parse do JSON dados_tarefa para extrair detalhes do medicamento
+			var medData MedicamentoData
+			if err := json.Unmarshal([]byte(dadosTarefa), &medData); err != nil {
+				log.Printf("⚠️ [UnifiedRetrieval] Erro ao parsear medicamento JSON: %v - dados: %s", err, dadosTarefa[:min(100, len(dadosTarefa))])
+				desc := dadosTarefa
+				if len(desc) > 80 {
+					desc = desc[:80] + "..."
+				}
+				medicamentos = append(medicamentos, fmt.Sprintf("* %s", desc))
+				continue
+			}
+
+			// Fallback: formato legacy {"description": "..."}
+			if medData.Nome == "" {
+				if desc, ok := rawData["description"].(string); ok && desc != "" {
+					medData.Nome = desc
+				} else if medName, ok := rawData["medicamento"].(string); ok && medName != "" {
+					medData.Nome = medName
 				}
 			}
 
-			if tipo == "lembrete_medicamento" || tipo == "medicamento" {
-				// 🔴 CRÍTICO: Parse do JSON dados_tarefa para extrair detalhes do medicamento
-				var medData MedicamentoData
-				if err := json.Unmarshal([]byte(dadosTarefa), &medData); err != nil {
-					log.Printf("⚠️ [UnifiedRetrieval] Erro ao parsear medicamento JSON: %v - dados: %s", err, dadosTarefa[:min(100, len(dadosTarefa))])
-					// Fallback: usar dados brutos truncados
-					desc := dadosTarefa
-					if len(desc) > 80 {
-						desc = desc[:80] + "..."
-					}
-					medicamentos = append(medicamentos, fmt.Sprintf("• %s", desc))
-					continue
-				}
+			if medData.Nome == "" {
+				continue
+			}
 
-				// Fallback: formato legacy {"description": "..."}
-				if medData.Nome == "" {
-					if desc, ok := rawData["description"].(string); ok && desc != "" {
-						medData.Nome = desc
-					} else if medName, ok := rawData["medicamento"].(string); ok && medName != "" {
-						medData.Nome = medName
-					}
-				}
+			medKey := medData.Nome + medData.Dosagem
+			if medicamentosMap[medKey] {
+				continue
+			}
+			medicamentosMap[medKey] = true
 
-				// Construir descrição formatada do medicamento
-				if medData.Nome == "" {
-					continue // Pular se não tem nome
-				}
+			var medLine strings.Builder
+			medLine.WriteString(fmt.Sprintf("* %s", medData.Nome))
 
-				// Evitar duplicatas (mesmo medicamento em múltiplos horários)
-				medKey := medData.Nome + medData.Dosagem
-				if medicamentosMap[medKey] {
-					continue
-				}
-				medicamentosMap[medKey] = true
+			if medData.Dosagem != "" {
+				medLine.WriteString(fmt.Sprintf(" %s", medData.Dosagem))
+			}
+			if medData.Forma != "" {
+				medLine.WriteString(fmt.Sprintf(" (%s)", medData.Forma))
+			}
+			if medData.PrincipioAtivo != "" {
+				medLine.WriteString(fmt.Sprintf(" [%s]", medData.PrincipioAtivo))
+			}
+			if len(medData.Horarios) > 0 {
+				medLine.WriteString(fmt.Sprintf(" - Horarios: %s", strings.Join(medData.Horarios, ", ")))
+			} else if dataFmt != "" {
+				medLine.WriteString(fmt.Sprintf(" - Horario: %s", dataFmt))
+			}
+			if medData.Frequencia != "" {
+				medLine.WriteString(fmt.Sprintf(" | Freq: %s", medData.Frequencia))
+			}
+			if medData.InstrucoesDeUso != "" {
+				medLine.WriteString(fmt.Sprintf(" | %s", medData.InstrucoesDeUso))
+			}
+			if medData.Observacoes != "" {
+				medLine.WriteString(fmt.Sprintf(" | Obs: %s", medData.Observacoes))
+			}
 
-				var medLine strings.Builder
-				medLine.WriteString(fmt.Sprintf("• %s", medData.Nome))
-
-				if medData.Dosagem != "" {
-					medLine.WriteString(fmt.Sprintf(" %s", medData.Dosagem))
-				}
-				if medData.Forma != "" {
-					medLine.WriteString(fmt.Sprintf(" (%s)", medData.Forma))
-				}
-				if medData.PrincipioAtivo != "" {
-					medLine.WriteString(fmt.Sprintf(" [%s]", medData.PrincipioAtivo))
-				}
-				if len(medData.Horarios) > 0 {
-					medLine.WriteString(fmt.Sprintf(" - Horários: %s", strings.Join(medData.Horarios, ", ")))
-				} else if dataFmt != "" {
-					medLine.WriteString(fmt.Sprintf(" - Horário: %s", dataFmt))
-				}
-				if medData.Frequencia != "" {
-					medLine.WriteString(fmt.Sprintf(" | Freq: %s", medData.Frequencia))
-				}
-				if medData.InstrucoesDeUso != "" {
-					medLine.WriteString(fmt.Sprintf(" | %s", medData.InstrucoesDeUso))
-				}
-				if medData.Observacoes != "" {
-					medLine.WriteString(fmt.Sprintf(" | Obs: %s", medData.Observacoes))
-				}
-
-				medicamentos = append(medicamentos, medLine.String())
-				log.Printf("✅ [UnifiedRetrieval] Medicamento encontrado: %s %s", medData.Nome, medData.Dosagem)
-			} else {
-				// Outros agendamentos (consultas, exames, etc.)
-				var desc string
-				var agData map[string]interface{}
-				if err := json.Unmarshal([]byte(dadosTarefa), &agData); err == nil {
-					if titulo, ok := agData["titulo"].(string); ok {
-						desc = titulo
-					} else if descricao, ok := agData["descricao"].(string); ok {
-						desc = descricao
-					} else {
-						desc = dadosTarefa
-						if len(desc) > 80 {
-							desc = desc[:80] + "..."
-						}
-					}
+			medicamentos = append(medicamentos, medLine.String())
+			log.Printf("✅ [UnifiedRetrieval] Medicamento encontrado: %s %s", medData.Nome, medData.Dosagem)
+		} else {
+			// Outros agendamentos (consultas, exames, etc.)
+			var desc string
+			var agData map[string]interface{}
+			if err := json.Unmarshal([]byte(dadosTarefa), &agData); err == nil {
+				if titulo, ok := agData["titulo"].(string); ok {
+					desc = titulo
+				} else if descricao, ok := agData["descricao"].(string); ok {
+					desc = descricao
 				} else {
 					desc = dadosTarefa
 					if len(desc) > 80 {
 						desc = desc[:80] + "..."
 					}
 				}
-				line := fmt.Sprintf("• [%s] %s - %s", dataFmt, tipo, desc)
-				outros = append(outros, line)
+			} else {
+				desc = dadosTarefa
+				if len(desc) > 80 {
+					desc = desc[:80] + "..."
+				}
 			}
+			line := fmt.Sprintf("* [%s] %s - %s", dataFmt, tipo, desc)
+			outros = append(outros, line)
 		}
 	}
 
@@ -872,22 +997,22 @@ func (u *UnifiedRetrieval) retrieveAgendamentos(ctx context.Context, idosoID int
 
 	var builder strings.Builder
 
-	// 🔴 SEÇÃO CRÍTICA: MEDICAMENTOS (Prioridade máxima)
+	// MEDICAMENTOS (Prioridade maxima)
 	if len(medicamentos) > 0 {
 		builder.WriteString("\n═══════════════════════════════════════════════════════════\n")
-		builder.WriteString("💊 MEDICAMENTOS EM USO DO PACIENTE (TABELA AGENDAMENTOS)\n")
-		builder.WriteString("⚠️ IMPORTANTE: Você DEVE falar sobre esses medicamentos!\n")
+		builder.WriteString("MEDICAMENTOS EM USO DO PACIENTE (AGENDAMENTOS)\n")
+		builder.WriteString("IMPORTANTE: Voce DEVE falar sobre esses medicamentos!\n")
 		builder.WriteString("═══════════════════════════════════════════════════════════\n\n")
 		for _, med := range medicamentos {
 			builder.WriteString(med + "\n")
 		}
 		builder.WriteString("\n")
-		log.Printf("✅ [UnifiedRetrieval] %d medicamentos únicos incluídos no contexto para idoso %d", len(medicamentos), idosoID)
+		log.Printf("✅ [UnifiedRetrieval] %d medicamentos unicos incluidos no contexto para idoso %d", len(medicamentos), idosoID)
 	}
 
 	// Outros agendamentos
 	if len(outros) > 0 {
-		builder.WriteString("📅 PRÓXIMOS COMPROMISSOS:\n")
+		builder.WriteString("PROXIMOS COMPROMISSOS:\n")
 		for _, ag := range outros {
 			builder.WriteString(ag + "\n")
 		}
@@ -1211,7 +1336,7 @@ func (u *UnifiedRetrieval) GetPromptCacheStats() (hits, misses int64, hitRate fl
 
 // SaveConversationContext salva contexto da conversa para análise futura
 func (u *UnifiedRetrieval) SaveConversationContext(ctx context.Context, idosoID int64, unified *UnifiedContext, userText, assistantText string) error {
-	// Salvar no Postgres (análise)
+	// Salvar no NietzscheDB (analise_gemini)
 	contextData := map[string]interface{}{
 		"lacanian_analysis": unified.LacanianAnalysis,
 		"ethical_stance":    unified.EthicalStance,
@@ -1220,13 +1345,14 @@ func (u *UnifiedRetrieval) SaveConversationContext(ctx context.Context, idosoID 
 		"assistant_text":    assistantText,
 	}
 
-	query := `
-		INSERT INTO analise_gemini (idoso_id, tipo, conteudo, created_at)
-		VALUES ($1, 'CONTEXT', $2, CURRENT_TIMESTAMP)
-	`
-
 	contextJSON, _ := json.Marshal(contextData)
-	_, err := u.db.ExecContext(ctx, query, idosoID, contextJSON)
+
+	_, err := u.db.Insert(ctx, "analise_gemini", map[string]interface{}{
+		"idoso_id":   idosoID,
+		"tipo":       "CONTEXT",
+		"conteudo":   string(contextJSON),
+		"created_at": time.Now().Format(time.RFC3339),
+	})
 
 	return err
 }

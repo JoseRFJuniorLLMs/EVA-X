@@ -5,32 +5,33 @@ package superhuman
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"regexp"
 	"strings"
 	"time"
+
+	"eva/internal/brainstem/database"
 )
 
 // CriticalMemoryService implements the 4 high-priority systems from memoria-critica.md
-// 1. Abstração Seletiva (Pattern Clustering)
+// 1. Abstraction Seletiva (Pattern Clustering)
 // 2. Right to be Forgotten (LGPD Compliance)
 // 3. Decay Temporal (Recent memories weigh more)
-// 4. Filtro Ético (Ethical Auditor)
+// 4. Filtro Etico (Ethical Auditor)
 type CriticalMemoryService struct {
-	db *sql.DB
+	db *database.DB
 }
 
 // NewCriticalMemoryService creates the critical memory service
-func NewCriticalMemoryService(db *sql.DB) *CriticalMemoryService {
+func NewCriticalMemoryService(db *database.DB) *CriticalMemoryService {
 	return &CriticalMemoryService{db: db}
 }
 
 // =====================================================
-// 1. ABSTRAÇÃO SELETIVA (Selective Abstraction)
-// "Pensar é esquecer diferenças" - Borges
+// 1. ABSTRACTION SELETIVA (Selective Abstraction)
+// "Pensar e esquecer diferencas" - Borges
 // =====================================================
 
 // MemoryCluster represents a group of similar memories
@@ -54,16 +55,15 @@ type MemoryCluster struct {
 
 // CreateOrUpdateCluster creates or updates a memory cluster
 func (s *CriticalMemoryService) CreateOrUpdateCluster(ctx context.Context, idosoID int64, clusterName, clusterType string) (*MemoryCluster, error) {
-	query := `
-		INSERT INTO patient_memory_clusters
-		(idoso_id, cluster_name, cluster_type, abstracted_summary, first_occurrence, last_occurrence)
-		VALUES ($1, $2, $3, '', NOW(), NOW())
-		ON CONFLICT (idoso_id, cluster_name) DO UPDATE SET
-			total_mentions = patient_memory_clusters.total_mentions + 1,
-			last_occurrence = NOW(),
-			updated_at = NOW()
-		RETURNING id, member_count, total_mentions, coherence_score
-	`
+	now := time.Now().Format(time.RFC3339)
+
+	// Try to find existing cluster
+	rows, err := s.db.QueryByLabel(ctx, "patient_memory_clusters",
+		" AND n.idoso_id = $idoso AND n.cluster_name = $cname",
+		map[string]interface{}{"idoso": idosoID, "cname": clusterName}, 1)
+	if err != nil {
+		return nil, err
+	}
 
 	cluster := &MemoryCluster{
 		IdosoID:     idosoID,
@@ -71,105 +71,112 @@ func (s *CriticalMemoryService) CreateOrUpdateCluster(ctx context.Context, idoso
 		ClusterType: clusterType,
 	}
 
-	err := s.db.QueryRowContext(ctx, query, idosoID, clusterName, clusterType).Scan(
-		&cluster.ID, &cluster.MemberCount, &cluster.TotalMentions, &cluster.CoherenceScore,
-	)
-	if err != nil {
-		return nil, err
-	}
+	if len(rows) > 0 {
+		m := rows[0]
+		cluster.ID = database.GetInt64(m, "id")
+		cluster.MemberCount = int(database.GetInt64(m, "member_count"))
+		cluster.TotalMentions = int(database.GetInt64(m, "total_mentions")) + 1
+		cluster.CoherenceScore = database.GetFloat64(m, "coherence_score")
 
-	// Generate abstraction
-	s.db.ExecContext(ctx, "SELECT generate_cluster_abstraction($1)", cluster.ID)
+		s.db.Update(ctx, "patient_memory_clusters",
+			map[string]interface{}{"idoso_id": idosoID, "cluster_name": clusterName},
+			map[string]interface{}{
+				"total_mentions":  cluster.TotalMentions,
+				"last_occurrence": now,
+				"updated_at":      now,
+			})
+	} else {
+		id, err := s.db.Insert(ctx, "patient_memory_clusters", map[string]interface{}{
+			"idoso_id":          idosoID,
+			"cluster_name":      clusterName,
+			"cluster_type":      clusterType,
+			"abstracted_summary": "",
+			"total_mentions":    1,
+			"member_count":      0,
+			"first_occurrence":  now,
+			"last_occurrence":   now,
+			"created_at":        now,
+			"updated_at":        now,
+		})
+		if err != nil {
+			return nil, err
+		}
+		cluster.ID = id
+		cluster.TotalMentions = 1
+	}
 
 	return cluster, nil
 }
 
 // AddToCluster adds a memory to an existing cluster
 func (s *CriticalMemoryService) AddToCluster(ctx context.Context, clusterID, idosoID int64, memoryType string, memoryRefID int64, verbatim string) error {
-	query := `
-		INSERT INTO cluster_members
-		(cluster_id, idoso_id, memory_type, memory_reference_id, memory_verbatim)
-		VALUES ($1, $2, $3, $4, $5)
-	`
-	_, err := s.db.ExecContext(ctx, query, clusterID, idosoID, memoryType, memoryRefID, verbatim)
+	now := time.Now().Format(time.RFC3339)
+
+	_, err := s.db.Insert(ctx, "cluster_members", map[string]interface{}{
+		"cluster_id":          clusterID,
+		"idoso_id":            idosoID,
+		"memory_type":         memoryType,
+		"memory_reference_id": memoryRefID,
+		"memory_verbatim":     verbatim,
+		"created_at":          now,
+	})
 	if err != nil {
 		return err
 	}
 
 	// Update member count
-	updateQuery := `
-		UPDATE patient_memory_clusters
-		SET member_count = (SELECT COUNT(*) FROM cluster_members WHERE cluster_id = $1),
-		    updated_at = NOW()
-		WHERE id = $1
-	`
-	s.db.ExecContext(ctx, updateQuery, clusterID)
+	memberRows, _ := s.db.QueryByLabel(ctx, "cluster_members",
+		" AND n.cluster_id = $cid",
+		map[string]interface{}{"cid": clusterID}, 0)
 
-	// Regenerate abstraction
-	s.db.ExecContext(ctx, "SELECT generate_cluster_abstraction($1)", clusterID)
+	s.db.Update(ctx, "patient_memory_clusters",
+		map[string]interface{}{"id": clusterID},
+		map[string]interface{}{
+			"member_count": len(memberRows),
+			"updated_at":   now,
+		})
 
 	return nil
 }
 
 // GetAbstractedPatterns returns abstracted summaries instead of raw data
 func (s *CriticalMemoryService) GetAbstractedPatterns(ctx context.Context, idosoID int64) ([]*MemoryCluster, error) {
-	query := `
-		SELECT id, cluster_name, cluster_type, abstracted_summary,
-		       member_count, total_mentions, most_common_time_period,
-		       avg_emotional_valence, dominant_emotion,
-		       correlated_persons, correlated_topics, coherence_score,
-		       first_occurrence, last_occurrence
-		FROM patient_memory_clusters
-		WHERE idoso_id = $1 AND total_mentions >= 3
-		ORDER BY total_mentions DESC
-	`
-
-	rows, err := s.db.QueryContext(ctx, query, idosoID)
+	rows, err := s.db.QueryByLabel(ctx, "patient_memory_clusters",
+		" AND n.idoso_id = $idoso",
+		map[string]interface{}{"idoso": idosoID}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	var clusters []*MemoryCluster
-	for rows.Next() {
-		c := &MemoryCluster{IdosoID: idosoID}
-		var personsJSON, topicsJSON []byte
-		var mostCommonTime, dominantEmotion sql.NullString
-		var avgValence, coherence sql.NullFloat64
-		var firstOcc, lastOcc sql.NullTime
-
-		err := rows.Scan(
-			&c.ID, &c.ClusterName, &c.ClusterType, &c.AbstractedSummary,
-			&c.MemberCount, &c.TotalMentions, &mostCommonTime,
-			&avgValence, &dominantEmotion,
-			&personsJSON, &topicsJSON, &coherence,
-			&firstOcc, &lastOcc,
-		)
-		if err != nil {
+	for _, m := range rows {
+		totalMentions := int(database.GetInt64(m, "total_mentions"))
+		if totalMentions < 3 {
 			continue
 		}
 
-		if mostCommonTime.Valid {
-			c.MostCommonTime = mostCommonTime.String
-		}
-		if dominantEmotion.Valid {
-			c.DominantEmotion = dominantEmotion.String
-		}
-		if avgValence.Valid {
-			c.AvgEmotionalValence = avgValence.Float64
-		}
-		if coherence.Valid {
-			c.CoherenceScore = coherence.Float64
-		}
-		if firstOcc.Valid {
-			c.FirstOccurrence = firstOcc.Time
-		}
-		if lastOcc.Valid {
-			c.LastOccurrence = lastOcc.Time
+		c := &MemoryCluster{
+			ID:                  database.GetInt64(m, "id"),
+			IdosoID:             idosoID,
+			ClusterName:         database.GetString(m, "cluster_name"),
+			ClusterType:         database.GetString(m, "cluster_type"),
+			AbstractedSummary:   database.GetString(m, "abstracted_summary"),
+			MemberCount:         int(database.GetInt64(m, "member_count")),
+			TotalMentions:       totalMentions,
+			MostCommonTime:      database.GetString(m, "most_common_time_period"),
+			AvgEmotionalValence: database.GetFloat64(m, "avg_emotional_valence"),
+			DominantEmotion:     database.GetString(m, "dominant_emotion"),
+			CoherenceScore:      database.GetFloat64(m, "coherence_score"),
+			FirstOccurrence:     database.GetTime(m, "first_occurrence"),
+			LastOccurrence:      database.GetTime(m, "last_occurrence"),
 		}
 
-		json.Unmarshal(personsJSON, &c.CorrelatedPersons)
-		json.Unmarshal(topicsJSON, &c.CorrelatedTopics)
+		if raw, ok := m["correlated_persons"]; ok && raw != nil {
+			parseJSONStringSlice(raw, &c.CorrelatedPersons)
+		}
+		if raw, ok := m["correlated_topics"]; ok && raw != nil {
+			parseJSONStringSlice(raw, &c.CorrelatedTopics)
+		}
 
 		clusters = append(clusters, c)
 	}
@@ -180,27 +187,19 @@ func (s *CriticalMemoryService) GetAbstractedPatterns(ctx context.Context, idoso
 // ClusterSimilarMemories automatically clusters similar memories
 func (s *CriticalMemoryService) ClusterSimilarMemories(ctx context.Context, idosoID int64) error {
 	// Cluster metaphors by type
-	metaphorQuery := `
-		SELECT metaphor, metaphor_type, usage_count
-		FROM patient_metaphors
-		WHERE idoso_id = $1 AND is_forgotten = FALSE
-		ORDER BY usage_count DESC
-	`
-	rows, err := s.db.QueryContext(ctx, metaphorQuery, idosoID)
+	metaphorRows, err := s.db.QueryByLabel(ctx, "patient_metaphors",
+		" AND n.idoso_id = $idoso AND n.is_forgotten = $forgotten",
+		map[string]interface{}{"idoso": idosoID, "forgotten": false}, 0)
 	if err != nil {
 		return err
 	}
 
 	metaphorClusters := make(map[string][]string)
-	for rows.Next() {
-		var metaphor, metaphorType string
-		var count int
-		if err := rows.Scan(&metaphor, &metaphorType, &count); err != nil {
-			continue
-		}
+	for _, m := range metaphorRows {
+		metaphor := database.GetString(m, "metaphor")
+		metaphorType := database.GetString(m, "metaphor_type")
 		metaphorClusters[metaphorType] = append(metaphorClusters[metaphorType], metaphor)
 	}
-	rows.Close()
 
 	// Create clusters for each metaphor type
 	for mType, metaphors := range metaphorClusters {
@@ -211,45 +210,36 @@ func (s *CriticalMemoryService) ClusterSimilarMemories(ctx context.Context, idos
 				continue
 			}
 
-			// Update with aggregated info
-			s.db.ExecContext(ctx, `
-				UPDATE patient_memory_clusters
-				SET member_count = $2,
-				    dominant_emotion = $3,
-				    updated_at = NOW()
-				WHERE id = $1
-			`, cluster.ID, len(metaphors), mType)
+			now := time.Now().Format(time.RFC3339)
+			s.db.Update(ctx, "patient_memory_clusters",
+				map[string]interface{}{"id": cluster.ID},
+				map[string]interface{}{
+					"member_count":    len(metaphors),
+					"dominant_emotion": mType,
+					"updated_at":      now,
+				})
 		}
 	}
 
 	// Cluster topics by person correlation
-	personQuery := `
-		SELECT person_name, mention_count
-		FROM patient_world_persons
-		WHERE idoso_id = $1
-		ORDER BY mention_count DESC
-		LIMIT 10
-	`
-	personRows, err := s.db.QueryContext(ctx, personQuery, idosoID)
+	personRows, err := s.db.QueryByLabel(ctx, "patient_world_persons",
+		" AND n.idoso_id = $idoso",
+		map[string]interface{}{"idoso": idosoID}, 10)
 	if err != nil {
 		return err
 	}
 
-	for personRows.Next() {
-		var personName string
-		var mentionCount int
-		if err := personRows.Scan(&personName, &mentionCount); err != nil {
-			continue
-		}
+	for _, m := range personRows {
+		personName := database.GetString(m, "person_name")
+		mentionCount := int(database.GetInt64(m, "mention_count"))
 
 		if mentionCount >= 5 {
 			clusterName := fmt.Sprintf("conversas_sobre_%s", strings.ToLower(personName))
 			s.CreateOrUpdateCluster(ctx, idosoID, clusterName, "person")
 		}
 	}
-	personRows.Close()
 
-	log.Printf("🔮 [ABSTRACTION] Clustered memories for patient %d", idosoID)
+	log.Printf("[ABSTRACTION] Clustered memories for patient %d", idosoID)
 	return nil
 }
 
@@ -272,107 +262,145 @@ type ForgottenMemory struct {
 
 // ForgetTopic removes all memories related to a topic
 func (s *CriticalMemoryService) ForgetTopic(ctx context.Context, idosoID int64, topic, reason, requestedBy string) (*ForgottenMemory, error) {
-	var resultJSON []byte
-	err := s.db.QueryRowContext(ctx, "SELECT forget_topic($1, $2, $3, $4)",
-		idosoID, topic, reason, requestedBy).Scan(&resultJSON)
-	if err != nil {
-		return nil, err
+	now := time.Now().Format(time.RFC3339)
+	deletedCount := 0
+
+	// Soft-delete across relevant tables
+	tables := []string{
+		"patient_metaphors", "patient_counterfactuals", "patient_memory_clusters",
+		"patient_persistent_memories", "patient_body_memories", "patient_shared_memories",
 	}
 
-	var result map[string]interface{}
-	json.Unmarshal(resultJSON, &result)
+	var affected []map[string]interface{}
+	for _, table := range tables {
+		rows, _ := s.db.QueryByLabel(ctx, table,
+			" AND n.idoso_id = $idoso",
+			map[string]interface{}{"idoso": idosoID}, 0)
+
+		count := 0
+		for _, m := range rows {
+			// Check if any field contains the topic
+			content, _ := json.Marshal(m)
+			if strings.Contains(strings.ToLower(string(content)), strings.ToLower(topic)) {
+				s.db.SoftDelete(ctx, table, map[string]interface{}{"id": database.GetInt64(m, "id")})
+				count++
+			}
+		}
+		if count > 0 {
+			deletedCount += count
+			affected = append(affected, map[string]interface{}{
+				"table": table,
+				"count": count,
+			})
+		}
+	}
+
+	// Record the forgotten operation
+	id, _ := s.db.Insert(ctx, "forgotten_memories", map[string]interface{}{
+		"idoso_id":          idosoID,
+		"memory_type":       "topic",
+		"memory_identifier": topic,
+		"reason":            reason,
+		"requested_by":      requestedBy,
+		"deleted_count":     deletedCount,
+		"affected_tables":   mustJSON(affected),
+		"forgotten_at":      now,
+		"created_at":        now,
+	})
 
 	fm := &ForgottenMemory{
+		ID:               id,
 		IdosoID:          idosoID,
 		MemoryType:       "topic",
 		MemoryIdentifier: topic,
 		Reason:           reason,
 		RequestedBy:      requestedBy,
-		DeletedCount:     int(result["deleted_count"].(float64)),
+		DeletedCount:     deletedCount,
+		AffectedTables:   affected,
 		ForgottenAt:      time.Now(),
 	}
 
-	if affected, ok := result["affected_tables"].([]interface{}); ok {
-		for _, a := range affected {
-			if m, ok := a.(map[string]interface{}); ok {
-				fm.AffectedTables = append(fm.AffectedTables, m)
-			}
-		}
-	}
-
-	log.Printf("🗑️ [FORGET] Topic '%s' forgotten for patient %d (%d items)",
-		topic, idosoID, fm.DeletedCount)
+	log.Printf("[FORGET] Topic '%s' forgotten for patient %d (%d items)", topic, idosoID, fm.DeletedCount)
 
 	return fm, nil
 }
 
 // ForgetPerson removes all memories related to a person
 func (s *CriticalMemoryService) ForgetPerson(ctx context.Context, idosoID int64, personName, reason, requestedBy string) (*ForgottenMemory, error) {
-	var resultJSON []byte
-	err := s.db.QueryRowContext(ctx, "SELECT forget_person($1, $2, $3, $4)",
-		idosoID, personName, reason, requestedBy).Scan(&resultJSON)
-	if err != nil {
-		return nil, err
+	now := time.Now().Format(time.RFC3339)
+	deletedCount := 0
+
+	// Delete from person-specific tables
+	personRows, _ := s.db.QueryByLabel(ctx, "patient_world_persons",
+		" AND n.idoso_id = $idoso AND n.person_name = $name",
+		map[string]interface{}{"idoso": idosoID, "name": personName}, 0)
+	for _, m := range personRows {
+		s.db.SoftDelete(ctx, "patient_world_persons", map[string]interface{}{"id": database.GetInt64(m, "id")})
+		deletedCount++
 	}
 
-	var result map[string]interface{}
-	json.Unmarshal(resultJSON, &result)
+	// Record the forgotten operation
+	id, _ := s.db.Insert(ctx, "forgotten_memories", map[string]interface{}{
+		"idoso_id":          idosoID,
+		"memory_type":       "person",
+		"memory_identifier": personName,
+		"reason":            reason,
+		"requested_by":      requestedBy,
+		"deleted_count":     deletedCount,
+		"forgotten_at":      now,
+		"created_at":        now,
+	})
 
 	fm := &ForgottenMemory{
+		ID:               id,
 		IdosoID:          idosoID,
 		MemoryType:       "person",
 		MemoryIdentifier: personName,
 		Reason:           reason,
 		RequestedBy:      requestedBy,
-		DeletedCount:     int(result["deleted_count"].(float64)),
+		DeletedCount:     deletedCount,
 		ForgottenAt:      time.Now(),
 	}
 
-	log.Printf("🗑️ [FORGET] Person '%s' forgotten for patient %d", personName, idosoID)
+	log.Printf("[FORGET] Person '%s' forgotten for patient %d", personName, idosoID)
 
 	return fm, nil
 }
 
 // GetForgottenItems returns list of what has been forgotten (for audit)
 func (s *CriticalMemoryService) GetForgottenItems(ctx context.Context, idosoID int64) ([]*ForgottenMemory, error) {
-	query := `
-		SELECT id, memory_type, memory_identifier, reason, requested_by,
-		       deleted_count, affected_tables, forgotten_at
-		FROM forgotten_memories
-		WHERE idoso_id = $1
-		ORDER BY forgotten_at DESC
-	`
-
-	rows, err := s.db.QueryContext(ctx, query, idosoID)
+	rows, err := s.db.QueryByLabel(ctx, "forgotten_memories",
+		" AND n.idoso_id = $idoso",
+		map[string]interface{}{"idoso": idosoID}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	var items []*ForgottenMemory
-	for rows.Next() {
-		fm := &ForgottenMemory{IdosoID: idosoID}
-		var affectedJSON []byte
-		var reason, requestedBy sql.NullString
-
-		err := rows.Scan(
-			&fm.ID, &fm.MemoryType, &fm.MemoryIdentifier, &reason, &requestedBy,
-			&fm.DeletedCount, &affectedJSON, &fm.ForgottenAt,
-		)
-		if err != nil {
-			continue
+	for _, m := range rows {
+		fm := &ForgottenMemory{
+			ID:               database.GetInt64(m, "id"),
+			IdosoID:          idosoID,
+			MemoryType:       database.GetString(m, "memory_type"),
+			MemoryIdentifier: database.GetString(m, "memory_identifier"),
+			Reason:           database.GetString(m, "reason"),
+			RequestedBy:      database.GetString(m, "requested_by"),
+			DeletedCount:     int(database.GetInt64(m, "deleted_count")),
+			ForgottenAt:      database.GetTime(m, "forgotten_at"),
 		}
 
-		if reason.Valid {
-			fm.Reason = reason.String
+		if raw, ok := m["affected_tables"]; ok && raw != nil {
+			switch v := raw.(type) {
+			case string:
+				json.Unmarshal([]byte(v), &fm.AffectedTables)
+			case []interface{}:
+				for _, item := range v {
+					if mm, ok := item.(map[string]interface{}); ok {
+						fm.AffectedTables = append(fm.AffectedTables, mm)
+					}
+				}
+			}
 		}
-		if requestedBy.Valid {
-			fm.RequestedBy = requestedBy.String
-		}
-
-		var affected []map[string]interface{}
-		json.Unmarshal(affectedJSON, &affected)
-		fm.AffectedTables = affected
 
 		items = append(items, fm)
 	}
@@ -397,73 +425,136 @@ type TemporalConfig struct {
 
 // ApplyTemporalDecay applies time-based decay to all memories
 func (s *CriticalMemoryService) ApplyTemporalDecay(ctx context.Context, idosoID int64) (map[string]interface{}, error) {
-	var resultJSON []byte
-	err := s.db.QueryRowContext(ctx, "SELECT apply_temporal_decay($1)", idosoID).Scan(&resultJSON)
+	// Get temporal config
+	config, err := s.GetTemporalConfig(ctx, idosoID)
 	if err != nil {
 		return nil, err
 	}
 
-	var result map[string]interface{}
-	json.Unmarshal(resultJSON, &result)
+	// Apply decay to memory gravity
+	gravityRows, _ := s.db.QueryByLabel(ctx, "patient_memory_gravity",
+		" AND n.idoso_id = $idoso",
+		map[string]interface{}{"idoso": idosoID}, 0)
 
-	log.Printf("⏱️ [DECAY] Applied temporal decay for patient %d: memories=%v, patterns=%v",
-		idosoID,
-		result["memories_decayed"],
-		result["patterns_decayed"])
+	memoriesDecayed := 0
+	for _, m := range gravityRows {
+		lastActivation := database.GetTime(m, "last_activation")
+		if lastActivation.IsZero() {
+			continue
+		}
+
+		daysSince := time.Since(lastActivation).Hours() / 24
+		currentWeight := database.GetFloat64(m, "current_weight")
+		if currentWeight == 0 {
+			currentWeight = database.GetFloat64(m, "gravity_score")
+		}
+
+		decayRate := config.DefaultDecayRate
+		memoryType := database.GetString(m, "memory_type")
+		if memoryType == "trauma" {
+			decayRate = config.TraumaDecayRate
+		}
+
+		// Apply exponential decay
+		newWeight := currentWeight * (1 - decayRate*daysSince/365)
+		if newWeight < 0.01 {
+			newWeight = 0.01
+		}
+
+		s.db.Update(ctx, "patient_memory_gravity",
+			map[string]interface{}{"id": database.GetInt64(m, "id")},
+			map[string]interface{}{
+				"current_weight": newWeight,
+				"updated_at":     time.Now().Format(time.RFC3339),
+			})
+		memoriesDecayed++
+	}
+
+	result := map[string]interface{}{
+		"memories_decayed": memoriesDecayed,
+		"patterns_decayed": 0,
+	}
+
+	log.Printf("[DECAY] Applied temporal decay for patient %d: memories=%v, patterns=%v",
+		idosoID, result["memories_decayed"], result["patterns_decayed"])
 
 	return result, nil
 }
 
 // GetTemporalConfig gets decay configuration for a patient
 func (s *CriticalMemoryService) GetTemporalConfig(ctx context.Context, idosoID int64) (*TemporalConfig, error) {
-	// Ensure config exists
-	s.db.ExecContext(ctx, `
-		INSERT INTO patient_temporal_config (idoso_id)
-		VALUES ($1) ON CONFLICT (idoso_id) DO NOTHING
-	`, idosoID)
+	rows, err := s.db.QueryByLabel(ctx, "patient_temporal_config",
+		" AND n.idoso_id = $idoso",
+		map[string]interface{}{"idoso": idosoID}, 1)
+	if err != nil {
+		return nil, err
+	}
 
-	query := `
-		SELECT default_decay_rate, trauma_decay_rate, positive_decay_rate,
-		       recency_window_days, recency_boost_factor
-		FROM patient_temporal_config
-		WHERE idoso_id = $1
-	`
+	if len(rows) == 0 {
+		// Create default config
+		now := time.Now().Format(time.RFC3339)
+		s.db.Insert(ctx, "patient_temporal_config", map[string]interface{}{
+			"idoso_id":             idosoID,
+			"default_decay_rate":   0.1,
+			"trauma_decay_rate":    0.02,
+			"positive_decay_rate":  0.15,
+			"recency_window_days":  30,
+			"recency_boost_factor": 1.5,
+			"created_at":           now,
+			"updated_at":           now,
+		})
+		return &TemporalConfig{
+			IdosoID:            idosoID,
+			DefaultDecayRate:   0.1,
+			TraumaDecayRate:    0.02,
+			PositiveDecayRate:  0.15,
+			RecencyWindowDays:  30,
+			RecencyBoostFactor: 1.5,
+		}, nil
+	}
 
-	config := &TemporalConfig{IdosoID: idosoID}
-	err := s.db.QueryRowContext(ctx, query, idosoID).Scan(
-		&config.DefaultDecayRate, &config.TraumaDecayRate, &config.PositiveDecayRate,
-		&config.RecencyWindowDays, &config.RecencyBoostFactor,
-	)
-
-	return config, err
+	m := rows[0]
+	return &TemporalConfig{
+		IdosoID:            idosoID,
+		DefaultDecayRate:   database.GetFloat64(m, "default_decay_rate"),
+		TraumaDecayRate:    database.GetFloat64(m, "trauma_decay_rate"),
+		PositiveDecayRate:  database.GetFloat64(m, "positive_decay_rate"),
+		RecencyWindowDays:  int(database.GetInt64(m, "recency_window_days")),
+		RecencyBoostFactor: database.GetFloat64(m, "recency_boost_factor"),
+	}, nil
 }
 
 // UpdateTemporalConfig updates decay configuration
 func (s *CriticalMemoryService) UpdateTemporalConfig(ctx context.Context, config *TemporalConfig) error {
-	query := `
-		UPDATE patient_temporal_config
-		SET default_decay_rate = $2,
-		    trauma_decay_rate = $3,
-		    positive_decay_rate = $4,
-		    recency_window_days = $5,
-		    recency_boost_factor = $6,
-		    updated_at = NOW()
-		WHERE idoso_id = $1
-	`
-	_, err := s.db.ExecContext(ctx, query,
-		config.IdosoID, config.DefaultDecayRate, config.TraumaDecayRate,
-		config.PositiveDecayRate, config.RecencyWindowDays, config.RecencyBoostFactor)
-	return err
+	now := time.Now().Format(time.RFC3339)
+
+	return s.db.Update(ctx, "patient_temporal_config",
+		map[string]interface{}{"idoso_id": config.IdosoID},
+		map[string]interface{}{
+			"default_decay_rate":   config.DefaultDecayRate,
+			"trauma_decay_rate":    config.TraumaDecayRate,
+			"positive_decay_rate":  config.PositiveDecayRate,
+			"recency_window_days":  config.RecencyWindowDays,
+			"recency_boost_factor": config.RecencyBoostFactor,
+			"updated_at":           now,
+		})
 }
 
 // MarkAsAnchorMemory marks a memory as never-decaying
 func (s *CriticalMemoryService) MarkAsAnchorMemory(ctx context.Context, idosoID int64, memoryID int64) error {
-	_, err := s.db.ExecContext(ctx, "SELECT mark_as_anchor_memory($1, $2)", idosoID, memoryID)
+	now := time.Now().Format(time.RFC3339)
+
+	err := s.db.Update(ctx, "patient_memory_gravity",
+		map[string]interface{}{"idoso_id": idosoID, "memory_id": memoryID},
+		map[string]interface{}{
+			"is_anchor":  true,
+			"updated_at": now,
+		})
 	if err != nil {
 		return err
 	}
 
-	log.Printf("⚓ [ANCHOR] Memory %d marked as anchor for patient %d", memoryID, idosoID)
+	log.Printf("[ANCHOR] Memory %d marked as anchor for patient %d", memoryID, idosoID)
 	return nil
 }
 
@@ -472,45 +563,41 @@ func (s *CriticalMemoryService) GetWeightedMemories(ctx context.Context, idosoID
 	// First apply decay
 	s.ApplyTemporalDecay(ctx, idosoID)
 
-	query := `
-		SELECT memory_id, memory_type, memory_summary, gravity_score,
-		       weighted_gravity, days_since_activation
-		FROM v_weighted_memories
-		WHERE idoso_id = $1 AND weighted_gravity >= $2
-		ORDER BY weighted_gravity DESC
-	`
-
-	rows, err := s.db.QueryContext(ctx, query, idosoID, minWeight)
+	rows, err := s.db.QueryByLabel(ctx, "patient_memory_gravity",
+		" AND n.idoso_id = $idoso",
+		map[string]interface{}{"idoso": idosoID}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	var memories []*MemoryGravity
-	for rows.Next() {
-		m := &MemoryGravity{IdosoID: idosoID}
-		var weightedGravity float64
-		var daysSince sql.NullFloat64
+	for _, m := range rows {
+		gravityScore := database.GetFloat64(m, "gravity_score")
+		currentWeight := database.GetFloat64(m, "current_weight")
+		if currentWeight == 0 {
+			currentWeight = gravityScore
+		}
 
-		err := rows.Scan(
-			&m.MemoryID, &m.MemoryType, &m.MemorySummary, &m.GravityScore,
-			&weightedGravity, &daysSince,
-		)
-		if err != nil {
+		if currentWeight < minWeight {
 			continue
 		}
 
-		// Use weighted gravity as the effective gravity
-		m.GravityScore = weightedGravity
+		mg := &MemoryGravity{
+			IdosoID:       idosoID,
+			MemoryID:      database.GetInt64(m, "memory_id"),
+			MemoryType:    database.GetString(m, "memory_type"),
+			MemorySummary: database.GetString(m, "memory_summary"),
+			GravityScore:  currentWeight, // Use weighted gravity as the effective gravity
+		}
 
-		memories = append(memories, m)
+		memories = append(memories, mg)
 	}
 
 	return memories, nil
 }
 
 // =====================================================
-// 4. FILTRO ÉTICO (Ethical Auditor)
+// 4. FILTRO ETICO (Ethical Auditor)
 // =====================================================
 
 // EthicalAuditResult represents the result of an ethical audit
@@ -527,35 +614,90 @@ type EthicalAuditResult struct {
 
 // AuditResponse checks a response for ethical violations
 func (s *CriticalMemoryService) AuditResponse(ctx context.Context, idosoID int64, response, patientMode string, crisisLevel float64) (*EthicalAuditResult, error) {
-	var resultJSON []byte
-	err := s.db.QueryRowContext(ctx, "SELECT audit_response($1, $2, $3, $4)",
-		idosoID, response, patientMode, crisisLevel).Scan(&resultJSON)
-	if err != nil {
-		return nil, err
-	}
-
-	var result map[string]interface{}
-	json.Unmarshal(resultJSON, &result)
-
+	// In-process ethical audit (no longer depends on PG function)
 	audit := &EthicalAuditResult{
-		Allowed:          result["allowed"].(bool),
-		Action:           result["action"].(string),
-		Severity:         result["severity"].(string),
-		NeedsHumanReview: result["needs_human_review"].(bool),
-		OriginalResponse: result["original_response"].(string),
-		ShouldModify:     result["should_modify"].(bool),
+		Allowed:          true,
+		Action:           "allow",
+		Severity:         "none",
+		OriginalResponse: response,
+		ShouldModify:     false,
 	}
 
-	if rules, ok := result["rules_triggered"].([]interface{}); ok {
-		for _, r := range rules {
-			if m, ok := r.(map[string]interface{}); ok {
-				audit.RulesTriggered = append(audit.RulesTriggered, m)
+	responseLower := strings.ToLower(response)
+
+	// Check dignity violations
+	dignityPatterns := []string{
+		"voce sempre", "voce nunca consegue", "e patetico", "e fraco",
+		"voce ja fez isso antes", "de novo?", "quantas vezes",
+	}
+	for _, p := range dignityPatterns {
+		if strings.Contains(responseLower, p) {
+			audit.RulesTriggered = append(audit.RulesTriggered, map[string]interface{}{
+				"category":        "dignity",
+				"pattern_matched": p,
+				"severity":        "warning",
+			})
+			audit.ShouldModify = true
+			audit.Severity = "warning"
+		}
+	}
+
+	// Check harm prevention in crisis
+	if crisisLevel > 0.7 {
+		harmPatterns := []string{
+			"nao ha esperanca", "nunca vai melhorar", "desista",
+		}
+		for _, p := range harmPatterns {
+			if strings.Contains(responseLower, p) {
+				audit.RulesTriggered = append(audit.RulesTriggered, map[string]interface{}{
+					"category":        "harm_prevention",
+					"pattern_matched": p,
+					"severity":        "block",
+				})
+				audit.Allowed = false
+				audit.Action = "block"
+				audit.Severity = "block"
+				audit.NeedsHumanReview = true
 			}
 		}
 	}
 
+	// Check manipulation patterns
+	manipulationPatterns := []string{
+		"so eu entendo", "ninguem mais", "voce precisa de mim",
+		"garanto que", "prometo que",
+	}
+	for _, p := range manipulationPatterns {
+		if strings.Contains(responseLower, p) {
+			audit.RulesTriggered = append(audit.RulesTriggered, map[string]interface{}{
+				"category":        "manipulation",
+				"pattern_matched": p,
+				"severity":        "warning",
+			})
+			audit.ShouldModify = true
+			if audit.Severity == "none" {
+				audit.Severity = "warning"
+			}
+		}
+	}
+
+	// Log audit
 	if len(audit.RulesTriggered) > 0 {
-		log.Printf("⚠️ [ETHICAL] Audit triggered %d rules for patient %d (severity: %s)",
+		now := time.Now().Format(time.RFC3339)
+		rulesJSON, _ := json.Marshal(audit.RulesTriggered)
+		s.db.Insert(ctx, "ethical_audit_log", map[string]interface{}{
+			"idoso_id":           idosoID,
+			"original_response":  response,
+			"rules_triggered":    string(rulesJSON),
+			"highest_severity":   audit.Severity,
+			"patient_mode":       patientMode,
+			"crisis_level":       crisisLevel,
+			"needs_human_review": audit.NeedsHumanReview,
+			"audited_at":         now,
+			"created_at":         now,
+		})
+
+		log.Printf("[ETHICAL] Audit triggered %d rules for patient %d (severity: %s)",
 			len(audit.RulesTriggered), idosoID, audit.Severity)
 	}
 
@@ -599,11 +741,11 @@ func (s *CriticalMemoryService) ModifyResponse(ctx context.Context, response str
 // Helper functions for ethical modifications
 func (s *CriticalMemoryService) removeAccusatoryLanguage(text, pattern string) string {
 	replacements := map[string]string{
-		"você sempre":          "às vezes você",
-		"você nunca consegue":  "tem sido difícil",
-		"é patético":           "é um desafio",
-		"é fraco":              "está passando por dificuldades",
-		"você já fez isso antes": "isso é um padrão que podemos explorar juntos",
+		"voce sempre":          "as vezes voce",
+		"voce nunca consegue":  "tem sido dificil",
+		"e patetico":           "e um desafio",
+		"e fraco":              "esta passando por dificuldades",
+		"voce ja fez isso antes": "isso e um padrao que podemos explorar juntos",
 		"de novo?":             "percebo que isso acontece",
 		"quantas vezes":        "isso tem acontecido",
 	}
@@ -616,23 +758,22 @@ func (s *CriticalMemoryService) removeAccusatoryLanguage(text, pattern string) s
 }
 
 func (s *CriticalMemoryService) addSupportiveFraming(text string) string {
-	// Add supportive prefix if dealing with hopelessness
-	if strings.Contains(strings.ToLower(text), "não há esperança") ||
+	if strings.Contains(strings.ToLower(text), "nao ha esperanca") ||
 		strings.Contains(strings.ToLower(text), "nunca vai melhorar") {
-		return "Entendo que você está passando por um momento muito difícil. " + text
+		return "Entendo que voce esta passando por um momento muito dificil. " + text
 	}
 	return text
 }
 
 func (s *CriticalMemoryService) softenAbsoluteStatements(text string) string {
 	replacements := map[string]string{
-		"certamente vai":  "é possível que",
+		"certamente vai":  "e possivel que",
 		"com certeza":     "provavelmente",
 		"garanto que":     "acredito que",
-		"prometo que":     "farei o possível para",
-		"só eu entendo":   "eu procuro entender",
-		"ninguém mais":    "pode ser difícil para outros",
-		"você precisa de mim": "estou aqui para ajudar",
+		"prometo que":     "farei o possivel para",
+		"so eu entendo":   "eu procuro entender",
+		"ninguem mais":    "pode ser dificil para outros",
+		"voce precisa de mim": "estou aqui para ajudar",
 	}
 
 	result := text
@@ -643,7 +784,6 @@ func (s *CriticalMemoryService) softenAbsoluteStatements(text string) string {
 }
 
 func (s *CriticalMemoryService) redactThirdPartyInfo(text string) string {
-	// Simple redaction pattern - in production would be more sophisticated
 	patterns := []string{
 		`me contou que ([^.]+)\.`,
 		`segredo de ([^.]+)\.`,
@@ -652,62 +792,51 @@ func (s *CriticalMemoryService) redactThirdPartyInfo(text string) string {
 	result := text
 	for _, pattern := range patterns {
 		re := regexp.MustCompile(pattern)
-		result = re.ReplaceAllString(result, "[informação privada].")
+		result = re.ReplaceAllString(result, "[informacao privada].")
 	}
 	return result
 }
 
 // GetPendingHumanReviews returns audit logs that need human review
 func (s *CriticalMemoryService) GetPendingHumanReviews(ctx context.Context) ([]map[string]interface{}, error) {
-	query := `
-		SELECT eal.id, eal.idoso_id, eal.original_response, eal.rules_triggered,
-		       eal.highest_severity, eal.patient_mode, eal.crisis_level, eal.audited_at,
-		       i.nome as patient_name
-		FROM ethical_audit_log eal
-		JOIN idosos i ON eal.idoso_id = i.id
-		WHERE eal.needs_human_review = TRUE AND eal.human_reviewed = FALSE
-		ORDER BY
-			CASE eal.highest_severity
-				WHEN 'emergency' THEN 1
-				WHEN 'block' THEN 2
-				ELSE 3
-			END,
-			eal.audited_at DESC
-	`
-
-	rows, err := s.db.QueryContext(ctx, query)
+	rows, err := s.db.QueryByLabel(ctx, "ethical_audit_log",
+		" AND n.needs_human_review = $review AND n.human_reviewed = $reviewed",
+		map[string]interface{}{"review": true, "reviewed": false}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	var reviews []map[string]interface{}
-	for rows.Next() {
-		var id, idosoID int64
-		var response string
-		var rulesJSON []byte
-		var severity, mode, patientName string
-		var crisisLevel float64
-		var auditedAt time.Time
+	for _, m := range rows {
+		idosoID := database.GetInt64(m, "idoso_id")
 
-		err := rows.Scan(&id, &idosoID, &response, &rulesJSON, &severity, &mode, &crisisLevel, &auditedAt, &patientName)
-		if err != nil {
-			continue
+		// Get patient name
+		patientName := ""
+		idosoRow, _ := s.db.GetNodeByID(ctx, "idosos", idosoID)
+		if idosoRow != nil {
+			patientName = database.GetString(idosoRow, "nome")
 		}
 
 		var rules []interface{}
-		json.Unmarshal(rulesJSON, &rules)
+		if raw, ok := m["rules_triggered"]; ok && raw != nil {
+			switch v := raw.(type) {
+			case string:
+				json.Unmarshal([]byte(v), &rules)
+			case []interface{}:
+				rules = v
+			}
+		}
 
 		reviews = append(reviews, map[string]interface{}{
-			"id":            id,
+			"id":            database.GetInt64(m, "id"),
 			"idoso_id":      idosoID,
 			"patient_name":  patientName,
-			"response":      response,
+			"response":      database.GetString(m, "original_response"),
 			"rules":         rules,
-			"severity":      severity,
-			"mode":          mode,
-			"crisis_level":  crisisLevel,
-			"audited_at":    auditedAt,
+			"severity":      database.GetString(m, "highest_severity"),
+			"mode":          database.GetString(m, "patient_mode"),
+			"crisis_level":  database.GetFloat64(m, "crisis_level"),
+			"audited_at":    database.GetTime(m, "audited_at"),
 		})
 	}
 
@@ -716,16 +845,16 @@ func (s *CriticalMemoryService) GetPendingHumanReviews(ctx context.Context) ([]m
 
 // SubmitHumanReview records a human review decision
 func (s *CriticalMemoryService) SubmitHumanReview(ctx context.Context, auditLogID int64, reviewer, notes string) error {
-	query := `
-		UPDATE ethical_audit_log
-		SET human_reviewed = TRUE,
-		    human_reviewer = $2,
-		    human_review_notes = $3,
-		    human_reviewed_at = NOW()
-		WHERE id = $1
-	`
-	_, err := s.db.ExecContext(ctx, query, auditLogID, reviewer, notes)
-	return err
+	now := time.Now().Format(time.RFC3339)
+
+	return s.db.Update(ctx, "ethical_audit_log",
+		map[string]interface{}{"id": auditLogID},
+		map[string]interface{}{
+			"human_reviewed":     true,
+			"human_reviewer":     reviewer,
+			"human_review_notes": notes,
+			"human_reviewed_at":  now,
+		})
 }
 
 // =====================================================
@@ -756,7 +885,7 @@ func (s *CriticalMemoryService) GenerateCriticalMirrors(ctx context.Context, ido
 				Type:       "abstracted_pattern",
 				DataPoints: dataPoints,
 				Frequency:  &c.TotalMentions,
-				Question:   "O que você percebe sobre esse padrão?",
+				Question:   "O que voce percebe sobre esse padrao?",
 				RawData: map[string]interface{}{
 					"cluster_type":    c.ClusterType,
 					"member_count":    c.MemberCount,
@@ -781,10 +910,10 @@ func (s *CriticalMemoryService) GenerateCriticalMirrors(ctx context.Context, ido
 			outputs = append(outputs, &MirrorOutput{
 				Type: "temporal_weight",
 				DataPoints: []string{
-					fmt.Sprintf("Você tem %d memórias pesadas ativas recentemente", recentCount),
-					"Memórias recentes têm mais peso nas suas conversas atuais",
+					fmt.Sprintf("Voce tem %d memorias pesadas ativas recentemente", recentCount),
+					"Memorias recentes tem mais peso nas suas conversas atuais",
 				},
-				Question: "Como você sente que o passado recente está afetando seu presente?",
+				Question: "Como voce sente que o passado recente esta afetando seu presente?",
 				RawData: map[string]interface{}{
 					"weighted_count": len(weightedMemories),
 					"recent_heavy":   recentCount,
@@ -794,4 +923,13 @@ func (s *CriticalMemoryService) GenerateCriticalMirrors(ctx context.Context, ido
 	}
 
 	return outputs, nil
+}
+
+// mustJSON marshals to JSON string, returning "[]" on error
+func mustJSON(v interface{}) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
 }

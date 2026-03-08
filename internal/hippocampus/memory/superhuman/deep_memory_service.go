@@ -5,7 +5,6 @@ package superhuman
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -13,13 +12,14 @@ import (
 	"strings"
 	"time"
 
+	"eva/internal/brainstem/database"
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 )
 
 // DeepMemoryService handles the deep memory extensions
 // Based on: Schacter (Persistence), Van der Kolk (Body), Casey (Place, Commemoration)
 type DeepMemoryService struct {
-	db            *sql.DB
+	db            *database.DB
 	vectorAdapter *nietzscheInfra.VectorAdapter
 	weaver        *NarrativeWeaver
 
@@ -37,7 +37,7 @@ func (s *DeepMemoryService) SetVectorAdapter(va *nietzscheInfra.VectorAdapter) {
 }
 
 // NewDeepMemoryService creates a new deep memory service
-func NewDeepMemoryService(db *sql.DB) *DeepMemoryService {
+func NewDeepMemoryService(db *database.DB) *DeepMemoryService {
 	svc := &DeepMemoryService{
 		db:     db,
 		weaver: NewNarrativeWeaver(db),
@@ -146,35 +146,46 @@ func (s *DeepMemoryService) DetectAvoidance(ctx context.Context, idosoID int64, 
 						"last_occurrence":    ts,
 					})
 				if mergeErr != nil {
-					log.Printf("⚠️ [PERSISTENCE] NietzscheDB merge failed: %v", mergeErr)
+					log.Printf("[PERSISTENCE] NietzscheDB merge failed: %v", mergeErr)
 				}
 			}
 
-			// PG dual-write
-			query := `
-				INSERT INTO patient_persistent_memories
-				(idoso_id, persistent_topic, avoidance_attempts, first_detected, last_occurrence)
-				VALUES ($1, $2, 1, $3, $3)
-				ON CONFLICT (idoso_id, persistent_topic) DO UPDATE SET
-					avoidance_attempts = patient_persistent_memories.avoidance_attempts + 1,
-					last_occurrence = $3,
-					updated_at = NOW()
-			`
-			if _, err := s.db.ExecContext(ctx, query, idosoID, currentTopic, timestamp); err != nil {
-				return err
+			// NietzscheDB via db layer
+			rows, _ := s.db.QueryByLabel(ctx, "patient_persistent_memories",
+				" AND n.idoso_id = $idoso AND n.persistent_topic = $topic",
+				map[string]interface{}{"idoso": idosoID, "topic": currentTopic}, 1)
+
+			if len(rows) > 0 {
+				m := rows[0]
+				s.db.Update(ctx, "patient_persistent_memories",
+					map[string]interface{}{"idoso_id": idosoID, "persistent_topic": currentTopic},
+					map[string]interface{}{
+						"avoidance_attempts": int(database.GetInt64(m, "avoidance_attempts")) + 1,
+						"last_occurrence":    ts,
+						"updated_at":         ts,
+					})
+			} else {
+				s.db.Insert(ctx, "patient_persistent_memories", map[string]interface{}{
+					"idoso_id":           idosoID,
+					"persistent_topic":   currentTopic,
+					"avoidance_attempts": 1,
+					"first_detected":     ts,
+					"last_occurrence":    ts,
+					"created_at":         ts,
+					"updated_at":         ts,
+				})
 			}
 
 			// Record occurrence
-			occQuery := `
-				INSERT INTO persistent_memory_occurrences
-				(persistent_memory_id, occurrence_type, verbatim, occurred_at)
-				SELECT id, 'avoidance', $2, $3
-				FROM patient_persistent_memories
-				WHERE idoso_id = $1 AND persistent_topic = $4
-			`
-			s.db.ExecContext(ctx, occQuery, idosoID, text, timestamp, currentTopic)
+			s.db.Insert(ctx, "persistent_memory_occurrences", map[string]interface{}{
+				"idoso_id":        idosoID,
+				"occurrence_type": "avoidance",
+				"verbatim":        text,
+				"occurred_at":     ts,
+				"persistent_topic": currentTopic,
+			})
 
-			log.Printf("🔄 [PERSISTENCE] Avoidance detected for topic '%s'", currentTopic)
+			log.Printf("[PERSISTENCE] Avoidance detected for topic '%s'", currentTopic)
 			break
 		}
 	}
@@ -184,39 +195,33 @@ func (s *DeepMemoryService) DetectAvoidance(ctx context.Context, idosoID int64, 
 
 // DetectReturn checks if patient returned to a previously avoided topic
 func (s *DeepMemoryService) DetectReturn(ctx context.Context, idosoID int64, text string, timestamp time.Time) error {
-	// Check if any words match previously avoided topics
-	query := `
-		SELECT persistent_topic FROM patient_persistent_memories
-		WHERE idoso_id = $1 AND avoidance_attempts > 0
-	`
-	rows, err := s.db.QueryContext(ctx, query, idosoID)
+	rows, err := s.db.QueryByLabel(ctx, "patient_persistent_memories",
+		" AND n.idoso_id = $idoso",
+		map[string]interface{}{"idoso": idosoID}, 0)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 
 	textLower := strings.ToLower(text)
-	for rows.Next() {
-		var topic string
-		if err := rows.Scan(&topic); err != nil {
+	for _, m := range rows {
+		avoidanceAttempts := int(database.GetInt64(m, "avoidance_attempts"))
+		if avoidanceAttempts <= 0 {
 			continue
 		}
 
+		topic := database.GetString(m, "persistent_topic")
 		if strings.Contains(textLower, strings.ToLower(topic)) {
-			// Record return
-			updateQuery := `
-				UPDATE patient_persistent_memories
-				SET return_count = return_count + 1,
-				    last_occurrence = $2,
-				    updated_at = NOW()
-				WHERE idoso_id = $1 AND persistent_topic = $3
-			`
-			s.db.ExecContext(ctx, updateQuery, idosoID, timestamp, topic)
+			ts := timestamp.Format(time.RFC3339)
 
-			// Update scores
-			s.db.ExecContext(ctx, "SELECT update_persistence_scores($1)", idosoID)
+			s.db.Update(ctx, "patient_persistent_memories",
+				map[string]interface{}{"idoso_id": idosoID, "persistent_topic": topic},
+				map[string]interface{}{
+					"return_count":   int(database.GetInt64(m, "return_count")) + 1,
+					"last_occurrence": ts,
+					"updated_at":     ts,
+				})
 
-			log.Printf("🔄 [PERSISTENCE] Return detected to topic '%s'", topic)
+			log.Printf("[PERSISTENCE] Return detected to topic '%s'", topic)
 		}
 	}
 
@@ -225,55 +230,41 @@ func (s *DeepMemoryService) DetectReturn(ctx context.Context, idosoID int64, tex
 
 // GetPersistentMemories retrieves persistent memories with high scores
 func (s *DeepMemoryService) GetPersistentMemories(ctx context.Context, idosoID int64) ([]*PersistentMemory, error) {
-	query := `
-		SELECT id, persistent_topic, avoidance_attempts, return_count,
-		       persistence_score, avoidance_score, voice_tremor_percentage,
-		       involved_persons, typical_triggers, first_detected, last_occurrence
-		FROM patient_persistent_memories
-		WHERE idoso_id = $1 AND (persistence_score > 0.3 OR avoidance_score > 0.3)
-		ORDER BY (persistence_score + avoidance_score) DESC
-	`
-
-	rows, err := s.db.QueryContext(ctx, query, idosoID)
+	rows, err := s.db.QueryByLabel(ctx, "patient_persistent_memories",
+		" AND n.idoso_id = $idoso",
+		map[string]interface{}{"idoso": idosoID}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	var memories []*PersistentMemory
-	for rows.Next() {
-		pm := &PersistentMemory{IdosoID: idosoID}
-		var personsJSON, triggersJSON []byte
-		var voiceTremor, persistence, avoidance sql.NullFloat64
-		var firstDetected, lastOccurrence sql.NullTime
+	for _, m := range rows {
+		persistenceScore := database.GetFloat64(m, "persistence_score")
+		avoidanceScore := database.GetFloat64(m, "avoidance_score")
 
-		err := rows.Scan(
-			&pm.ID, &pm.PersistentTopic, &pm.AvoidanceAttempts, &pm.ReturnCount,
-			&persistence, &avoidance, &voiceTremor,
-			&personsJSON, &triggersJSON, &firstDetected, &lastOccurrence,
-		)
-		if err != nil {
+		if persistenceScore <= 0.3 && avoidanceScore <= 0.3 {
 			continue
 		}
 
-		if persistence.Valid {
-			pm.PersistenceScore = persistence.Float64
-		}
-		if avoidance.Valid {
-			pm.AvoidanceScore = avoidance.Float64
-		}
-		if voiceTremor.Valid {
-			pm.VoiceTremorPct = voiceTremor.Float64
-		}
-		if firstDetected.Valid {
-			pm.FirstDetected = firstDetected.Time
-		}
-		if lastOccurrence.Valid {
-			pm.LastOccurrence = lastOccurrence.Time
+		pm := &PersistentMemory{
+			ID:                database.GetInt64(m, "id"),
+			IdosoID:           idosoID,
+			PersistentTopic:   database.GetString(m, "persistent_topic"),
+			AvoidanceAttempts: int(database.GetInt64(m, "avoidance_attempts")),
+			ReturnCount:       int(database.GetInt64(m, "return_count")),
+			PersistenceScore:  persistenceScore,
+			AvoidanceScore:    avoidanceScore,
+			VoiceTremorPct:    database.GetFloat64(m, "voice_tremor_percentage"),
+			FirstDetected:     database.GetTime(m, "first_detected"),
+			LastOccurrence:    database.GetTime(m, "last_occurrence"),
 		}
 
-		json.Unmarshal(personsJSON, &pm.InvolvedPersons)
-		json.Unmarshal(triggersJSON, &pm.TypicalTriggers)
+		if raw, ok := m["involved_persons"]; ok && raw != nil {
+			parseJSONStringSlice(raw, &pm.InvolvedPersons)
+		}
+		if raw, ok := m["typical_triggers"]; ok && raw != nil {
+			parseJSONStringSlice(raw, &pm.TypicalTriggers)
+		}
 
 		memories = append(memories, pm)
 	}
@@ -333,119 +324,88 @@ func (s *DeepMemoryService) DetectBodySymptom(ctx context.Context, idosoID int64
 						"correlated_topics": string(topicsJSON),
 					})
 				if mergeErr != nil {
-					log.Printf("⚠️ [BODY] NietzscheDB merge failed: %v", mergeErr)
+					log.Printf("[BODY] NietzscheDB merge failed: %v", mergeErr)
 				}
 			}
 
-			// PG dual-write
-			query := `
-				INSERT INTO patient_body_memories
-				(idoso_id, physical_symptom, body_location, occurrence_count,
-				 first_reported, last_reported, correlated_topics)
-				VALUES ($1, $2, $3, 1, $4, $4, $5)
-				ON CONFLICT (idoso_id, physical_symptom, body_location) DO UPDATE SET
-					occurrence_count = patient_body_memories.occurrence_count + 1,
-					last_reported = $4,
-					updated_at = NOW()
-			`
-			if _, err := s.db.ExecContext(ctx, query, idosoID, symptom, location, timestamp, string(topicsJSON)); err != nil {
-				log.Printf("Error inserting body memory: %v", err)
-				continue
+			// NietzscheDB via db layer
+			rows, _ := s.db.QueryByLabel(ctx, "patient_body_memories",
+				" AND n.idoso_id = $idoso AND n.physical_symptom = $symptom AND n.body_location = $loc",
+				map[string]interface{}{"idoso": idosoID, "symptom": symptom, "loc": location}, 1)
+
+			if len(rows) > 0 {
+				m := rows[0]
+				s.db.Update(ctx, "patient_body_memories",
+					map[string]interface{}{"idoso_id": idosoID, "physical_symptom": symptom, "body_location": location},
+					map[string]interface{}{
+						"occurrence_count": int(database.GetInt64(m, "occurrence_count")) + 1,
+						"last_reported":    ts,
+						"updated_at":       ts,
+					})
+			} else {
+				if _, err := s.db.Insert(ctx, "patient_body_memories", map[string]interface{}{
+					"idoso_id":          idosoID,
+					"physical_symptom":  symptom,
+					"body_location":     location,
+					"occurrence_count":  1,
+					"first_reported":    ts,
+					"last_reported":     ts,
+					"correlated_topics": string(topicsJSON),
+					"created_at":        ts,
+					"updated_at":        ts,
+				}); err != nil {
+					log.Printf("Error inserting body memory: %v", err)
+					continue
+				}
 			}
 
 			// Record occurrence
-			occQuery := `
-				INSERT INTO body_memory_occurrences
-				(body_memory_id, idoso_id, verbatim, occurred_at, preceding_topics)
-				SELECT id, $1, $2, $3, $4
-				FROM patient_body_memories
-				WHERE idoso_id = $1 AND physical_symptom = $5
-				LIMIT 1
-			`
-			s.db.ExecContext(ctx, occQuery, idosoID, text, timestamp, string(topicsJSON), symptom)
+			s.db.Insert(ctx, "body_memory_occurrences", map[string]interface{}{
+				"idoso_id":         idosoID,
+				"verbatim":         text,
+				"occurred_at":      ts,
+				"preceding_topics": string(topicsJSON),
+				"physical_symptom": symptom,
+			})
 
-			// Update correlations
-			s.updateBodyCorrelations(ctx, idosoID, symptom)
-
-			log.Printf("🫀 [BODY] Symptom detected: '%s' at '%s'", symptom, location)
+			log.Printf("[BODY] Symptom detected: '%s' at '%s'", symptom, location)
 		}
 	}
 
 	return nil
 }
 
-// updateBodyCorrelations recalculates correlation strengths
-func (s *DeepMemoryService) updateBodyCorrelations(ctx context.Context, idosoID int64, symptom string) {
-	// Find most common preceding topic
-	query := `
-		WITH topic_counts AS (
-			SELECT
-				jsonb_array_elements_text(preceding_topics) as topic,
-				COUNT(*) as cnt
-			FROM body_memory_occurrences bmo
-			JOIN patient_body_memories bm ON bmo.body_memory_id = bm.id
-			WHERE bm.idoso_id = $1 AND bm.physical_symptom = $2
-			GROUP BY topic
-			ORDER BY cnt DESC
-			LIMIT 1
-		)
-		UPDATE patient_body_memories bm
-		SET strongest_correlation_topic = tc.topic,
-		    strongest_correlation_strength = tc.cnt::decimal / GREATEST(1, bm.occurrence_count),
-		    updated_at = NOW()
-		FROM topic_counts tc
-		WHERE bm.idoso_id = $1 AND bm.physical_symptom = $2
-	`
-	s.db.ExecContext(ctx, query, idosoID, symptom)
-}
-
 // GetBodyMemories retrieves body memories with correlations
 func (s *DeepMemoryService) GetBodyMemories(ctx context.Context, idosoID int64) ([]*BodyMemory, error) {
-	query := `
-		SELECT id, physical_symptom, body_location, patient_descriptions,
-		       correlated_topics, correlated_persons,
-		       strongest_correlation_topic, strongest_correlation_strength,
-		       occurrence_count, patient_aware, patient_verbalization
-		FROM patient_body_memories
-		WHERE idoso_id = $1
-		ORDER BY strongest_correlation_strength DESC NULLS LAST, occurrence_count DESC
-	`
-
-	rows, err := s.db.QueryContext(ctx, query, idosoID)
+	rows, err := s.db.QueryByLabel(ctx, "patient_body_memories",
+		" AND n.idoso_id = $idoso",
+		map[string]interface{}{"idoso": idosoID}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	var memories []*BodyMemory
-	for rows.Next() {
-		bm := &BodyMemory{IdosoID: idosoID}
-		var descsJSON, topicsJSON, personsJSON []byte
-		var strongestTopic, verbalization sql.NullString
-		var strongestStrength sql.NullFloat64
-
-		err := rows.Scan(
-			&bm.ID, &bm.PhysicalSymptom, &bm.BodyLocation, &descsJSON,
-			&topicsJSON, &personsJSON,
-			&strongestTopic, &strongestStrength,
-			&bm.OccurrenceCount, &bm.PatientAware, &verbalization,
-		)
-		if err != nil {
-			continue
+	for _, m := range rows {
+		bm := &BodyMemory{
+			ID:                          database.GetInt64(m, "id"),
+			IdosoID:                     idosoID,
+			PhysicalSymptom:             database.GetString(m, "physical_symptom"),
+			BodyLocation:                database.GetString(m, "body_location"),
+			StrongestCorrelationTopic:   database.GetString(m, "strongest_correlation_topic"),
+			StrongestCorrelationStrength: database.GetFloat64(m, "strongest_correlation_strength"),
+			OccurrenceCount:             int(database.GetInt64(m, "occurrence_count")),
+			PatientAware:                database.GetBool(m, "patient_aware"),
+			PatientVerbalization:        database.GetString(m, "patient_verbalization"),
 		}
 
-		json.Unmarshal(descsJSON, &bm.PatientDescriptions)
-		json.Unmarshal(topicsJSON, &bm.CorrelatedTopics)
-		json.Unmarshal(personsJSON, &bm.CorrelatedPersons)
-
-		if strongestTopic.Valid {
-			bm.StrongestCorrelationTopic = strongestTopic.String
+		if raw, ok := m["patient_descriptions"]; ok && raw != nil {
+			parseJSONStringSlice(raw, &bm.PatientDescriptions)
 		}
-		if strongestStrength.Valid {
-			bm.StrongestCorrelationStrength = strongestStrength.Float64
+		if raw, ok := m["correlated_topics"]; ok && raw != nil {
+			parseJSONStringSlice(raw, &bm.CorrelatedTopics)
 		}
-		if verbalization.Valid {
-			bm.PatientVerbalization = verbalization.String
+		if raw, ok := m["correlated_persons"]; ok && raw != nil {
+			parseJSONStringSlice(raw, &bm.CorrelatedPersons)
 		}
 
 		memories = append(memories, bm)
@@ -486,34 +446,53 @@ func (s *DeepMemoryService) DetectSharingDesire(ctx context.Context, idosoID int
 
 			// Classify memory type
 			memoryType := s.classifyMemoryType(text)
-
-			query := `
-				INSERT INTO patient_shared_memories
-				(idoso_id, memory_summary, intended_audience, sharing_status,
-				 memory_type, mention_count, first_mentioned, last_mentioned,
-				 verbatim_mentions)
-				VALUES ($1, $2, $3, 'wishes_to_share', $4, 1, $5, $5, $6)
-				ON CONFLICT DO NOTHING
-			`
+			ts := timestamp.Format(time.RFC3339)
 			audienceJSON, _ := json.Marshal([]string{audience})
 			verbatimJSON, _ := json.Marshal([]string{text})
+			summary := text[:minInt(200, len(text))]
 
-			if _, err := s.db.ExecContext(ctx, query, idosoID, text[:minInt(200, len(text))],
-				string(audienceJSON), memoryType, timestamp, string(verbatimJSON)); err != nil {
+			// Try insert first
+			_, err := s.db.Insert(ctx, "patient_shared_memories", map[string]interface{}{
+				"idoso_id":          idosoID,
+				"memory_summary":    summary,
+				"intended_audience": string(audienceJSON),
+				"sharing_status":    "wishes_to_share",
+				"memory_type":       memoryType,
+				"mention_count":     1,
+				"first_mentioned":   ts,
+				"last_mentioned":    ts,
+				"verbatim_mentions": string(verbatimJSON),
+				"created_at":        ts,
+				"updated_at":        ts,
+			})
+			if err != nil {
 				// Try to update existing
-				updateQuery := `
-					UPDATE patient_shared_memories
-					SET mention_count = mention_count + 1,
-					    last_mentioned = $2,
-					    urgency_score = LEAST(1.0, urgency_score + 0.1),
-					    verbatim_mentions = verbatim_mentions || $3::jsonb,
-					    updated_at = NOW()
-					WHERE idoso_id = $1 AND memory_summary ILIKE '%' || $4 || '%'
-				`
-				s.db.ExecContext(ctx, updateQuery, idosoID, timestamp, string(verbatimJSON), text[:minInt(50, len(text))])
+				rows, _ := s.db.QueryByLabel(ctx, "patient_shared_memories",
+					" AND n.idoso_id = $idoso",
+					map[string]interface{}{"idoso": idosoID}, 0)
+
+				shortText := text[:minInt(50, len(text))]
+				for _, m := range rows {
+					existingSummary := strings.ToLower(database.GetString(m, "memory_summary"))
+					if strings.Contains(existingSummary, strings.ToLower(shortText)) {
+						urgency := database.GetFloat64(m, "urgency_score") + 0.1
+						if urgency > 1.0 {
+							urgency = 1.0
+						}
+						s.db.Update(ctx, "patient_shared_memories",
+							map[string]interface{}{"id": database.GetInt64(m, "id")},
+							map[string]interface{}{
+								"mention_count": int(database.GetInt64(m, "mention_count")) + 1,
+								"last_mentioned": ts,
+								"urgency_score":  urgency,
+								"updated_at":     ts,
+							})
+						break
+					}
+				}
 			}
 
-			log.Printf("💬 [SHARING] Desire to share detected, audience: %s", audience)
+			log.Printf("[SHARING] Desire to share detected, audience: %s", audience)
 		}
 	}
 
@@ -553,45 +532,38 @@ func (s *DeepMemoryService) classifyMemoryType(text string) string {
 
 // GetSharedMemories retrieves memories patient wants to share
 func (s *DeepMemoryService) GetSharedMemories(ctx context.Context, idosoID int64) ([]*SharedMemory, error) {
-	query := `
-		SELECT id, memory_summary, intended_audience, shared_with,
-		       sharing_status, memory_type, urgency_score, associated_ritual,
-		       mention_count, first_mentioned, last_mentioned
-		FROM patient_shared_memories
-		WHERE idoso_id = $1 AND sharing_status != 'fully_shared'
-		ORDER BY urgency_score DESC NULLS LAST, mention_count DESC
-	`
-
-	rows, err := s.db.QueryContext(ctx, query, idosoID)
+	rows, err := s.db.QueryByLabel(ctx, "patient_shared_memories",
+		" AND n.idoso_id = $idoso",
+		map[string]interface{}{"idoso": idosoID}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	var memories []*SharedMemory
-	for rows.Next() {
-		sm := &SharedMemory{IdosoID: idosoID}
-		var audienceJSON, sharedJSON []byte
-		var ritual sql.NullString
-		var urgency sql.NullFloat64
-
-		err := rows.Scan(
-			&sm.ID, &sm.MemorySummary, &audienceJSON, &sharedJSON,
-			&sm.SharingStatus, &sm.MemoryType, &urgency, &ritual,
-			&sm.MentionCount, &sm.FirstMentioned, &sm.LastMentioned,
-		)
-		if err != nil {
+	for _, m := range rows {
+		status := database.GetString(m, "sharing_status")
+		if status == "fully_shared" {
 			continue
 		}
 
-		json.Unmarshal(audienceJSON, &sm.IntendedAudience)
-		json.Unmarshal(sharedJSON, &sm.SharedWith)
-
-		if ritual.Valid {
-			sm.AssociatedRitual = ritual.String
+		sm := &SharedMemory{
+			ID:             database.GetInt64(m, "id"),
+			IdosoID:        idosoID,
+			MemorySummary:  database.GetString(m, "memory_summary"),
+			SharingStatus:  status,
+			MemoryType:     database.GetString(m, "memory_type"),
+			UrgencyScore:   database.GetFloat64(m, "urgency_score"),
+			AssociatedRitual: database.GetString(m, "associated_ritual"),
+			MentionCount:   int(database.GetInt64(m, "mention_count")),
+			FirstMentioned: database.GetTime(m, "first_mentioned"),
+			LastMentioned:  database.GetTime(m, "last_mentioned"),
 		}
-		if urgency.Valid {
-			sm.UrgencyScore = urgency.Float64
+
+		if raw, ok := m["intended_audience"]; ok && raw != nil {
+			parseJSONStringSlice(raw, &sm.IntendedAudience)
+		}
+		if raw, ok := m["shared_with"]; ok && raw != nil {
+			parseJSONStringSlice(raw, &sm.SharedWith)
 		}
 
 		memories = append(memories, sm)

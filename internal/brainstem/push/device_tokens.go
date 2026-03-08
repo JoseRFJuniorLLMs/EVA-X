@@ -5,27 +5,28 @@ package push
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"time"
 
+	"eva/internal/brainstem/database"
+
 	"firebase.google.com/go/v4/messaging"
 )
 
-// errNoDB is returned when a DeviceTokenManager method is called without a PostgreSQL connection.
+// errNoDB is returned when a DeviceTokenManager method is called without a NietzscheDB connection.
 var errNoDB = fmt.Errorf("DeviceTokenManager: database not configured (push notifications disabled)")
 
 // DeviceTokenManager gerencia tokens de dispositivos para push notifications
 type DeviceTokenManager struct {
-	db          *sql.DB
+	db          *database.DB
 	pushService *FirebaseService
 }
 
 // NewDeviceTokenManager cria um novo gerenciador de tokens
-func NewDeviceTokenManager(db *sql.DB, pushService *FirebaseService) *DeviceTokenManager {
+func NewDeviceTokenManager(db *database.DB, pushService *FirebaseService) *DeviceTokenManager {
 	return &DeviceTokenManager{
 		db:          db,
 		pushService: pushService,
@@ -61,7 +62,7 @@ func (dtm *DeviceTokenManager) HandleRegisterDeviceToken(w http.ResponseWriter, 
 
 	var req RegisterDeviceTokenRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		log.Printf("❌ Erro ao decodificar request: %v", err)
+		log.Printf("Erro ao decodificar request: %v", err)
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(RegisterDeviceTokenResponse{
 			Success: false,
@@ -70,7 +71,7 @@ func (dtm *DeviceTokenManager) HandleRegisterDeviceToken(w http.ResponseWriter, 
 		return
 	}
 
-	// Validar campos obrigatórios
+	// Validar campos obrigatorios
 	if req.CPF == "" || req.DeviceToken == "" || req.Platform == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(RegisterDeviceTokenResponse{
@@ -90,7 +91,7 @@ func (dtm *DeviceTokenManager) HandleRegisterDeviceToken(w http.ResponseWriter, 
 		return
 	}
 
-	// Verificar se o token é válido com Firebase
+	// Verificar se o token e valido com Firebase
 	if !dtm.ValidateFirebaseToken(req.DeviceToken) {
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(RegisterDeviceTokenResponse{
@@ -100,35 +101,23 @@ func (dtm *DeviceTokenManager) HandleRegisterDeviceToken(w http.ResponseWriter, 
 		return
 	}
 
-	// Buscar idoso por CPF
-	var idosoID int64
-	err := dtm.db.QueryRow(`
-		SELECT id FROM idosos WHERE cpf = $1
-	`, req.CPF).Scan(&idosoID)
-
+	// Buscar idoso por CPF via NietzscheDB
+	idoso, err := dtm.db.GetIdosoByCPF(req.CPF)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			w.WriteHeader(http.StatusNotFound)
-			json.NewEncoder(w).Encode(RegisterDeviceTokenResponse{
-				Success: false,
-				Message: "CPF not found",
-			})
-			return
-		}
-
-		log.Printf("❌ Erro ao buscar idoso: %v", err)
-		w.WriteHeader(http.StatusInternalServerError)
+		w.WriteHeader(http.StatusNotFound)
 		json.NewEncoder(w).Encode(RegisterDeviceTokenResponse{
 			Success: false,
-			Message: "Internal server error",
+			Message: "CPF not found",
 		})
 		return
 	}
 
+	idosoID := idoso.ID
+
 	// Salvar token no banco
 	tokenID, err := dtm.SaveDeviceToken(idosoID, req.DeviceToken, req.Platform, req.AppVersion, req.DeviceModel)
 	if err != nil {
-		log.Printf("❌ Erro ao salvar token: %v", err)
+		log.Printf("Erro ao salvar token: %v", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(RegisterDeviceTokenResponse{
 			Success: false,
@@ -137,7 +126,7 @@ func (dtm *DeviceTokenManager) HandleRegisterDeviceToken(w http.ResponseWriter, 
 		return
 	}
 
-	log.Printf("✅ Device token registrado: ID=%d, IdosoID=%d, Platform=%s", tokenID, idosoID, req.Platform)
+	log.Printf("Device token registrado: ID=%d, IdosoID=%d, Platform=%s", tokenID, idosoID, req.Platform)
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(RegisterDeviceTokenResponse{
@@ -158,49 +147,54 @@ func (dtm *DeviceTokenManager) SaveDeviceToken(
 	if dtm.db == nil {
 		return 0, errNoDB
 	}
-	// Verificar se token já existe
-	var existingID int64
-	err := dtm.db.QueryRow(`
-		SELECT id FROM device_tokens
-		WHERE idoso_id = $1 AND token = $2
-	`, idosoID, token).Scan(&existingID)
+	ctx := context.Background()
+	now := time.Now().Format(time.RFC3339)
 
-	if err == nil {
-		// Token já existe, atualizar
-		_, err := dtm.db.Exec(`
-			UPDATE device_tokens
-			SET last_used_at = NOW(),
-			    app_version = $1,
-			    device_model = $2,
-			    is_active = true
-			WHERE id = $3
-		`, appVersion, deviceModel, existingID)
+	// Verificar se token ja existe via NietzscheDB
+	rows, err := dtm.db.QueryByLabel(ctx, "device_tokens",
+		` AND n.idoso_id = $iid AND n.token = $tok`, map[string]interface{}{
+			"iid": idosoID,
+			"tok": token,
+		}, 1)
+	if err != nil {
+		return 0, fmt.Errorf("failed to check existing token: %w", err)
+	}
 
+	if len(rows) > 0 {
+		// Token ja existe, atualizar
+		existingID := database.GetInt64(rows[0], "id")
+		err := dtm.db.Update(ctx, "device_tokens",
+			map[string]interface{}{"id": float64(existingID)},
+			map[string]interface{}{
+				"last_used_at": now,
+				"app_version":  appVersion,
+				"device_model": deviceModel,
+				"is_active":    true,
+			})
 		if err != nil {
 			return 0, fmt.Errorf("failed to update token: %w", err)
 		}
 
-		log.Printf("🔄 Token atualizado: ID=%d", existingID)
+		log.Printf("Token atualizado: ID=%d", existingID)
 		return existingID, nil
 	}
 
-	if err != sql.ErrNoRows {
-		return 0, fmt.Errorf("failed to check existing token: %w", err)
-	}
-
-	// Token não existe, criar novo
-	var newID int64
-	err = dtm.db.QueryRow(`
-		INSERT INTO device_tokens (idoso_id, token, platform, app_version, device_model, is_active, created_at, last_used_at)
-		VALUES ($1, $2, $3, $4, $5, true, NOW(), NOW())
-		RETURNING id
-	`, idosoID, token, platform, appVersion, deviceModel).Scan(&newID)
-
+	// Token nao existe, criar novo
+	newID, err := dtm.db.Insert(ctx, "device_tokens", map[string]interface{}{
+		"idoso_id":     idosoID,
+		"token":        token,
+		"platform":     platform,
+		"app_version":  appVersion,
+		"device_model": deviceModel,
+		"is_active":    true,
+		"created_at":   now,
+		"last_used_at": now,
+	})
 	if err != nil {
 		return 0, fmt.Errorf("failed to insert token: %w", err)
 	}
 
-	log.Printf("➕ Novo token criado: ID=%d", newID)
+	log.Printf("Novo token criado: ID=%d", newID)
 	return newID, nil
 }
 
@@ -209,26 +203,24 @@ func (dtm *DeviceTokenManager) GetDeviceTokens(idosoID int64) ([]string, error) 
 	if dtm.db == nil {
 		return nil, errNoDB
 	}
-	rows, err := dtm.db.Query(`
-		SELECT token
-		FROM device_tokens
-		WHERE idoso_id = $1 AND is_active = true
-		ORDER BY last_used_at DESC
-	`, idosoID)
+	ctx := context.Background()
 
+	rows, err := dtm.db.QueryByLabel(ctx, "device_tokens",
+		` AND n.idoso_id = $iid`, map[string]interface{}{
+			"iid": idosoID,
+		}, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query tokens: %w", err)
 	}
-	defer rows.Close()
 
 	var tokens []string
-	for rows.Next() {
-		var token string
-		if err := rows.Scan(&token); err != nil {
-			log.Printf("⚠️ Erro ao escanear token: %v", err)
-			continue
+	for _, m := range rows {
+		if database.GetBool(m, "is_active") {
+			tok := database.GetString(m, "token")
+			if tok != "" {
+				tokens = append(tokens, tok)
+			}
 		}
-		tokens = append(tokens, token)
 	}
 
 	return tokens, nil
@@ -239,37 +231,22 @@ func (dtm *DeviceTokenManager) GetDeviceTokensByCPF(cpf string) ([]string, error
 	if dtm.db == nil {
 		return nil, errNoDB
 	}
-	rows, err := dtm.db.Query(`
-		SELECT dt.token
-		FROM device_tokens dt
-		INNER JOIN idosos i ON i.id = dt.idoso_id
-		WHERE i.cpf = $1 AND dt.is_active = true
-		ORDER BY dt.last_used_at DESC
-	`, cpf)
 
+	// First get idoso by CPF
+	idoso, err := dtm.db.GetIdosoByCPF(cpf)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query tokens: %w", err)
-	}
-	defer rows.Close()
-
-	var tokens []string
-	for rows.Next() {
-		var token string
-		if err := rows.Scan(&token); err != nil {
-			log.Printf("⚠️ Erro ao escanear token: %v", err)
-			continue
-		}
-		tokens = append(tokens, token)
+		return nil, fmt.Errorf("failed to find idoso by CPF: %w", err)
 	}
 
-	return tokens, nil
+	// Then query device_tokens by idoso_id
+	return dtm.GetDeviceTokens(idoso.ID)
 }
 
-// ValidateFirebaseToken valida se o token é válido no Firebase
+// ValidateFirebaseToken valida se o token e valido no Firebase
 func (dtm *DeviceTokenManager) ValidateFirebaseToken(token string) bool {
 	if dtm.pushService == nil || dtm.pushService.client == nil {
-		log.Printf("⚠️ Firebase client não inicializado — rejeitando token (fail-closed, M9)")
-		return false // M9: fail-closed — reject tokens when Firebase is not configured
+		log.Printf("Firebase client nao inicializado - rejeitando token (fail-closed, M9)")
+		return false // M9: fail-closed -- reject tokens when Firebase is not configured
 	}
 
 	// Criar mensagem de teste seca (dry-run)
@@ -288,41 +265,47 @@ func (dtm *DeviceTokenManager) ValidateFirebaseToken(token string) bool {
 	_, err := dtm.pushService.client.SendDryRun(ctx, message)
 
 	if err != nil {
-		log.Printf("❌ Token inválido: %v", err)
+		log.Printf("Token invalido: %v", err)
 		return false
 	}
 
 	return true
 }
 
-// DeactivateToken desativa um token (usuário fez logout, etc.)
+// DeactivateToken desativa um token (usuario fez logout, etc.)
 func (dtm *DeviceTokenManager) DeactivateToken(token string) error {
 	if dtm.db == nil {
 		return errNoDB
 	}
-	result, err := dtm.db.Exec(`
-		UPDATE device_tokens
-		SET is_active = false
-		WHERE token = $1
-	`, token)
+	ctx := context.Background()
 
+	// Check that the token exists first
+	rows, err := dtm.db.QueryByLabel(ctx, "device_tokens",
+		` AND n.token = $tok`, map[string]interface{}{
+			"tok": token,
+		}, 1)
+	if err != nil {
+		return fmt.Errorf("failed to query token: %w", err)
+	}
+	if len(rows) == 0 {
+		return fmt.Errorf("token not found")
+	}
+
+	err = dtm.db.Update(ctx, "device_tokens",
+		map[string]interface{}{"token": token},
+		map[string]interface{}{"is_active": false})
 	if err != nil {
 		return fmt.Errorf("failed to deactivate token: %w", err)
 	}
 
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected == 0 {
-		return fmt.Errorf("token not found")
-	}
-
-	log.Printf("🔕 Token desativado: %s", token)
+	log.Printf("Token desativado: %s", token)
 	return nil
 }
 
-// CleanupExpiredTokens remove tokens que não foram usados há muito tempo
+// CleanupExpiredTokens remove tokens que nao foram usados ha muito tempo
 func (dtm *DeviceTokenManager) CleanupExpiredTokens(ctx context.Context) {
 	if dtm.db == nil {
-		log.Printf("⚠️ Token cleanup disabled (database not configured)")
+		log.Printf("Token cleanup disabled (database not configured)")
 		return
 	}
 	ticker := time.NewTicker(24 * time.Hour)
@@ -331,7 +314,7 @@ func (dtm *DeviceTokenManager) CleanupExpiredTokens(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("🛑 Token cleanup scheduler stopped")
+			log.Printf("Token cleanup scheduler stopped")
 			return
 		case <-ticker.C:
 			dtm.performCleanup()
@@ -343,43 +326,58 @@ func (dtm *DeviceTokenManager) performCleanup() {
 	if dtm.db == nil {
 		return
 	}
-	// Desativar tokens não usados há mais de 90 dias
-	result, err := dtm.db.Exec(`
-		UPDATE device_tokens
-		SET is_active = false
-		WHERE last_used_at < NOW() - INTERVAL '90 days'
-		  AND is_active = true
-	`)
+	ctx := context.Background()
+	now := time.Now()
+	cutoff90 := now.AddDate(0, 0, -90)
+	cutoff180 := now.AddDate(0, 0, -180)
 
+	// Fetch all device_tokens
+	rows, err := dtm.db.QueryByLabel(ctx, "device_tokens", "", nil, 0)
 	if err != nil {
-		log.Printf("❌ Erro ao limpar tokens expirados: %v", err)
+		log.Printf("Erro ao buscar tokens para cleanup: %v", err)
 		return
 	}
 
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected > 0 {
-		log.Printf("🧹 Tokens expirados desativados: %d", rowsAffected)
+	var deactivated, deleted int
+
+	for _, m := range rows {
+		lastUsed := database.GetTime(m, "last_used_at")
+		isActive := database.GetBool(m, "is_active")
+		tokenID := database.GetInt64(m, "id")
+
+		// Desativar tokens nao usados ha mais de 90 dias
+		if isActive && !lastUsed.IsZero() && lastUsed.Before(cutoff90) {
+			err := dtm.db.Update(ctx, "device_tokens",
+				map[string]interface{}{"id": float64(tokenID)},
+				map[string]interface{}{"is_active": false})
+			if err != nil {
+				log.Printf("Erro ao desativar token ID=%d: %v", tokenID, err)
+				continue
+			}
+			deactivated++
+		}
+
+		// Soft-delete tokens desativados ha mais de 180 dias
+		if !isActive && !lastUsed.IsZero() && lastUsed.Before(cutoff180) {
+			err := dtm.db.SoftDelete(ctx, "device_tokens",
+				map[string]interface{}{"id": float64(tokenID)})
+			if err != nil {
+				log.Printf("Erro ao deletar token ID=%d: %v", tokenID, err)
+				continue
+			}
+			deleted++
+		}
 	}
 
-	// Deletar tokens desativados há mais de 180 dias
-	result, err = dtm.db.Exec(`
-		DELETE FROM device_tokens
-		WHERE last_used_at < NOW() - INTERVAL '180 days'
-		  AND is_active = false
-	`)
-
-	if err != nil {
-		log.Printf("❌ Erro ao deletar tokens antigos: %v", err)
-		return
+	if deactivated > 0 {
+		log.Printf("Tokens expirados desativados: %d", deactivated)
 	}
-
-	rowsAffected, _ = result.RowsAffected()
-	if rowsAffected > 0 {
-		log.Printf("🗑️ Tokens antigos deletados: %d", rowsAffected)
+	if deleted > 0 {
+		log.Printf("Tokens antigos deletados (soft): %d", deleted)
 	}
 }
 
-// SendTestNotification envia uma notificação de teste
+// SendTestNotification envia uma notificacao de teste
 func (dtm *DeviceTokenManager) SendTestNotification(token string) error {
 	if dtm.pushService == nil || dtm.pushService.client == nil {
 		return fmt.Errorf("Firebase client not initialized")
@@ -388,8 +386,8 @@ func (dtm *DeviceTokenManager) SendTestNotification(token string) error {
 	message := &messaging.Message{
 		Token: token,
 		Notification: &messaging.Notification{
-			Title: "🔔 EVA - Teste de Notificação",
-			Body:  "Seu dispositivo está configurado corretamente!",
+			Title: "EVA - Teste de Notificacao",
+			Body:  "Seu dispositivo esta configurado corretamente!",
 		},
 		Android: &messaging.AndroidConfig{
 			Priority: "high",
@@ -415,6 +413,6 @@ func (dtm *DeviceTokenManager) SendTestNotification(token string) error {
 		return fmt.Errorf("failed to send test notification: %w", err)
 	}
 
-	log.Printf("✅ Notificação de teste enviada: %s", messageID)
+	log.Printf("Notificacao de teste enviada: %s", messageID)
 	return nil
 }

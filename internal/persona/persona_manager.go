@@ -4,11 +4,14 @@
 package persona
 
 import (
-	"database/sql"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"time"
+
+	"eva/internal/brainstem/database"
 )
 
 // ============================================================================
@@ -17,10 +20,10 @@ import (
 // Gerencia personas configuráveis (Companion, Clinical, Emergency, Educator)
 
 type PersonaManager struct {
-	db *sql.DB
+	db *database.DB
 }
 
-func NewPersonaManager(db *sql.DB) *PersonaManager {
+func NewPersonaManager(db *database.DB) *PersonaManager {
 	return &PersonaManager{db: db}
 }
 
@@ -29,43 +32,43 @@ func NewPersonaManager(db *sql.DB) *PersonaManager {
 // ============================================================================
 
 type PersonaDefinition struct {
-	ID                       string                 `json:"id"`
-	PersonaCode              string                 `json:"persona_code"`
-	PersonaName              string                 `json:"persona_name"`
-	Description              string                 `json:"description"`
-	VoiceID                  string                 `json:"voice_id"`
-	Tone                     string                 `json:"tone"`
-	EmotionalDepth           float64                `json:"emotional_depth"`
-	NarrativeFreedom         float64                `json:"narrative_freedom"`
-	MaxSessionDurationMinutes int                    `json:"max_session_duration_minutes"`
-	MaxDailyInteractions     int                    `json:"max_daily_interactions"`
-	MaxIntimacyLevel         float64                `json:"max_intimacy_level"`
-	RequireProfessionalOversight bool                `json:"require_professional_oversight"`
-	CanOverridePatientRefusal bool                   `json:"can_override_patient_refusal"`
-	AllowedTools             []string               `json:"allowed_tools"`
-	ProhibitedTools          []string               `json:"prohibited_tools"`
-	AllowedTopics            []string               `json:"allowed_topics"`
-	ProhibitedTopics         []string               `json:"prohibited_topics"`
-	SystemInstructionTemplate string                 `json:"system_instruction_template"`
-	Priorities               []string               `json:"priorities"`
-	IsActive                 bool                   `json:"is_active"`
-	CreatedAt                time.Time              `json:"created_at"`
+	ID                           string    `json:"id"`
+	PersonaCode                  string    `json:"persona_code"`
+	PersonaName                  string    `json:"persona_name"`
+	Description                  string    `json:"description"`
+	VoiceID                      string    `json:"voice_id"`
+	Tone                         string    `json:"tone"`
+	EmotionalDepth               float64   `json:"emotional_depth"`
+	NarrativeFreedom             float64   `json:"narrative_freedom"`
+	MaxSessionDurationMinutes    int       `json:"max_session_duration_minutes"`
+	MaxDailyInteractions         int       `json:"max_daily_interactions"`
+	MaxIntimacyLevel             float64   `json:"max_intimacy_level"`
+	RequireProfessionalOversight bool      `json:"require_professional_oversight"`
+	CanOverridePatientRefusal    bool      `json:"can_override_patient_refusal"`
+	AllowedTools                 []string  `json:"allowed_tools"`
+	ProhibitedTools              []string  `json:"prohibited_tools"`
+	AllowedTopics                []string  `json:"allowed_topics"`
+	ProhibitedTopics             []string  `json:"prohibited_topics"`
+	SystemInstructionTemplate    string    `json:"system_instruction_template"`
+	Priorities                   []string  `json:"priorities"`
+	IsActive                     bool      `json:"is_active"`
+	CreatedAt                    time.Time `json:"created_at"`
 }
 
 // PersonaSession representa uma sessão ativa de persona
 type PersonaSession struct {
-	ID                   string    `json:"id"`
-	PatientID            int64     `json:"patient_id"`
-	PersonaCode          string    `json:"persona_code"`
-	StartedAt            time.Time `json:"started_at"`
-	EndedAt              *time.Time `json:"ended_at,omitempty"`
-	DurationSeconds      *int      `json:"duration_seconds,omitempty"`
-	TriggerReason        string    `json:"trigger_reason"`
-	TriggeredBy          string    `json:"triggered_by"`
-	ToolsUsed            []string  `json:"tools_used"`
-	BoundaryViolations   int       `json:"boundary_violations"`
-	EscalationRequired   bool      `json:"escalation_required"`
-	Status               string    `json:"status"`
+	ID                 string     `json:"id"`
+	PatientID          int64      `json:"patient_id"`
+	PersonaCode        string     `json:"persona_code"`
+	StartedAt          time.Time  `json:"started_at"`
+	EndedAt            *time.Time `json:"ended_at,omitempty"`
+	DurationSeconds    *int       `json:"duration_seconds,omitempty"`
+	TriggerReason      string     `json:"trigger_reason"`
+	TriggeredBy        string     `json:"triggered_by"`
+	ToolsUsed          []string   `json:"tools_used"`
+	BoundaryViolations int        `json:"boundary_violations"`
+	EscalationRequired bool       `json:"escalation_required"`
+	Status             string     `json:"status"`
 }
 
 // ============================================================================
@@ -81,6 +84,7 @@ func (pm *PersonaManager) ActivatePersona(
 ) (*PersonaSession, error) {
 
 	log.Printf("🎭 [PERSONA] Ativando persona '%s' para paciente %d", personaCode, patientID)
+	ctx := context.Background()
 
 	// 1. Verificar se persona existe
 	exists, err := pm.personaExists(personaCode)
@@ -98,26 +102,29 @@ func (pm *PersonaManager) ActivatePersona(
 	}
 
 	// 3. Criar nova sessão
-	query := `
-		INSERT INTO persona_sessions (
-			patient_id, persona_code, trigger_reason, triggered_by, status
-		) VALUES ($1, $2, $3, $4, 'active')
-		RETURNING id, started_at
-	`
+	now := time.Now()
+	content := map[string]interface{}{
+		"patient_id":     patientID,
+		"persona_code":   personaCode,
+		"trigger_reason": triggerReason,
+		"triggered_by":   triggeredBy,
+		"status":         "active",
+		"started_at":     now.Format(time.RFC3339),
+	}
+
+	newID, err := pm.db.Insert(ctx, "persona_sessions", content)
+	if err != nil {
+		return nil, fmt.Errorf("erro ao criar sessão: %w", err)
+	}
 
 	session := &PersonaSession{
+		ID:            fmt.Sprintf("%d", newID),
 		PatientID:     patientID,
 		PersonaCode:   personaCode,
 		TriggerReason: triggerReason,
 		TriggeredBy:   triggeredBy,
 		Status:        "active",
-	}
-
-	err = pm.db.QueryRow(query, patientID, personaCode, triggerReason, triggeredBy).
-		Scan(&session.ID, &session.StartedAt)
-
-	if err != nil {
-		return nil, fmt.Errorf("erro ao criar sessão: %w", err)
+		StartedAt:     now,
 	}
 
 	log.Printf("✅ [PERSONA] Persona '%s' ativada (session_id: %s)", personaCode, session.ID)
@@ -127,55 +134,70 @@ func (pm *PersonaManager) ActivatePersona(
 
 // GetCurrentPersona retorna persona ativa de um paciente
 func (pm *PersonaManager) GetCurrentPersona(patientID int64) (*PersonaSession, error) {
-	query := `
-		SELECT id, patient_id, persona_code, started_at, ended_at, duration_seconds,
-		       trigger_reason, triggered_by, tools_used, boundary_violations,
-		       escalation_required, status
-		FROM persona_sessions
-		WHERE patient_id = $1 AND status = 'active'
-		ORDER BY started_at DESC
-		LIMIT 1
-	`
+	ctx := context.Background()
 
-	session := &PersonaSession{}
-	var toolsUsedStr sql.NullString
-
-	err := pm.db.QueryRow(query, patientID).Scan(
-		&session.ID, &session.PatientID, &session.PersonaCode,
-		&session.StartedAt, &session.EndedAt, &session.DurationSeconds,
-		&session.TriggerReason, &session.TriggeredBy,
-		&toolsUsedStr, &session.BoundaryViolations,
-		&session.EscalationRequired, &session.Status,
-	)
-
-	if err == sql.ErrNoRows {
-		return nil, nil // Nenhuma persona ativa
-	}
-
+	rows, err := pm.db.QueryByLabel(ctx, "persona_sessions",
+		" AND n.patient_id = $pid AND n.status = $status",
+		map[string]interface{}{
+			"pid":    patientID,
+			"status": "active",
+		}, 0)
 	if err != nil {
 		return nil, err
 	}
 
-	// Parse tools_used array
-	if toolsUsedStr.Valid {
-		session.ToolsUsed = parsePostgresArray(toolsUsedStr.String)
+	if len(rows) == 0 {
+		return nil, nil // Nenhuma persona ativa
 	}
 
+	// Find the most recent session by started_at
+	var latest map[string]interface{}
+	var latestTime time.Time
+	for _, row := range rows {
+		t := database.GetTime(row, "started_at")
+		if latest == nil || t.After(latestTime) {
+			latest = row
+			latestTime = t
+		}
+	}
+
+	session := mapToSession(latest)
 	return session, nil
 }
 
 // deactivateCurrentPersona desativa persona ativa atual
 func (pm *PersonaManager) deactivateCurrentPersona(patientID int64) error {
-	query := `
-		UPDATE persona_sessions
-		SET status = 'completed',
-		    ended_at = NOW()
-		WHERE patient_id = $1
-		  AND status = 'active'
-	`
+	ctx := context.Background()
 
-	_, err := pm.db.Exec(query, patientID)
-	return err
+	// Find all active sessions for this patient
+	rows, err := pm.db.QueryByLabel(ctx, "persona_sessions",
+		" AND n.patient_id = $pid AND n.status = $status",
+		map[string]interface{}{
+			"pid":    patientID,
+			"status": "active",
+		}, 0)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now().Format(time.RFC3339)
+	for _, row := range rows {
+		id := database.GetInt64(row, "id")
+		if id == 0 {
+			continue
+		}
+		err := pm.db.Update(ctx, "persona_sessions",
+			map[string]interface{}{"id": id},
+			map[string]interface{}{
+				"status":   "completed",
+				"ended_at": now,
+			})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // ============================================================================
@@ -195,16 +217,26 @@ func (pm *PersonaManager) IsToolAllowed(patientID int64, toolName string) (bool,
 		session = &PersonaSession{PersonaCode: "companion"}
 	}
 
-	// 2. Verificar permissão via SQL function
-	var allowed bool
-	query := `SELECT is_tool_allowed($1, $2)`
-
-	err = pm.db.QueryRow(query, session.PersonaCode, toolName).Scan(&allowed)
+	// 2. Verificar permissão via definição da persona
+	definition, err := pm.GetPersonaDefinition(session.PersonaCode)
 	if err != nil {
 		return false, fmt.Sprintf("erro ao verificar permissão: %v", err)
 	}
 
-	if !allowed {
+	// Check prohibited tools first
+	for _, t := range definition.ProhibitedTools {
+		if strings.EqualFold(t, toolName) {
+			return false, fmt.Sprintf("ferramenta '%s' não permitida para persona '%s'", toolName, session.PersonaCode)
+		}
+	}
+
+	// If allowed_tools is defined, check if tool is in the list
+	if len(definition.AllowedTools) > 0 {
+		for _, t := range definition.AllowedTools {
+			if strings.EqualFold(t, toolName) {
+				return true, ""
+			}
+		}
 		return false, fmt.Sprintf("ferramenta '%s' não permitida para persona '%s'", toolName, session.PersonaCode)
 	}
 
@@ -218,14 +250,16 @@ func (pm *PersonaManager) RecordToolUsage(patientID int64, toolName string) erro
 		return fmt.Errorf("nenhuma persona ativa")
 	}
 
-	query := `
-		UPDATE persona_sessions
-		SET tools_used = array_append(COALESCE(tools_used, ARRAY[]::TEXT[]), $1)
-		WHERE id = $2
-	`
+	ctx := context.Background()
 
-	_, err = pm.db.Exec(query, toolName, session.ID)
-	return err
+	// Append tool to the tools_used list
+	toolsUsed := append(session.ToolsUsed, toolName)
+
+	return pm.db.Update(ctx, "persona_sessions",
+		map[string]interface{}{"id": database.GetInt64(mapFromSession(session), "id")},
+		map[string]interface{}{
+			"tools_used": toolsUsed,
+		})
 }
 
 // ============================================================================
@@ -239,14 +273,25 @@ func (pm *PersonaManager) RecordBoundaryViolation(patientID int64, violationRule
 		return fmt.Errorf("nenhuma persona ativa")
 	}
 
-	query := `
-		UPDATE persona_sessions
-		SET boundary_violations = boundary_violations + 1,
-		    violated_rules = array_append(COALESCE(violated_rules, ARRAY[]::TEXT[]), $1)
-		WHERE id = $2
-	`
+	ctx := context.Background()
 
-	_, err = pm.db.Exec(query, violationRule, session.ID)
+	sessionID := sessionIDToInt64(session.ID)
+
+	// Get current node to read existing violated_rules
+	node, err := pm.db.GetNodeByID(ctx, "persona_sessions", sessionID)
+	if err != nil || node == nil {
+		return fmt.Errorf("sessão não encontrada")
+	}
+
+	violatedRules := getStringSlice(node, "violated_rules")
+	violatedRules = append(violatedRules, violationRule)
+
+	err = pm.db.Update(ctx, "persona_sessions",
+		map[string]interface{}{"id": sessionID},
+		map[string]interface{}{
+			"boundary_violations": session.BoundaryViolations + 1,
+			"violated_rules":      violatedRules,
+		})
 
 	if err == nil {
 		log.Printf("⚠️ [PERSONA] Violação de limite registrada: %s (session: %s)", violationRule, session.ID)
@@ -290,16 +335,28 @@ func (pm *PersonaManager) CheckSessionLimits(patientID int64) (bool, []string) {
 }
 
 func (pm *PersonaManager) countDailyInteractions(patientID int64) (int, error) {
-	query := `
-		SELECT COUNT(*)
-		FROM persona_sessions
-		WHERE patient_id = $1
-		  AND started_at > NOW() - INTERVAL '24 hours'
-	`
+	ctx := context.Background()
 
-	var count int
-	err := pm.db.QueryRow(query, patientID).Scan(&count)
-	return count, err
+	// Query all sessions for this patient, then filter by time in Go
+	rows, err := pm.db.QueryByLabel(ctx, "persona_sessions",
+		" AND n.patient_id = $pid",
+		map[string]interface{}{
+			"pid": patientID,
+		}, 0)
+	if err != nil {
+		return 0, err
+	}
+
+	cutoff := time.Now().Add(-24 * time.Hour)
+	count := 0
+	for _, row := range rows {
+		startedAt := database.GetTime(row, "started_at")
+		if startedAt.After(cutoff) {
+			count++
+		}
+	}
+
+	return count, nil
 }
 
 // ============================================================================
@@ -335,70 +392,73 @@ func (pm *PersonaManager) GetSystemInstructions(patientID int64) (string, error)
 
 // GetPersonaDefinition retorna definição de uma persona
 func (pm *PersonaManager) GetPersonaDefinition(personaCode string) (*PersonaDefinition, error) {
-	query := `
-		SELECT
-			id, persona_code, persona_name, description, voice_id, tone,
-			emotional_depth, narrative_freedom,
-			max_session_duration_minutes, max_daily_interactions,
-			max_intimacy_level, require_professional_oversight, can_override_patient_refusal,
-			allowed_tools, prohibited_tools, allowed_topics, prohibited_topics,
-			system_instruction_template, priorities, is_active, created_at
-		FROM persona_definitions
-		WHERE persona_code = $1
-	`
+	ctx := context.Background()
 
-	pd := &PersonaDefinition{}
-	var allowedToolsStr, prohibitedToolsStr, allowedTopicsStr, prohibitedTopicsStr, prioritiesStr string
-
-	err := pm.db.QueryRow(query, personaCode).Scan(
-		&pd.ID, &pd.PersonaCode, &pd.PersonaName, &pd.Description, &pd.VoiceID, &pd.Tone,
-		&pd.EmotionalDepth, &pd.NarrativeFreedom,
-		&pd.MaxSessionDurationMinutes, &pd.MaxDailyInteractions,
-		&pd.MaxIntimacyLevel, &pd.RequireProfessionalOversight, &pd.CanOverridePatientRefusal,
-		&allowedToolsStr, &prohibitedToolsStr, &allowedTopicsStr, &prohibitedTopicsStr,
-		&pd.SystemInstructionTemplate, &prioritiesStr, &pd.IsActive, &pd.CreatedAt,
-	)
-
+	rows, err := pm.db.QueryByLabel(ctx, "persona_definitions",
+		" AND n.persona_code = $code",
+		map[string]interface{}{
+			"code": personaCode,
+		}, 1)
 	if err != nil {
 		return nil, err
 	}
 
-	// Parse arrays
-	pd.AllowedTools = parsePostgresArray(allowedToolsStr)
-	pd.ProhibitedTools = parsePostgresArray(prohibitedToolsStr)
-	pd.AllowedTopics = parsePostgresArray(allowedTopicsStr)
-	pd.ProhibitedTopics = parsePostgresArray(prohibitedTopicsStr)
-	pd.Priorities = parsePostgresArray(prioritiesStr)
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("persona '%s' não encontrada", personaCode)
+	}
+
+	m := rows[0]
+	pd := &PersonaDefinition{
+		ID:                           database.GetString(m, "id"),
+		PersonaCode:                  database.GetString(m, "persona_code"),
+		PersonaName:                  database.GetString(m, "persona_name"),
+		Description:                  database.GetString(m, "description"),
+		VoiceID:                      database.GetString(m, "voice_id"),
+		Tone:                         database.GetString(m, "tone"),
+		EmotionalDepth:               database.GetFloat64(m, "emotional_depth"),
+		NarrativeFreedom:             database.GetFloat64(m, "narrative_freedom"),
+		MaxSessionDurationMinutes:    int(database.GetInt64(m, "max_session_duration_minutes")),
+		MaxDailyInteractions:         int(database.GetInt64(m, "max_daily_interactions")),
+		MaxIntimacyLevel:             database.GetFloat64(m, "max_intimacy_level"),
+		RequireProfessionalOversight: database.GetBool(m, "require_professional_oversight"),
+		CanOverridePatientRefusal:    database.GetBool(m, "can_override_patient_refusal"),
+		AllowedTools:                 getStringSlice(m, "allowed_tools"),
+		ProhibitedTools:              getStringSlice(m, "prohibited_tools"),
+		AllowedTopics:                getStringSlice(m, "allowed_topics"),
+		ProhibitedTopics:             getStringSlice(m, "prohibited_topics"),
+		SystemInstructionTemplate:    database.GetString(m, "system_instruction_template"),
+		Priorities:                   getStringSlice(m, "priorities"),
+		IsActive:                     database.GetBool(m, "is_active"),
+		CreatedAt:                    database.GetTime(m, "created_at"),
+	}
 
 	return pd, nil
 }
 
 // ListAllPersonas lista todas as personas disponíveis
 func (pm *PersonaManager) ListAllPersonas() ([]PersonaDefinition, error) {
-	query := `
-		SELECT
-			id, persona_code, persona_name, description, tone,
-			emotional_depth, narrative_freedom, is_active
-		FROM persona_definitions
-		WHERE is_active = TRUE
-		ORDER BY persona_code
-	`
+	ctx := context.Background()
 
-	rows, err := pm.db.Query(query)
+	rows, err := pm.db.QueryByLabel(ctx, "persona_definitions",
+		" AND n.is_active = $active",
+		map[string]interface{}{
+			"active": true,
+		}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	personas := []PersonaDefinition{}
-	for rows.Next() {
-		var pd PersonaDefinition
-		err := rows.Scan(
-			&pd.ID, &pd.PersonaCode, &pd.PersonaName, &pd.Description, &pd.Tone,
-			&pd.EmotionalDepth, &pd.NarrativeFreedom, &pd.IsActive,
-		)
-		if err != nil {
-			continue
+	for _, m := range rows {
+		pd := PersonaDefinition{
+			ID:               database.GetString(m, "id"),
+			PersonaCode:      database.GetString(m, "persona_code"),
+			PersonaName:      database.GetString(m, "persona_name"),
+			Description:      database.GetString(m, "description"),
+			Tone:             database.GetString(m, "tone"),
+			EmotionalDepth:   database.GetFloat64(m, "emotional_depth"),
+			NarrativeFreedom: database.GetFloat64(m, "narrative_freedom"),
+			IsActive:         database.GetBool(m, "is_active"),
 		}
 		personas = append(personas, pd)
 	}
@@ -412,38 +472,37 @@ func (pm *PersonaManager) ListAllPersonas() ([]PersonaDefinition, error) {
 
 // EvaluateActivationRules avalia regras e retorna persona que deve ser ativada
 func (pm *PersonaManager) EvaluateActivationRules(patientID int64) (string, string, error) {
+	ctx := context.Background()
+
 	// Buscar estado do paciente
 	patientState, err := pm.getPatientState(patientID)
 	if err != nil {
 		return "", "", err
 	}
 
-	// Buscar regras ativas ordenadas por prioridade
-	query := `
-		SELECT id, rule_name, target_persona_code, conditions
-		FROM persona_activation_rules
-		WHERE is_active = TRUE
-		ORDER BY priority ASC
-	`
-
-	rows, err := pm.db.Query(query)
+	// Buscar regras ativas (NQL doesn't support ORDER BY, sort in Go)
+	rows, err := pm.db.QueryByLabel(ctx, "persona_activation_rules",
+		" AND n.is_active = $active",
+		map[string]interface{}{
+			"active": true,
+		}, 0)
 	if err != nil {
 		return "", "", err
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var ruleID, ruleName, targetPersona string
-		var conditionsJSON []byte
+	// Sort by priority (ascending)
+	sortByPriority(rows)
 
-		err := rows.Scan(&ruleID, &ruleName, &targetPersona, &conditionsJSON)
-		if err != nil {
-			continue
-		}
+	for _, m := range rows {
+		ruleName := database.GetString(m, "rule_name")
+		targetPersona := database.GetString(m, "target_persona_code")
+		conditionsRaw := database.GetString(m, "conditions")
 
 		// Avaliar condições
 		var conditions map[string]interface{}
-		json.Unmarshal(conditionsJSON, &conditions)
+		if conditionsRaw != "" {
+			json.Unmarshal([]byte(conditionsRaw), &conditions)
+		}
 
 		if pm.evaluateConditions(conditions, patientState) {
 			log.Printf("✅ [PERSONA] Regra '%s' ativada → persona '%s'", ruleName, targetPersona)
@@ -474,46 +533,57 @@ func (pm *PersonaManager) evaluateConditions(conditions map[string]interface{}, 
 
 // getPatientState obtém estado atual do paciente
 func (pm *PersonaManager) getPatientState(patientID int64) (map[string]interface{}, error) {
+	ctx := context.Background()
 	state := make(map[string]interface{})
 
 	// Buscar PHQ-9 mais recente
-	var phq9Score sql.NullFloat64
-	pm.db.QueryRow(`
-		SELECT total_score
-		FROM clinical_assessments
-		WHERE patient_id = $1 AND assessment_type = 'PHQ-9'
-		ORDER BY completed_at DESC
-		LIMIT 1
-	`, patientID).Scan(&phq9Score)
-
-	if phq9Score.Valid {
-		state["phq9_score"] = phq9Score.Float64
+	phq9Rows, err := pm.db.QueryByLabel(ctx, "clinical_assessments",
+		" AND n.patient_id = $pid AND n.assessment_type = $atype",
+		map[string]interface{}{
+			"pid":   patientID,
+			"atype": "PHQ-9",
+		}, 0)
+	if err == nil && len(phq9Rows) > 0 {
+		// Find most recent by completed_at
+		latest := findMostRecent(phq9Rows, "completed_at")
+		if latest != nil {
+			score := database.GetFloat64(latest, "total_score")
+			state["phq9_score"] = score
+		}
 	}
 
 	// Buscar C-SSRS
-	var cssrsScore sql.NullInt64
-	pm.db.QueryRow(`
-		SELECT total_score
-		FROM clinical_assessments
-		WHERE patient_id = $1 AND assessment_type = 'C-SSRS'
-		ORDER BY completed_at DESC
-		LIMIT 1
-	`, patientID).Scan(&cssrsScore)
-
-	if cssrsScore.Valid {
-		state["cssrs_score"] = cssrsScore.Int64
+	cssrsRows, err := pm.db.QueryByLabel(ctx, "clinical_assessments",
+		" AND n.patient_id = $pid AND n.assessment_type = $atype",
+		map[string]interface{}{
+			"pid":   patientID,
+			"atype": "C-SSRS",
+		}, 0)
+	if err == nil && len(cssrsRows) > 0 {
+		latest := findMostRecent(cssrsRows, "completed_at")
+		if latest != nil {
+			score := database.GetInt64(latest, "total_score")
+			state["cssrs_score"] = score
+		}
 	}
 
-	// Verificar se houve crise recente
-	var crisisRecent bool
-	pm.db.QueryRow(`
-		SELECT EXISTS (
-			SELECT 1 FROM crisis_events
-			WHERE patient_id = $1
-			  AND occurred_at > NOW() - INTERVAL '24 hours'
-		)
-	`, patientID).Scan(&crisisRecent)
-
+	// Verificar se houve crise recente (últimas 24 horas)
+	crisisRows, err := pm.db.QueryByLabel(ctx, "crisis_events",
+		" AND n.patient_id = $pid",
+		map[string]interface{}{
+			"pid": patientID,
+		}, 0)
+	crisisRecent := false
+	if err == nil {
+		cutoff := time.Now().Add(-24 * time.Hour)
+		for _, row := range crisisRows {
+			occurredAt := database.GetTime(row, "occurred_at")
+			if occurredAt.After(cutoff) {
+				crisisRecent = true
+				break
+			}
+		}
+	}
 	state["crisis_detected"] = crisisRecent
 
 	return state, nil
@@ -524,12 +594,143 @@ func (pm *PersonaManager) getPatientState(patientID int64) (map[string]interface
 // ============================================================================
 
 func (pm *PersonaManager) personaExists(personaCode string) (bool, error) {
-	var exists bool
-	query := `SELECT EXISTS(SELECT 1 FROM persona_definitions WHERE persona_code = $1 AND is_active = TRUE)`
-	err := pm.db.QueryRow(query, personaCode).Scan(&exists)
-	return exists, err
+	ctx := context.Background()
+
+	rows, err := pm.db.QueryByLabel(ctx, "persona_definitions",
+		" AND n.persona_code = $code AND n.is_active = $active",
+		map[string]interface{}{
+			"code":   personaCode,
+			"active": true,
+		}, 1)
+	if err != nil {
+		return false, err
+	}
+
+	return len(rows) > 0, nil
 }
 
+// mapToSession converts a NietzscheDB content map to a PersonaSession.
+func mapToSession(m map[string]interface{}) *PersonaSession {
+	s := &PersonaSession{
+		ID:                 fmt.Sprintf("%v", database.GetInt64(m, "id")),
+		PatientID:          database.GetInt64(m, "patient_id"),
+		PersonaCode:        database.GetString(m, "persona_code"),
+		StartedAt:          database.GetTime(m, "started_at"),
+		EndedAt:            database.GetTimePtr(m, "ended_at"),
+		TriggerReason:      database.GetString(m, "trigger_reason"),
+		TriggeredBy:        database.GetString(m, "triggered_by"),
+		ToolsUsed:          getStringSlice(m, "tools_used"),
+		BoundaryViolations: int(database.GetInt64(m, "boundary_violations")),
+		EscalationRequired: database.GetBool(m, "escalation_required"),
+		Status:             database.GetString(m, "status"),
+	}
+
+	// DurationSeconds (nullable int)
+	if v, ok := m["duration_seconds"]; ok && v != nil {
+		dur := int(database.GetInt64(m, "duration_seconds"))
+		s.DurationSeconds = &dur
+	}
+
+	return s
+}
+
+// mapFromSession builds a content map from a session (for extracting id).
+func mapFromSession(s *PersonaSession) map[string]interface{} {
+	return map[string]interface{}{
+		"id": parseSessionID(s.ID),
+	}
+}
+
+// parseSessionID converts the string session ID back to int64.
+func parseSessionID(id string) int64 {
+	var n int64
+	fmt.Sscanf(id, "%d", &n)
+	return n
+}
+
+// sessionIDToInt64 is an alias for parseSessionID.
+func sessionIDToInt64(id string) int64 {
+	return parseSessionID(id)
+}
+
+// getStringSlice extracts a []string from a NietzscheDB content map.
+// Handles both []interface{} (JSON-decoded) and []string (native).
+func getStringSlice(m map[string]interface{}, key string) []string {
+	v, ok := m[key]
+	if !ok || v == nil {
+		return []string{}
+	}
+
+	switch arr := v.(type) {
+	case []interface{}:
+		result := make([]string, 0, len(arr))
+		for _, item := range arr {
+			if s, ok := item.(string); ok {
+				result = append(result, s)
+			} else {
+				result = append(result, fmt.Sprintf("%v", item))
+			}
+		}
+		return result
+	case []string:
+		return arr
+	case string:
+		// Could be a JSON-encoded array or a Postgres-style array
+		if strings.HasPrefix(arr, "[") {
+			var parsed []string
+			if json.Unmarshal([]byte(arr), &parsed) == nil {
+				return parsed
+			}
+		}
+		if strings.HasPrefix(arr, "{") {
+			return parsePostgresArray(arr)
+		}
+		if arr == "" {
+			return []string{}
+		}
+		return []string{arr}
+	}
+
+	return []string{}
+}
+
+// findMostRecent finds the row with the most recent timestamp in the given field.
+func findMostRecent(rows []map[string]interface{}, field string) map[string]interface{} {
+	if len(rows) == 0 {
+		return nil
+	}
+
+	best := rows[0]
+	bestTime := database.GetTime(best, field)
+
+	for _, row := range rows[1:] {
+		t := database.GetTime(row, field)
+		if t.After(bestTime) {
+			best = row
+			bestTime = t
+		}
+	}
+
+	return best
+}
+
+// sortByPriority sorts rows by the "priority" field (ascending, lowest first).
+func sortByPriority(rows []map[string]interface{}) {
+	// Simple insertion sort (rule sets are small)
+	for i := 1; i < len(rows); i++ {
+		key := rows[i]
+		keyPri := database.GetInt64(key, "priority")
+		j := i - 1
+		for j >= 0 && database.GetInt64(rows[j], "priority") > keyPri {
+			rows[j+1] = rows[j]
+			j--
+		}
+		rows[j+1] = key
+	}
+}
+
+// parsePostgresArray parses a Postgres-style array string like {a,b,c}.
+// Kept for backward compatibility with data that may still use this format.
 func parsePostgresArray(pgArray string) []string {
 	if len(pgArray) < 2 {
 		return []string{}

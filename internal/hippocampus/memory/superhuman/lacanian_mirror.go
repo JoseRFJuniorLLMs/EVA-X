@@ -5,21 +5,22 @@ package superhuman
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"strings"
 	"time"
+
+	"eva/internal/brainstem/database"
 )
 
 // LacanianMirror generates objective reflections for the patient
 // PRINCIPLE: EVA does not interpret. EVA reflects.
 // All outputs are data-driven questions that let the patient discover insights.
 type LacanianMirror struct {
-	db *sql.DB
+	db *database.DB
 }
 
 // NewLacanianMirror creates a new mirror service
-func NewLacanianMirror(db *sql.DB) *LacanianMirror {
+func NewLacanianMirror(db *database.DB) *LacanianMirror {
 	return &LacanianMirror{db: db}
 }
 

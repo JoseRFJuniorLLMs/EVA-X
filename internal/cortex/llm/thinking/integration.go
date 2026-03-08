@@ -8,9 +8,9 @@ package thinking
 
 import (
 	"context"
-	"database/sql"
 	"log"
 
+	"eva/internal/brainstem/database"
 	"eva/internal/brainstem/push"
 )
 
@@ -22,7 +22,7 @@ type HealthTriageService struct {
 }
 
 // NewHealthTriageService cria um novo serviço de triagem de saúde
-func NewHealthTriageService(apiKey string, db *sql.DB, pushService *push.FirebaseService) (*HealthTriageService, error) {
+func NewHealthTriageService(apiKey string, db *database.DB, pushService *push.FirebaseService) (*HealthTriageService, error) {
 	thinkingClient, err := NewThinkingClient(apiKey)
 	if err != nil {
 		return nil, err

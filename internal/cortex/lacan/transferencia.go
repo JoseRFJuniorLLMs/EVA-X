@@ -5,9 +5,11 @@ package lacan
 
 import (
 	"context"
-	"database/sql"
+	"fmt"
 	"strings"
 	"time"
+
+	"eva/internal/brainstem/database"
 )
 
 // TransferenceType representa o tipo de transferência detectada
@@ -24,11 +26,11 @@ const (
 
 // TransferenceService detecta e gerencia transferência
 type TransferenceService struct {
-	db *sql.DB
+	db *database.DB
 }
 
 // NewTransferenceService cria novo serviço
-func NewTransferenceService(db *sql.DB) *TransferenceService {
+func NewTransferenceService(db *database.DB) *TransferenceService {
 	return &TransferenceService{db: db}
 }
 
@@ -94,38 +96,68 @@ func (t *TransferenceService) DetectTransference(ctx context.Context, idosoID in
 
 // recordTransference grava transferência no banco
 func (t *TransferenceService) recordTransference(ctx context.Context, idosoID int64, tipo TransferenceType, phrase string) error {
-	query := `
-		INSERT INTO transferencia_markers (idoso_id, marker_type, phrase, timestamp)
-		VALUES ($1, $2, $3, $4)
-	`
-	_, err := t.db.ExecContext(ctx, query, idosoID, string(tipo), phrase, time.Now())
+	content := map[string]interface{}{
+		"idoso_id":    idosoID,
+		"marker_type": string(tipo),
+		"phrase":      phrase,
+		"timestamp":   time.Now().Format(time.RFC3339),
+	}
+	_, err := t.db.Insert(ctx, "transferencia_markers", content)
 	return err
 }
 
 // GetDominantTransference retorna o tipo de transferência mais frequente
 func (t *TransferenceService) GetDominantTransference(ctx context.Context, idosoID int64) (TransferenceType, error) {
-	query := `
-		SELECT marker_type, COUNT(*) as freq
-		FROM transferencia_markers
-		WHERE idoso_id = $1
-		  AND timestamp > NOW() - INTERVAL '30 days'
-		GROUP BY marker_type
-		ORDER BY freq DESC
-		LIMIT 1
-	`
+	// Buscar todos os markers dos últimos 30 dias para este idoso
+	cutoff := time.Now().AddDate(0, 0, -30)
+	params := map[string]interface{}{
+		"idoso_id": idosoID,
+	}
+	results, err := t.db.QueryByLabel(ctx, "transferencia_markers",
+		" AND n.idoso_id = $idoso_id", params, 0)
+	if err != nil {
+		return TRANSFERENCIA_NENHUMA, fmt.Errorf("erro ao buscar markers: %w", err)
+	}
 
-	var markerType string
-	var freq int
-	err := t.db.QueryRowContext(ctx, query, idosoID).Scan(&markerType, &freq)
-
-	if err == sql.ErrNoRows {
+	if len(results) == 0 {
 		return TRANSFERENCIA_NENHUMA, nil
 	}
-	if err != nil {
-		return TRANSFERENCIA_NENHUMA, err
+
+	// Contar frequência por tipo, filtrando por data em Go
+	freqMap := make(map[string]int)
+	for _, r := range results {
+		tsStr := database.GetString(r, "timestamp")
+		if tsStr == "" {
+			continue
+		}
+		ts, parseErr := time.Parse(time.RFC3339, tsStr)
+		if parseErr != nil {
+			continue
+		}
+		if ts.Before(cutoff) {
+			continue
+		}
+		mt := database.GetString(r, "marker_type")
+		if mt != "" {
+			freqMap[mt]++
+		}
 	}
 
-	return TransferenceType(markerType), nil
+	if len(freqMap) == 0 {
+		return TRANSFERENCIA_NENHUMA, nil
+	}
+
+	// Encontrar o tipo mais frequente
+	var dominant string
+	var maxFreq int
+	for mt, freq := range freqMap {
+		if freq > maxFreq {
+			maxFreq = freq
+			dominant = mt
+		}
+	}
+
+	return TransferenceType(dominant), nil
 }
 
 // GetTransferenceGuidance retorna orientação clínica baseada no tipo de transferência

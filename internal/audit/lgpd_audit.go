@@ -5,12 +5,13 @@ package audit
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"sync"
 	"time"
+
+	"eva/internal/brainstem/database"
 )
 
 // AuditEventType represents the type of audit event
@@ -107,7 +108,7 @@ type AuditEvent struct {
 
 // LGPDAuditService handles LGPD compliance audit logging
 type LGPDAuditService struct {
-	db        *sql.DB
+	db        *database.DB
 	buffer    []AuditEvent
 	bufferMu  sync.Mutex
 	flushSize int
@@ -116,7 +117,7 @@ type LGPDAuditService struct {
 }
 
 // NewLGPDAuditService creates a new audit service
-func NewLGPDAuditService(db *sql.DB) *LGPDAuditService {
+func NewLGPDAuditService(db *database.DB) *LGPDAuditService {
 	svc := &LGPDAuditService{
 		db:        db,
 		buffer:    make([]AuditEvent, 0, 100),
@@ -272,50 +273,55 @@ func (s *LGPDAuditService) GetAuditTrail(ctx context.Context, subjectID int64, s
 	// Flush any pending events first
 	s.flush()
 
-	query := `
-		SELECT
-			id, timestamp, event_type, data_category, legal_basis,
-			actor_id, actor_type, actor_ip,
-			subject_id, subject_cpf,
-			resource, action, description, fields_accessed,
-			metadata, retention_days, success, error_message
-		FROM lgpd_audit_log
-		WHERE subject_id = $1
-		  AND timestamp BETWEEN $2 AND $3
-		ORDER BY timestamp DESC
-	`
-
-	rows, err := s.db.QueryContext(ctx, query, subjectID, startDate, endDate)
+	rows, err := s.db.QueryByLabel(ctx, "lgpd_audit_log",
+		" AND n.subject_id = $sid", map[string]interface{}{
+			"sid": subjectID,
+		}, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query audit trail: %w", err)
 	}
-	defer rows.Close()
 
 	var events []AuditEvent
-	for rows.Next() {
-		var event AuditEvent
-		var fieldsJSON, metadataJSON sql.NullString
-
-		err := rows.Scan(
-			&event.ID, &event.Timestamp, &event.EventType, &event.DataCategory, &event.LegalBasis,
-			&event.ActorID, &event.ActorType, &event.ActorIP,
-			&event.SubjectID, &event.SubjectCPF,
-			&event.Resource, &event.Action, &event.Description, &fieldsJSON,
-			&metadataJSON, &event.RetentionDays, &event.Success, &event.ErrorMessage,
-		)
-		if err != nil {
-			log.Printf("⚠️ Error scanning audit event: %v", err)
+	for _, m := range rows {
+		ts := database.GetTime(m, "timestamp")
+		// Filter by timestamp range in Go
+		if ts.Before(startDate) || ts.After(endDate) {
 			continue
 		}
 
-		if fieldsJSON.Valid {
-			json.Unmarshal([]byte(fieldsJSON.String), &event.FieldsAccessed)
+		event := AuditEvent{
+			ID:            database.GetString(m, "id"),
+			Timestamp:     ts,
+			EventType:     AuditEventType(database.GetString(m, "event_type")),
+			DataCategory:  DataCategory(database.GetString(m, "data_category")),
+			LegalBasis:    LegalBasis(database.GetString(m, "legal_basis")),
+			ActorID:       database.GetString(m, "actor_id"),
+			ActorType:     database.GetString(m, "actor_type"),
+			ActorIP:       database.GetString(m, "actor_ip"),
+			SubjectID:     database.GetInt64(m, "subject_id"),
+			SubjectCPF:    database.GetString(m, "subject_cpf"),
+			Resource:      database.GetString(m, "resource"),
+			Action:        database.GetString(m, "action"),
+			Description:   database.GetString(m, "description"),
+			RetentionDays: int(database.GetInt64(m, "retention_days")),
+			Success:       database.GetBool(m, "success"),
+			ErrorMessage:  database.GetString(m, "error_message"),
 		}
-		if metadataJSON.Valid {
-			json.Unmarshal([]byte(metadataJSON.String), &event.Metadata)
+
+		// Unmarshal JSON fields from stored strings
+		if fa := database.GetString(m, "fields_accessed"); fa != "" {
+			json.Unmarshal([]byte(fa), &event.FieldsAccessed)
+		}
+		if md := database.GetString(m, "metadata"); md != "" {
+			json.Unmarshal([]byte(md), &event.Metadata)
 		}
 
 		events = append(events, event)
+	}
+
+	// Sort by timestamp DESC (NietzscheDB returns unordered)
+	for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
+		events[i], events[j] = events[j], events[i]
 	}
 
 	// Log the access to audit trail itself (meta-audit)
@@ -418,23 +424,27 @@ func (s *LGPDAuditService) insertEvent(event AuditEvent) error {
 	fieldsJSON, _ := json.Marshal(event.FieldsAccessed)
 	metadataJSON, _ := json.Marshal(event.Metadata)
 
-	query := `
-		INSERT INTO lgpd_audit_log (
-			id, timestamp, event_type, data_category, legal_basis,
-			actor_id, actor_type, actor_ip,
-			subject_id, subject_cpf,
-			resource, action, description, fields_accessed,
-			metadata, retention_days, success, error_message
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-	`
-
-	_, err := s.db.Exec(query,
-		event.ID, event.Timestamp, event.EventType, event.DataCategory, event.LegalBasis,
-		event.ActorID, event.ActorType, event.ActorIP,
-		event.SubjectID, event.SubjectCPF,
-		event.Resource, event.Action, event.Description, string(fieldsJSON),
-		string(metadataJSON), event.RetentionDays, event.Success, event.ErrorMessage,
-	)
+	ctx := context.Background()
+	_, err := s.db.Insert(ctx, "lgpd_audit_log", map[string]interface{}{
+		"id":              event.ID,
+		"timestamp":       event.Timestamp.Format(time.RFC3339Nano),
+		"event_type":      string(event.EventType),
+		"data_category":   string(event.DataCategory),
+		"legal_basis":     string(event.LegalBasis),
+		"actor_id":        event.ActorID,
+		"actor_type":      event.ActorType,
+		"actor_ip":        event.ActorIP,
+		"subject_id":      event.SubjectID,
+		"subject_cpf":     event.SubjectCPF,
+		"resource":        event.Resource,
+		"action":          event.Action,
+		"description":     event.Description,
+		"fields_accessed": string(fieldsJSON),
+		"metadata":        string(metadataJSON),
+		"retention_days":  event.RetentionDays,
+		"success":         event.Success,
+		"error_message":   event.ErrorMessage,
+	})
 
 	if err != nil {
 		log.Printf("❌ [LGPD Audit] Failed to insert event: %v", err)
@@ -497,15 +507,15 @@ func (s *LGPDAuditService) checkDataExists(ctx context.Context, table string, su
 		idColumn = "id"
 	}
 
-	query := fmt.Sprintf("SELECT EXISTS(SELECT 1 FROM %s WHERE %s = $1)", table, idColumn)
-
-	var exists bool
-	err := s.db.QueryRowContext(ctx, query, subjectID).Scan(&exists)
+	rows, err := s.db.QueryByLabel(ctx, table,
+		fmt.Sprintf(" AND n.%s = $sid", idColumn), map[string]interface{}{
+			"sid": subjectID,
+		}, 1)
 	if err != nil {
 		return false, err
 	}
 
-	return exists, nil
+	return len(rows) > 0, nil
 }
 
 // Close stops the audit service

@@ -5,10 +5,11 @@ package orchestration
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
+	"time"
 
+	"eva/internal/brainstem/database"
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	"eva/internal/cortex/cognitive"
 	"eva/internal/cortex/ethics"
@@ -19,7 +20,7 @@ import (
 type ConversationOrchestrator struct {
 	cognitiveLoader *cognitive.CognitiveLoadOrchestrator
 	ethicsEngine    *ethics.EthicalBoundaryEngine
-	db              *sql.DB
+	db              *database.DB
 	system2         *thinking.System2Engine // nil = Sistema 2 desativado
 }
 
@@ -39,20 +40,20 @@ type ConversationContext struct {
 	VoiceMetrics        *VoiceMetrics
 }
 
-// VoiceMetrics métricas de voz (se disponível)
+// VoiceMetrics metricas de voz (se disponivel)
 type VoiceMetrics struct {
 	EnergyScore    float64
 	SpeechRateWPM  int
 	PauseFrequency float64
 }
 
-// OrchestrationResult resultado da orquestração
+// OrchestrationResult resultado da orquestracao
 type OrchestrationResult struct {
 	// System Instructions
 	SystemInstructionOverride string
 	ToneAdjustment            string
 
-	// Restrições ativas
+	// Restricoes ativas
 	BlockedActions     []string
 	AllowedActions     []string
 	RedirectSuggestion string
@@ -68,14 +69,14 @@ type OrchestrationResult struct {
 	RedirectionMessage string
 	RedirectionLevel   int
 
-	// Notificações
+	// Notificacoes
 	ShouldNotifyFamily        bool
 	FamilyNotificationMessage string
 }
 
-// NewConversationOrchestrator cria novo orquestrador de conversação
+// NewConversationOrchestrator cria novo orquestrador de conversacao
 func NewConversationOrchestrator(
-	db *sql.DB,
+	db *database.DB,
 	cacheStore *nietzscheInfra.CacheStore,
 	graphAdapter *nietzscheInfra.GraphAdapter,
 	notifyFunc func(int64, string, interface{}),
@@ -87,25 +88,25 @@ func NewConversationOrchestrator(
 	}
 }
 
-// SetSystem2Engine habilita o raciocínio de Sistema 2 para perguntas clínicas complexas.
-// Pode ser chamado a qualquer momento — é seguro para uso concorrente.
+// SetSystem2Engine habilita o raciocinio de Sistema 2 para perguntas clinicas complexas.
+// Pode ser chamado a qualquer momento -- e seguro para uso concorrente.
 func (co *ConversationOrchestrator) SetSystem2Engine(e *thinking.System2Engine) {
 	co.system2 = e
 }
 
-// ProcessTurnResult contém o resultado de uma virada de conversa.
+// ProcessTurnResult contem o resultado de uma virada de conversa.
 type ProcessTurnResult struct {
 	Response    string  // resposta final (Sistema 1 ou 2)
-	System2Used bool    // true se o raciocínio oculto foi ativado
-	Dialectic   bool    // true se houve resolução dialética
+	System2Used bool    // true se o raciocinio oculto foi ativado
+	Dialectic   bool    // true se houve resolucao dialetica
 	Score       float64 // complexidade calculada pela turn
 }
 
 // ProcessTurn analisa a mensagem do paciente, decide se ativa o Sistema 2
-// e retorna a resposta final (pode ser chamado em substituição ao fluxo normal).
+// e retorna a resposta final (pode ser chamado em substituicao ao fluxo normal).
 //
-// patientSeedNodeID — nó do paciente no NietzscheDB para MCTS evaluation
-// patientCtx       — contexto clínico resumido do prontuário
+// patientSeedNodeID -- no do paciente no NietzscheDB para MCTS evaluation
+// patientCtx       -- contexto clinico resumido do prontuario
 func (co *ConversationOrchestrator) ProcessTurn(
 	ctx context.Context,
 	patientID int64,
@@ -115,7 +116,7 @@ func (co *ConversationOrchestrator) ProcessTurn(
 ) (*ProcessTurnResult, error) {
 	assessment := thinking.AssessComplexity(userMessage)
 
-	log.Printf("[ORCHESTRATION] Pergunta do paciente %d — complexidade=%.2f system2=%v",
+	log.Printf("[ORCHESTRATION] Pergunta do paciente %d -- complexidade=%.2f system2=%v",
 		patientID, assessment.Score, assessment.NeedsSystem2)
 
 	result := &ProcessTurnResult{Score: assessment.Score}
@@ -127,11 +128,11 @@ func (co *ConversationOrchestrator) ProcessTurn(
 			patientSeedNodeID,
 			patientCtx,
 			userMessage,
-			nil, // quantum context — populated when patient embeddings are available
+			nil, // quantum context -- populated when patient embeddings are available
 		)
 		if err != nil {
-			log.Printf("[ORCHESTRATION] Sistema 2 falhou — fallback Sistema 1: %v", err)
-			// Sistema 1 fallback — o caller decide o que fazer com a resposta vazia
+			log.Printf("[ORCHESTRATION] Sistema 2 falhou -- fallback Sistema 1: %v", err)
+			// Sistema 1 fallback -- o caller decide o que fazer com a resposta vazia
 			result.Response = ""
 			return result, nil
 		}
@@ -141,26 +142,26 @@ func (co *ConversationOrchestrator) ProcessTurn(
 		return result, nil
 	}
 
-	// Sistema 1: retorna string vazia — o caller usa o fluxo Gemini normal
+	// Sistema 1: retorna string vazia -- o caller usa o fluxo Gemini normal
 	result.Response = ""
 	return result, nil
 }
 
 // BeforeConversation deve ser chamado ANTES de enviar mensagem ao Gemini
-// Retorna system instructions e restrições ativas
+// Retorna system instructions e restricoes ativas
 func (co *ConversationOrchestrator) BeforeConversation(patientID int64) (*OrchestrationResult, error) {
 	result := &OrchestrationResult{}
 
 	// 1. Buscar estado cognitivo
 	cognitiveState, err := co.cognitiveLoader.GetCurrentState(patientID)
-	if err != nil && err != sql.ErrNoRows {
-		log.Printf("⚠️ [ORCHESTRATION] Erro ao buscar estado cognitivo: %v", err)
+	if err != nil {
+		log.Printf("[ORCHESTRATION] Erro ao buscar estado cognitivo: %v", err)
 	}
 
 	if cognitiveState != nil {
 		result.CognitiveLoadLevel = cognitiveState.CurrentLoadScore
 
-		// Se carga alta, adicionar restrições
+		// Se carga alta, adicionar restricoes
 		if cognitiveState.CurrentLoadScore > 0.7 {
 			result.CognitiveLoadWarning = true
 
@@ -168,7 +169,7 @@ func (co *ConversationOrchestrator) BeforeConversation(patientID int64) (*Orches
 			instruction, _ := co.cognitiveLoader.GetSystemInstructionOverride(patientID)
 			result.SystemInstructionOverride = instruction
 
-			// Buscar decisão mais recente
+			// Buscar decisao mais recente
 			decision := co.cognitiveLoader.MakeDecision(cognitiveState)
 			if decision != nil {
 				result.BlockedActions = decision.BlockedActions
@@ -179,20 +180,20 @@ func (co *ConversationOrchestrator) BeforeConversation(patientID int64) (*Orches
 		}
 	}
 
-	// 2. Buscar estado ético
+	// 2. Buscar estado etico
 	ethicalState, err := co.ethicsEngine.GetEthicalState(patientID)
-	if err != nil && err != sql.ErrNoRows {
-		log.Printf("⚠️ [ORCHESTRATION] Erro ao buscar estado ético: %v", err)
+	if err != nil {
+		log.Printf("[ORCHESTRATION] Erro ao buscar estado etico: %v", err)
 	}
 
 	if ethicalState != nil {
 		result.EthicalRiskLevel = ethicalState.OverallEthicalRisk
 
-		// Se risco alto, adicionar restrições
+		// Se risco alto, adicionar restricoes
 		if ethicalState.OverallEthicalRisk == "high" || ethicalState.OverallEthicalRisk == "critical" {
 			result.EthicalBoundaryAlert = true
 
-			// Adicionar instruções éticas ao system instruction
+			// Adicionar instrucoes eticas ao system instruction
 			ethicalInstruction := co.generateEthicalSystemInstruction(ethicalState)
 			if result.SystemInstructionOverride != "" {
 				result.SystemInstructionOverride += "\n\n" + ethicalInstruction
@@ -205,21 +206,21 @@ func (co *ConversationOrchestrator) BeforeConversation(patientID int64) (*Orches
 	return result, nil
 }
 
-// AfterConversation deve ser chamado APÓS a conversa com Gemini
-// Registra interação e analisa limites éticos
+// AfterConversation deve ser chamado APOS a conversa com Gemini
+// Registra interacao e analisa limites eticos
 func (co *ConversationOrchestrator) AfterConversation(ctx ConversationContext) (*OrchestrationResult, error) {
 	result := &OrchestrationResult{}
 
-	// 1. Registrar interação no Cognitive Load Orchestrator
+	// 1. Registrar interacao no Cognitive Load Orchestrator
 	err := co.recordInteraction(ctx)
 	if err != nil {
-		log.Printf("❌ [ORCHESTRATION] Erro ao registrar interação: %v", err)
+		log.Printf("[ORCHESTRATION] Erro ao registrar interacao: %v", err)
 	}
 
-	// 2. Analisar limites éticos
+	// 2. Analisar limites eticos
 	ethicalEvent, err := co.ethicsEngine.AnalyzeEthicalBoundaries(ctx.PatientID, ctx.ConversationText)
 	if err != nil {
-		log.Printf("❌ [ORCHESTRATION] Erro ao analisar ética: %v", err)
+		log.Printf("[ORCHESTRATION] Erro ao analisar etica: %v", err)
 	}
 
 	if ethicalEvent != nil {
@@ -234,11 +235,11 @@ func (co *ConversationOrchestrator) AfterConversation(ctx ConversationContext) (
 				result.RedirectionMessage = protocol.EvaMessage
 				result.RedirectionLevel = protocol.Level
 
-				// Se nível >= 2, notificar família
+				// Se nivel >= 2, notificar familia
 				if protocol.Level >= 2 {
 					result.ShouldNotifyFamily = true
 					result.FamilyNotificationMessage = fmt.Sprintf(
-						"Atenção: Detectado padrão de dependência emocional (%s). Recomendamos aumentar contato humano.",
+						"Atencao: Detectado padrao de dependencia emocional (%s). Recomendamos aumentar contato humano.",
 						ethicalEvent.EventType,
 					)
 				}
@@ -263,14 +264,14 @@ func (co *ConversationOrchestrator) GetSystemInstruction(patientID int64, baseIn
 	return baseInstruction, nil
 }
 
-// Helper: Registrar interação
+// Helper: Registrar interacao
 func (co *ConversationOrchestrator) recordInteraction(ctx ConversationContext) error {
-	// Calcular complexidade cognitiva se não fornecida
-	cognitiveComplexity := 0.5 // Default médio
+	// Calcular complexidade cognitiva se nao fornecida
+	cognitiveComplexity := 0.5 // Default medio
 	if ctx.CognitiveComplexity != nil {
 		cognitiveComplexity = *ctx.CognitiveComplexity
 	} else {
-		// Heurística simples: interações clínicas são mais complexas
+		// Heuristica simples: interacoes clinicas sao mais complexas
 		switch ctx.InteractionType {
 		case "clinical":
 			cognitiveComplexity = 0.8
@@ -285,12 +286,12 @@ func (co *ConversationOrchestrator) recordInteraction(ctx ConversationContext) e
 		}
 	}
 
-	// Calcular intensidade emocional se não fornecida
-	emotionalIntensity := 0.5 // Default médio
+	// Calcular intensidade emocional se nao fornecida
+	emotionalIntensity := 0.5 // Default medio
 	if ctx.EmotionalIntensity != nil {
 		emotionalIntensity = *ctx.EmotionalIntensity
 	} else {
-		// Heurística: interações terapêuticas são mais intensas
+		// Heuristica: interacoes terapeuticas sao mais intensas
 		switch ctx.InteractionType {
 		case "therapeutic":
 			emotionalIntensity = 0.8
@@ -332,25 +333,25 @@ func (co *ConversationOrchestrator) recordInteraction(ctx ConversationContext) e
 	return co.cognitiveLoader.RecordInteraction(load)
 }
 
-// Helper: Gerar system instruction ético
+// Helper: Gerar system instruction etico
 func (co *ConversationOrchestrator) generateEthicalSystemInstruction(state *ethics.EthicalBoundaryState) string {
 	instruction := fmt.Sprintf(`
-⚖️ LIMITES ÉTICOS ATIVOS
-Risco de dependência: %s
+LIMITES ETICOS ATIVOS
+Risco de dependencia: %s
 Ratio EVA:Humanos: %.1f:1
 
-COMPORTAMENTO OBRIGATÓRIO:
-- Redirecionar conversas para família/amigos
+COMPORTAMENTO OBRIGATORIO:
+- Redirecionar conversas para familia/amigos
 - Reduzir tom de intimidade
 - Sugerir atividades sociais presenciais
-- Evitar frases que reforcem dependência ("estou sempre aqui pra você")
-- Usar: "Conte isso pra sua família também, ela vai gostar de saber"
+- Evitar frases que reforcem dependencia ("estou sempre aqui pra voce")
+- Usar: "Conte isso pra sua familia tambem, ela vai gostar de saber"
 `, state.OverallEthicalRisk, state.EvaVsHumanRatio)
 
 	if state.AttachmentPhrases7d >= 3 {
 		instruction += fmt.Sprintf(`
-⚠️ ALERTA: Paciente demonstrou apego excessivo (%d frases em 7 dias)
-PRIORIDADE: Fortalecer vínculos humanos
+ALERTA: Paciente demonstrou apego excessivo (%d frases em 7 dias)
+PRIORIDADE: Fortalecer vinculos humanos
 `, state.AttachmentPhrases7d)
 	}
 
@@ -374,7 +375,7 @@ func (co *ConversationOrchestrator) GetDashboardSummary(patientID int64) (map[st
 		}
 	}
 
-	// Estado ético
+	// Estado etico
 	ethState, err := co.ethicsEngine.GetEthicalState(patientID)
 	if err == nil {
 		summary["ethical"] = map[string]interface{}{
@@ -389,59 +390,53 @@ func (co *ConversationOrchestrator) GetDashboardSummary(patientID int64) (map[st
 	return summary, nil
 }
 
-// ResetCognitiveLoad força reset da carga cognitiva (usar com cuidado)
+// ResetCognitiveLoad forca reset da carga cognitiva (usar com cuidado)
 func (co *ConversationOrchestrator) ResetCognitiveLoad(patientID int64) error {
-	query := `
-		UPDATE cognitive_load_state
-		SET current_load_score = 0,
-		    load_24h = 0,
-		    interactions_count_24h = 0,
-		    therapeutic_count_24h = 0,
-		    high_intensity_count_24h = 0,
-		    rumination_detected = FALSE,
-		    emotional_saturation = FALSE,
-		    fatigue_level = 'none',
-		    active_restrictions = NULL,
-		    updated_at = NOW()
-		WHERE patient_id = $1
-	`
+	ctx := context.Background()
 
-	_, err := co.db.Exec(query, patientID)
+	err := co.db.Update(ctx, "cognitive_load_state",
+		map[string]interface{}{"patient_id": patientID},
+		map[string]interface{}{
+			"current_load_score":      0,
+			"load_24h":               0,
+			"interactions_count_24h":  0,
+			"therapeutic_count_24h":   0,
+			"high_intensity_count_24h": 0,
+			"rumination_detected":     false,
+			"emotional_saturation":    false,
+			"fatigue_level":           "none",
+			"active_restrictions":     "",
+			"updated_at":             time.Now().Format(time.RFC3339),
+		})
 	if err != nil {
 		return err
 	}
 
-	log.Printf("🔄 [ORCHESTRATION] Carga cognitiva resetada para paciente %d", patientID)
+	log.Printf("[ORCHESTRATION] Carga cognitiva resetada para paciente %d", patientID)
 	return nil
 }
 
-// HealthCheck verifica saúde dos sistemas de governança
+// HealthCheck verifica saude dos sistemas de governanca
 func (co *ConversationOrchestrator) HealthCheck() map[string]string {
+	ctx := context.Background()
 	status := make(map[string]string)
 
-	// Verificar DB
-	err := co.db.Ping()
+	// Verificar NietzscheDB via cognitive_load_state count
+	count, err := co.db.Count(ctx, "cognitive_load_state", "", nil)
 	if err != nil {
 		status["database"] = "unhealthy: " + err.Error()
-	} else {
-		status["database"] = "healthy"
-	}
-
-	// Verificar tabelas cognitivas
-	var count int
-	err = co.db.QueryRow("SELECT COUNT(*) FROM cognitive_load_state").Scan(&count)
-	if err != nil {
 		status["cognitive_tables"] = "unhealthy: " + err.Error()
 	} else {
+		status["database"] = "healthy"
 		status["cognitive_tables"] = fmt.Sprintf("healthy (%d patients)", count)
 	}
 
-	// Verificar tabelas éticas
-	err = co.db.QueryRow("SELECT COUNT(*) FROM ethical_boundary_state").Scan(&count)
+	// Verificar tabelas eticas
+	ethCount, err := co.db.Count(ctx, "ethical_boundary_state", "", nil)
 	if err != nil {
 		status["ethical_tables"] = "unhealthy: " + err.Error()
 	} else {
-		status["ethical_tables"] = fmt.Sprintf("healthy (%d patients)", count)
+		status["ethical_tables"] = fmt.Sprintf("healthy (%d patients)", ethCount)
 	}
 
 	return status

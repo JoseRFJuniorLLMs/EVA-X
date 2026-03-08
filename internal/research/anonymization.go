@@ -4,10 +4,12 @@
 package research
 
 import (
-	"database/sql"
+	"context"
 	"fmt"
 	"log"
 	"time"
+
+	"eva/internal/brainstem/database"
 )
 
 // ============================================================================
@@ -15,10 +17,10 @@ import (
 // ============================================================================
 
 type Anonymizer struct {
-	db *sql.DB
+	db *database.DB
 }
 
-func NewAnonymizer(db *sql.DB) *Anonymizer {
+func NewAnonymizer(db *database.DB) *Anonymizer {
 	return &Anonymizer{db: db}
 }
 
@@ -160,61 +162,90 @@ func (a *Anonymizer) collectDatapointForDate(patientID int64, anonymousID string
 	return dp, nil
 }
 
-// saveDatapoint salva datapoint anonimizado no banco
+// saveDatapoint salva datapoint anonimizado no NietzscheDB
 func (a *Anonymizer) saveDatapoint(cohortID string, dp *ResearchDatapoint) error {
-	query := `
-		INSERT INTO research_datapoints (
-			cohort_id, anonymous_patient_id, observation_date, days_since_baseline,
-			phq9_score, gad7_score, cssrs_score,
-			medication_adherence_7d, sleep_hours_avg_7d, sleep_efficiency,
-			voice_pitch_mean_hz, voice_pitch_std_hz, voice_jitter, voice_shimmer,
-			voice_hnr_db, speech_rate_wpm, pause_duration_avg_ms,
-			social_isolation_days, interaction_count_7d, cognitive_load_score,
-			crisis_occurred, crisis_severity, hospitalization, treatment_dropout,
-			data_completeness, data_quality_score,
-			is_anonymized, anonymization_date
-		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-			$18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28
-		)
-		ON CONFLICT (cohort_id, anonymous_patient_id, observation_date) DO UPDATE
-		SET phq9_score = EXCLUDED.phq9_score,
-		    gad7_score = EXCLUDED.gad7_score,
-		    data_completeness = EXCLUDED.data_completeness
-	`
+	ctx := context.Background()
 
-	_, err := a.db.Exec(
-		query,
-		cohortID, dp.AnonymousPatientID, dp.ObservationDate, dp.DaysSinceBaseline,
-		dp.PHQ9Score, dp.GAD7Score, dp.CSSRSScore,
-		dp.MedicationAdherence7d, dp.SleepHoursAvg7d, dp.SleepEfficiency,
-		dp.VoicePitchMeanHz, dp.VoicePitchStdHz, dp.VoiceJitter, dp.VoiceShimmer,
-		dp.VoiceHNRDb, dp.SpeechRateWPM, dp.PauseDurationAvgMs,
-		dp.SocialIsolationDays, dp.InteractionCount7d, dp.CognitiveLoadScore,
-		dp.CrisisOccurred, dp.CrisisSeverity, dp.Hospitalization, dp.TreatmentDropout,
-		dp.DataCompleteness, dp.DataQualityScore,
-		true, time.Now(),
-	)
+	content := map[string]interface{}{
+		"node_label":             "research_datapoint",
+		"cohort_id":              cohortID,
+		"anonymous_patient_id":   dp.AnonymousPatientID,
+		"observation_date":       dp.ObservationDate,
+		"days_since_baseline":    dp.DaysSinceBaseline,
+		"phq9_score":             dp.PHQ9Score,
+		"gad7_score":             dp.GAD7Score,
+		"cssrs_score":            dp.CSSRSScore,
+		"medication_adherence_7d": dp.MedicationAdherence7d,
+		"sleep_hours_avg_7d":     dp.SleepHoursAvg7d,
+		"sleep_efficiency":       dp.SleepEfficiency,
+		"voice_pitch_mean_hz":    dp.VoicePitchMeanHz,
+		"voice_pitch_std_hz":     dp.VoicePitchStdHz,
+		"voice_jitter":           dp.VoiceJitter,
+		"voice_shimmer":          dp.VoiceShimmer,
+		"voice_hnr_db":           dp.VoiceHNRDb,
+		"speech_rate_wpm":        dp.SpeechRateWPM,
+		"pause_duration_avg_ms":  dp.PauseDurationAvgMs,
+		"social_isolation_days":  dp.SocialIsolationDays,
+		"interaction_count_7d":   dp.InteractionCount7d,
+		"cognitive_load_score":   dp.CognitiveLoadScore,
+		"crisis_occurred":        dp.CrisisOccurred,
+		"crisis_severity":        dp.CrisisSeverity,
+		"hospitalization":        dp.Hospitalization,
+		"treatment_dropout":      dp.TreatmentDropout,
+		"data_completeness":      dp.DataCompleteness,
+		"data_quality_score":     dp.DataQualityScore,
+		"is_anonymized":          true,
+		"anonymization_date":     time.Now(),
+	}
 
+	// Check if this datapoint already exists (upsert by cohort_id + anonymous_patient_id + observation_date)
+	existing, _ := a.db.QueryByLabel(ctx, "research_datapoint",
+		" AND n.cohort_id = $cohort_id AND n.anonymous_patient_id = $anon_id AND n.observation_date = $obs_date",
+		map[string]interface{}{
+			"cohort_id": cohortID,
+			"anon_id":   dp.AnonymousPatientID,
+			"obs_date":  dp.ObservationDate,
+		}, 1)
+
+	if len(existing) > 0 {
+		// Update existing
+		return a.db.Update(ctx, "research_datapoint",
+			map[string]interface{}{
+				"cohort_id":            cohortID,
+				"anonymous_patient_id": dp.AnonymousPatientID,
+				"observation_date":     dp.ObservationDate,
+			},
+			map[string]interface{}{
+				"phq9_score":        dp.PHQ9Score,
+				"gad7_score":        dp.GAD7Score,
+				"data_completeness": dp.DataCompleteness,
+			})
+	}
+
+	// Insert new
+	_, err := a.db.Insert(ctx, "research_datapoint", content)
 	return err
 }
 
 // ============================================================================
-// QUERIES DE COLETA DE DADOS
+// QUERIES DE COLETA DE DADOS (NietzscheDB)
 // ============================================================================
 
 func (a *Anonymizer) getPatientBaselineDate(patientID int64) (time.Time, error) {
-	// Baseline = primeira interação ou data de cadastro
-	query := `
-		SELECT MIN(data_criacao)
-		FROM idosos
-		WHERE id = $1
-	`
+	ctx := context.Background()
 
-	var baselineDate time.Time
-	err := a.db.QueryRow(query, patientID).Scan(&baselineDate)
-	if err != nil {
+	// Baseline = data de cadastro do paciente
+	row, err := a.db.GetNodeByID(ctx, "Idoso", patientID)
+	if err != nil || row == nil {
 		// Fallback: 6 meses atrás
+		return time.Now().AddDate(0, -6, 0), nil
+	}
+
+	baselineDate := database.GetTime(row, "data_criacao")
+	if baselineDate.IsZero() {
+		baselineDate = database.GetTime(row, "created_at")
+	}
+	if baselineDate.IsZero() {
 		baselineDate = time.Now().AddDate(0, -6, 0)
 	}
 
@@ -222,140 +253,217 @@ func (a *Anonymizer) getPatientBaselineDate(patientID int64) (time.Time, error) 
 }
 
 func (a *Anonymizer) getLatestPHQ9BeforeDate(patientID int64, date time.Time) (*float64, error) {
-	query := `
-		SELECT total_score
-		FROM clinical_assessments
-		WHERE patient_id = $1
-		  AND assessment_type = 'PHQ-9'
-		  AND completed_at <= $2
-		ORDER BY completed_at DESC
-		LIMIT 1
-	`
+	ctx := context.Background()
 
-	var score float64
-	err := a.db.QueryRow(query, patientID, date).Scan(&score)
-	if err != nil {
+	rows, err := a.db.QueryByLabel(ctx, "ClinicalAssessment",
+		" AND n.patient_id = $patient_id AND n.assessment_type = $type",
+		map[string]interface{}{"patient_id": patientID, "type": "PHQ-9"}, 0)
+	if err != nil || len(rows) == 0 {
 		return nil, err
 	}
 
-	return &score, nil
+	// Find the latest assessment before or on the given date
+	var latestScore *float64
+	var latestTime time.Time
+	for _, row := range rows {
+		completedAt := database.GetTime(row, "completed_at")
+		if completedAt.IsZero() || completedAt.After(date) {
+			continue
+		}
+		if latestScore == nil || completedAt.After(latestTime) {
+			latestTime = completedAt
+			score := database.GetFloat64(row, "total_score")
+			latestScore = &score
+		}
+	}
+
+	return latestScore, nil
 }
 
 func (a *Anonymizer) getLatestGAD7BeforeDate(patientID int64, date time.Time) (*float64, error) {
-	query := `
-		SELECT total_score
-		FROM clinical_assessments
-		WHERE patient_id = $1
-		  AND assessment_type = 'GAD-7'
-		  AND completed_at <= $2
-		ORDER BY completed_at DESC
-		LIMIT 1
-	`
+	ctx := context.Background()
 
-	var score float64
-	err := a.db.QueryRow(query, patientID, date).Scan(&score)
-	if err != nil {
+	rows, err := a.db.QueryByLabel(ctx, "ClinicalAssessment",
+		" AND n.patient_id = $patient_id AND n.assessment_type = $type",
+		map[string]interface{}{"patient_id": patientID, "type": "GAD-7"}, 0)
+	if err != nil || len(rows) == 0 {
 		return nil, err
 	}
 
-	return &score, nil
+	var latestScore *float64
+	var latestTime time.Time
+	for _, row := range rows {
+		completedAt := database.GetTime(row, "completed_at")
+		if completedAt.IsZero() || completedAt.After(date) {
+			continue
+		}
+		if latestScore == nil || completedAt.After(latestTime) {
+			latestTime = completedAt
+			score := database.GetFloat64(row, "total_score")
+			latestScore = &score
+		}
+	}
+
+	return latestScore, nil
 }
 
 func (a *Anonymizer) getMedicationAdherence7d(patientID int64, date time.Time) (*float64, error) {
-	query := `
-		SELECT
-			COUNT(*) FILTER (WHERE taken_at IS NOT NULL)::FLOAT /
-			NULLIF(COUNT(*), 0) AS adherence
-		FROM medication_logs
-		WHERE patient_id = $1
-		  AND scheduled_time BETWEEN $2 - INTERVAL '7 days' AND $2
-	`
+	ctx := context.Background()
+	sevenDaysAgo := date.AddDate(0, 0, -7)
 
-	var adherence float64
-	err := a.db.QueryRow(query, patientID, date).Scan(&adherence)
-	if err != nil {
+	rows, err := a.db.QueryByLabel(ctx, "MedicationLog",
+		" AND n.patient_id = $patient_id",
+		map[string]interface{}{"patient_id": patientID}, 0)
+	if err != nil || len(rows) == 0 {
 		return nil, err
 	}
 
+	// Filter to the 7-day window and calculate adherence
+	totalScheduled := 0
+	totalTaken := 0
+	for _, row := range rows {
+		scheduledTime := database.GetTime(row, "scheduled_time")
+		if scheduledTime.Before(sevenDaysAgo) || scheduledTime.After(date) {
+			continue
+		}
+		totalScheduled++
+		takenAt := database.GetTime(row, "taken_at")
+		if !takenAt.IsZero() {
+			totalTaken++
+		}
+	}
+
+	if totalScheduled == 0 {
+		return nil, nil
+	}
+
+	adherence := float64(totalTaken) / float64(totalScheduled)
 	return &adherence, nil
 }
 
 func (a *Anonymizer) getSleepMetrics7d(patientID int64, date time.Time) (*float64, *float64, error) {
-	query := `
-		SELECT
-			AVG(CAST(valor AS FLOAT)) as avg_hours,
-			AVG(CASE WHEN metadata->>'efficiency' IS NOT NULL
-			    THEN CAST(metadata->>'efficiency' AS FLOAT)
-			    ELSE 0.75 END) as avg_efficiency
-		FROM sinais_vitais
-		WHERE idoso_id = $1
-		  AND tipo = 'sono'
-		  AND data_medicao BETWEEN $2 - INTERVAL '7 days' AND $2
-	`
+	ctx := context.Background()
+	sevenDaysAgo := date.AddDate(0, 0, -7)
 
-	var hours, efficiency sql.NullFloat64
-	err := a.db.QueryRow(query, patientID, date).Scan(&hours, &efficiency)
-	if err != nil || !hours.Valid {
+	rows, err := a.db.QueryByLabel(ctx, "SinalVital",
+		" AND n.idoso_id = $idoso_id AND n.tipo = $tipo",
+		map[string]interface{}{"idoso_id": patientID, "tipo": "sono"}, 0)
+	if err != nil || len(rows) == 0 {
 		return nil, nil, err
 	}
 
-	h := hours.Float64
-	e := efficiency.Float64
-	return &h, &e, nil
+	var totalHours, totalEfficiency float64
+	count := 0
+	for _, row := range rows {
+		dataMedicao := database.GetTime(row, "data_medicao")
+		if dataMedicao.Before(sevenDaysAgo) || dataMedicao.After(date) {
+			continue
+		}
+		count++
+		totalHours += database.GetFloat64(row, "valor")
+		eff := database.GetFloat64(row, "efficiency")
+		if eff == 0 {
+			eff = 0.75 // default
+		}
+		totalEfficiency += eff
+	}
+
+	if count == 0 {
+		return nil, nil, nil
+	}
+
+	avgHours := totalHours / float64(count)
+	avgEfficiency := totalEfficiency / float64(count)
+	return &avgHours, &avgEfficiency, nil
 }
 
 func (a *Anonymizer) getVoiceMetrics7d(patientID int64, date time.Time) (map[string]*float64, error) {
-	query := `
-		SELECT
-			AVG(vpf.pitch_mean) as pitch_mean,
-			STDDEV(vpf.pitch_mean) as pitch_std,
-			AVG(vpf.jitter) as jitter,
-			AVG(vpf.shimmer) as shimmer,
-			AVG(vpf.hnr) as hnr,
-			AVG(vpf.speech_rate) as speech_rate,
-			AVG(vpf.pause_duration_avg_ms) as pause_duration
-		FROM voice_prosody_features vpf
-		JOIN voice_prosody_analyses vpa ON vpf.analysis_id = vpa.id
-		WHERE vpa.patient_id = $1
-		  AND vpa.created_at BETWEEN $2 - INTERVAL '7 days' AND $2
-	`
+	ctx := context.Background()
+	sevenDaysAgo := date.AddDate(0, 0, -7)
 
-	var pitchMean, pitchStd, jitter, shimmer, hnr, speechRate, pauseDuration sql.NullFloat64
-	err := a.db.QueryRow(query, patientID, date).Scan(
-		&pitchMean, &pitchStd, &jitter, &shimmer, &hnr, &speechRate, &pauseDuration,
-	)
-
-	if err != nil {
+	// Get voice analyses for this patient
+	analyses, err := a.db.QueryByLabel(ctx, "VoiceProsodyAnalysis",
+		" AND n.patient_id = $patient_id",
+		map[string]interface{}{"patient_id": patientID}, 0)
+	if err != nil || len(analyses) == 0 {
 		return nil, err
 	}
 
+	// Collect analysis IDs within the time window
+	var analysisIDs []int64
+	for _, a := range analyses {
+		createdAt := database.GetTime(a, "created_at")
+		if createdAt.Before(sevenDaysAgo) || createdAt.After(date) {
+			continue
+		}
+		id := database.GetInt64(a, "pg_id")
+		if id == 0 {
+			id = database.GetInt64(a, "id")
+		}
+		analysisIDs = append(analysisIDs, id)
+	}
+
+	if len(analysisIDs) == 0 {
+		return nil, nil
+	}
+
+	// Get voice features for these analyses
+	var allFeatures []map[string]interface{}
+	for _, aid := range analysisIDs {
+		features, err := a.db.QueryByLabel(ctx, "VoiceProsodyFeature",
+			" AND n.analysis_id = $analysis_id",
+			map[string]interface{}{"analysis_id": aid}, 0)
+		if err == nil {
+			allFeatures = append(allFeatures, features...)
+		}
+	}
+
+	if len(allFeatures) == 0 {
+		return nil, nil
+	}
+
+	// Calculate averages
+	var sumPitch, sumJitter, sumShimmer, sumHNR, sumSpeechRate, sumPause float64
+	var sumPitchStd float64
+	n := float64(len(allFeatures))
+
+	for _, f := range allFeatures {
+		sumPitch += database.GetFloat64(f, "pitch_mean")
+		sumPitchStd += database.GetFloat64(f, "pitch_std")
+		sumJitter += database.GetFloat64(f, "jitter")
+		sumShimmer += database.GetFloat64(f, "shimmer")
+		sumHNR += database.GetFloat64(f, "hnr")
+		sumSpeechRate += database.GetFloat64(f, "speech_rate")
+		sumPause += database.GetFloat64(f, "pause_duration_avg_ms")
+	}
+
 	metrics := make(map[string]*float64)
-	if pitchMean.Valid {
-		v := pitchMean.Float64
+	if sumPitch > 0 {
+		v := sumPitch / n
 		metrics["pitch_mean"] = &v
 	}
-	if pitchStd.Valid {
-		v := pitchStd.Float64
+	if sumPitchStd > 0 {
+		v := sumPitchStd / n
 		metrics["pitch_std"] = &v
 	}
-	if jitter.Valid {
-		v := jitter.Float64
+	if sumJitter > 0 {
+		v := sumJitter / n
 		metrics["jitter"] = &v
 	}
-	if shimmer.Valid {
-		v := shimmer.Float64
+	if sumShimmer > 0 {
+		v := sumShimmer / n
 		metrics["shimmer"] = &v
 	}
-	if hnr.Valid {
-		v := hnr.Float64
+	if sumHNR > 0 {
+		v := sumHNR / n
 		metrics["hnr"] = &v
 	}
-	if speechRate.Valid {
-		v := speechRate.Float64
+	if sumSpeechRate > 0 {
+		v := sumSpeechRate / n
 		metrics["speech_rate"] = &v
 	}
-	if pauseDuration.Valid {
-		v := pauseDuration.Float64
+	if sumPause > 0 {
+		v := sumPause / n
 		metrics["pause_duration"] = &v
 	}
 
@@ -363,78 +471,99 @@ func (a *Anonymizer) getVoiceMetrics7d(patientID int64, date time.Time) (map[str
 }
 
 func (a *Anonymizer) getSocialIsolationDays(patientID int64, date time.Time) (*int, error) {
-	query := `
-		SELECT COALESCE(
-			EXTRACT(DAY FROM $2 - MAX(call_time)),
-			999
-		)::INTEGER as days
-		FROM call_logs
-		WHERE patient_id = $1
-		  AND call_time <= $2
-		  AND call_type IN ('family', 'caregiver', 'friend')
-	`
+	ctx := context.Background()
 
-	var days int
-	err := a.db.QueryRow(query, patientID, date).Scan(&days)
+	rows, err := a.db.QueryByLabel(ctx, "CallLog",
+		" AND n.patient_id = $patient_id",
+		map[string]interface{}{"patient_id": patientID}, 0)
 	if err != nil {
 		return nil, err
 	}
 
+	// Find the most recent social call before or on the date
+	var latestCallTime time.Time
+	socialTypes := map[string]bool{"family": true, "caregiver": true, "friend": true}
+
+	for _, row := range rows {
+		callType := database.GetString(row, "call_type")
+		if !socialTypes[callType] {
+			continue
+		}
+		callTime := database.GetTime(row, "call_time")
+		if callTime.After(date) {
+			continue
+		}
+		if callTime.After(latestCallTime) {
+			latestCallTime = callTime
+		}
+	}
+
+	if latestCallTime.IsZero() {
+		days := 999
+		return &days, nil
+	}
+
+	days := int(date.Sub(latestCallTime).Hours() / 24)
 	return &days, nil
 }
 
 func (a *Anonymizer) getInteractionCount7d(patientID int64, date time.Time) (*int, error) {
-	query := `
-		SELECT COUNT(*)::INTEGER
-		FROM conversation_sessions
-		WHERE patient_id = $1
-		  AND started_at BETWEEN $2 - INTERVAL '7 days' AND $2
-	`
+	ctx := context.Background()
+	sevenDaysAgo := date.AddDate(0, 0, -7)
 
-	var count int
-	err := a.db.QueryRow(query, patientID, date).Scan(&count)
+	rows, err := a.db.QueryByLabel(ctx, "ConversationSession",
+		" AND n.patient_id = $patient_id",
+		map[string]interface{}{"patient_id": patientID}, 0)
 	if err != nil {
 		return nil, err
+	}
+
+	count := 0
+	for _, row := range rows {
+		startedAt := database.GetTime(row, "started_at")
+		if startedAt.Before(sevenDaysAgo) || startedAt.After(date) {
+			continue
+		}
+		count++
 	}
 
 	return &count, nil
 }
 
 func (a *Anonymizer) getCognitiveLoadScore(patientID int64, date time.Time) (*float64, error) {
-	query := `
-		SELECT current_load_score
-		FROM cognitive_load_state
-		WHERE patient_id = $1
-	`
+	ctx := context.Background()
 
-	var score float64
-	err := a.db.QueryRow(query, patientID).Scan(&score)
-	if err != nil {
+	rows, err := a.db.QueryByLabel(ctx, "CognitiveLoadState",
+		" AND n.patient_id = $patient_id",
+		map[string]interface{}{"patient_id": patientID}, 1)
+	if err != nil || len(rows) == 0 {
 		return nil, err
 	}
 
+	score := database.GetFloat64(rows[0], "current_load_score")
 	return &score, nil
 }
 
 func (a *Anonymizer) checkCrisisOnDate(patientID int64, date time.Time) (bool, *string, error) {
-	query := `
-		SELECT severity
-		FROM crisis_events
-		WHERE patient_id = $1
-		  AND DATE(occurred_at) = DATE($2)
-		LIMIT 1
-	`
+	ctx := context.Background()
 
-	var severity string
-	err := a.db.QueryRow(query, patientID, date).Scan(&severity)
-	if err == sql.ErrNoRows {
+	rows, err := a.db.QueryByLabel(ctx, "CrisisEvent",
+		" AND n.patient_id = $patient_id",
+		map[string]interface{}{"patient_id": patientID}, 0)
+	if err != nil || len(rows) == 0 {
 		return false, nil, nil
 	}
-	if err != nil {
-		return false, nil, err
+
+	dateStr := date.Format("2006-01-02")
+	for _, row := range rows {
+		occurredAt := database.GetTime(row, "occurred_at")
+		if occurredAt.Format("2006-01-02") == dateStr {
+			severity := database.GetString(row, "severity")
+			return true, &severity, nil
+		}
 	}
 
-	return true, &severity, nil
+	return false, nil, nil
 }
 
 func (a *Anonymizer) checkHospitalizationOnDate(patientID int64, date time.Time) (bool, error) {
@@ -525,8 +654,35 @@ func (a *Anonymizer) calculateDataQuality(dp *ResearchDatapoint) float64 {
 // ============================================================================
 
 func (a *Anonymizer) CalculateKAnonymity(cohortID string) (int, error) {
-	var kValue int
-	query := `SELECT calculate_k_anonymity($1, ARRAY['observation_date']::TEXT[])`
-	err := a.db.QueryRow(query, cohortID).Scan(&kValue)
-	return kValue, err
+	ctx := context.Background()
+
+	// Get all research datapoints for this cohort
+	rows, err := a.db.QueryByLabel(ctx, "research_datapoint",
+		" AND n.cohort_id = $cohort_id",
+		map[string]interface{}{"cohort_id": cohortID}, 0)
+	if err != nil {
+		return 0, err
+	}
+
+	if len(rows) == 0 {
+		return 0, nil
+	}
+
+	// Group by quasi-identifiers (observation_date) and find minimum group size
+	groups := make(map[string]int)
+	for _, row := range rows {
+		obsDate := database.GetTime(row, "observation_date")
+		key := obsDate.Format("2006-01-02")
+		groups[key]++
+	}
+
+	// K-anonymity = smallest group size
+	minK := len(rows) // start with max possible
+	for _, count := range groups {
+		if count < minK {
+			minK = count
+		}
+	}
+
+	return minK, err
 }

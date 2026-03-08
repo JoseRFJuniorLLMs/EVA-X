@@ -6,15 +6,16 @@ package learning
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
 	"eva/internal/brainstem/config"
+	"eva/internal/brainstem/database"
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	"eva/internal/hippocampus/knowledge"
 
@@ -51,7 +52,7 @@ type CurriculumItem struct {
 
 // AutonomousLearner motor de aprendizagem autonoma da EVA
 type AutonomousLearner struct {
-	db            *sql.DB
+	db            *database.DB
 	cfg           *config.Config
 	vectorAdapter *nietzscheInfra.VectorAdapter
 	embedSvc      *knowledge.EmbeddingService
@@ -60,7 +61,7 @@ type AutonomousLearner struct {
 }
 
 // NewAutonomousLearner cria um novo motor de aprendizagem
-func NewAutonomousLearner(db *sql.DB, cfg *config.Config, vectorAdapter *nietzscheInfra.VectorAdapter, embedSvc *knowledge.EmbeddingService) *AutonomousLearner {
+func NewAutonomousLearner(db *database.DB, cfg *config.Config, vectorAdapter *nietzscheInfra.VectorAdapter, embedSvc *knowledge.EmbeddingService) *AutonomousLearner {
 	if db == nil {
 		log.Warn().Msg("⚠️ [LEARNER] NietzscheDB unavailable — running in degraded mode (no curriculum)")
 	}
@@ -472,10 +473,17 @@ func (l *AutonomousLearner) AddToCurriculum(ctx context.Context, topic, category
 		priority = 3
 	}
 
-	_, err := l.db.ExecContext(ctx,
-		`INSERT INTO eva_curriculum (topic, category, priority, requested_by) VALUES ($1, $2, $3, $4)`,
-		topic, category, priority, requestedBy,
-	)
+	_, err := l.db.Insert(ctx, "eva_curriculum", map[string]interface{}{
+		"topic":          topic,
+		"category":       category,
+		"priority":       priority,
+		"requested_by":   requestedBy,
+		"status":         "pending",
+		"source_hint":    "",
+		"insights_count": 0,
+		"error_message":  "",
+		"created_at":     time.Now().Format(time.RFC3339),
+	})
 	return err
 }
 
@@ -484,34 +492,37 @@ func (l *AutonomousLearner) ListCurriculum(ctx context.Context, status string, l
 	if l.db == nil {
 		return nil, fmt.Errorf("NietzscheDB unavailable — cannot list curriculum")
 	}
-	query := `SELECT id, topic, category, priority, status, COALESCE(source_hint,''), requested_by, created_at, completed_at, insights_count FROM eva_curriculum`
-	args := []interface{}{}
 
+	extraWhere := ""
+	params := map[string]interface{}{}
 	if status != "" {
-		query += " WHERE status = $1"
-		args = append(args, status)
-	}
-	query += " ORDER BY priority DESC, created_at ASC"
-	if limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", limit)
+		extraWhere = " AND n.status = $status"
+		params["status"] = status
 	}
 
-	rows, err := l.db.QueryContext(ctx, query, args...)
+	rows, err := l.db.QueryByLabel(ctx, "eva_curriculum", extraWhere, params, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	var items []CurriculumItem
-	for rows.Next() {
-		var item CurriculumItem
-		if err := rows.Scan(&item.ID, &item.Topic, &item.Category, &item.Priority, &item.Status,
-			&item.SourceHint, &item.RequestedBy, &item.CreatedAt, &item.CompletedAt, &item.InsightsCount); err != nil {
-			continue
-		}
-		items = append(items, item)
+	for _, m := range rows {
+		items = append(items, contentToCurriculumItem(m))
 	}
-	return items, rows.Err()
+
+	// Sort by priority DESC, created_at ASC (in Go)
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Priority != items[j].Priority {
+			return items[i].Priority > items[j].Priority
+		}
+		return items[i].CreatedAt.Before(items[j].CreatedAt)
+	})
+
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+
+	return items, nil
 }
 
 // --- Helpers privados ---
@@ -520,39 +531,77 @@ func (l *AutonomousLearner) nextPendingTopic(ctx context.Context) (*CurriculumIt
 	if l.db == nil {
 		return nil, nil
 	}
-	var item CurriculumItem
-	err := l.db.QueryRowContext(ctx,
-		`SELECT id, topic, category, priority, status FROM eva_curriculum WHERE status = 'pending' ORDER BY priority DESC, created_at ASC LIMIT 1`,
-	).Scan(&item.ID, &item.Topic, &item.Category, &item.Priority, &item.Status)
 
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
+	rows, err := l.db.QueryByLabel(ctx, "eva_curriculum", " AND n.status = $status", map[string]interface{}{
+		"status": "pending",
+	}, 0)
 	if err != nil {
 		return nil, err
 	}
-	return &item, nil
+	if len(rows) == 0 {
+		return nil, nil
+	}
+
+	// Convert to CurriculumItem slice for sorting
+	items := make([]CurriculumItem, 0, len(rows))
+	for _, m := range rows {
+		items = append(items, contentToCurriculumItem(m))
+	}
+
+	// Sort by priority DESC, created_at ASC and take first
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Priority != items[j].Priority {
+			return items[i].Priority > items[j].Priority
+		}
+		return items[i].CreatedAt.Before(items[j].CreatedAt)
+	})
+
+	return &items[0], nil
 }
 
 func (l *AutonomousLearner) updateStatus(ctx context.Context, id int64, status, errMsg string) {
 	if l.db == nil {
 		return
 	}
-	if errMsg != "" {
-		l.db.ExecContext(ctx, `UPDATE eva_curriculum SET status = $1, error_message = $2 WHERE id = $3`, status, errMsg, id)
-	} else {
-		l.db.ExecContext(ctx, `UPDATE eva_curriculum SET status = $1 WHERE id = $2`, status, id)
+	updates := map[string]interface{}{
+		"status": status,
 	}
+	if errMsg != "" {
+		updates["error_message"] = errMsg
+	}
+	_ = l.db.Update(ctx, "eva_curriculum", map[string]interface{}{
+		"id": id,
+	}, updates)
 }
 
 func (l *AutonomousLearner) completeItem(ctx context.Context, id int64, insightsCount int) {
 	if l.db == nil {
 		return
 	}
-	l.db.ExecContext(ctx,
-		`UPDATE eva_curriculum SET status = 'completed', completed_at = NOW(), insights_count = $1 WHERE id = $2`,
-		insightsCount, id,
-	)
+	_ = l.db.Update(ctx, "eva_curriculum", map[string]interface{}{
+		"id": id,
+	}, map[string]interface{}{
+		"status":         "completed",
+		"completed_at":   time.Now().Format(time.RFC3339),
+		"insights_count": insightsCount,
+	})
+}
+
+// contentToCurriculumItem converts a NietzscheDB content map to a CurriculumItem.
+func contentToCurriculumItem(m map[string]interface{}) CurriculumItem {
+	return CurriculumItem{
+		ID:            database.GetInt64(m, "id"),
+		Topic:         database.GetString(m, "topic"),
+		Category:      database.GetString(m, "category"),
+		Priority:      int(database.GetInt64(m, "priority")),
+		Status:        database.GetString(m, "status"),
+		SourceHint:    database.GetString(m, "source_hint"),
+		RequestedBy:   database.GetString(m, "requested_by"),
+		CreatedAt:     database.GetTime(m, "created_at"),
+		CompletedAt:   database.GetTimePtr(m, "completed_at"),
+		InsightsCount: int(database.GetInt64(m, "insights_count")),
+		ErrorMessage:  database.GetString(m, "error_message"),
+	}
 }
 
 func (l *AutonomousLearner) extractText(result map[string]interface{}) string {

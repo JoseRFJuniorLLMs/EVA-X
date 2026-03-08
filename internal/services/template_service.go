@@ -5,11 +5,13 @@ package services
 
 import (
 	"bytes"
-	"database/sql"
+	"context"
 	"encoding/json"
 	"fmt"
 	"text/template"
+	"time"
 
+	"eva/internal/brainstem/database"
 	"eva/internal/brainstem/logger"
 
 	"github.com/rs/zerolog"
@@ -17,12 +19,12 @@ import (
 
 // TemplateService gerencia templates de prompts
 type TemplateService struct {
-	db  *sql.DB
+	db  *database.DB
 	log zerolog.Logger
 }
 
 // NewTemplateService cria nova instância
-func NewTemplateService(db *sql.DB) *TemplateService {
+func NewTemplateService(db *database.DB) *TemplateService {
 	return &TemplateService{
 		db:  db,
 		log: logger.Logger.With().Str("service", "template").Logger(),
@@ -80,166 +82,195 @@ func (s *TemplateService) BuildInstructions(idosoID int64) (string, error) {
 
 // getPromptData busca dados necessários para o template
 func (s *TemplateService) getPromptData(idosoID int64) (*PromptData, error) {
-	query := `
-		SELECT 
-			i.nome, 
-			EXTRACT(YEAR FROM AGE(i.data_nascimento)) as idade,
-			i.nivel_cognitivo, 
-			i.tom_voz,
-			i.limitacoes_auditivas, 
-			i.usa_aparelho_auditivo,
-			COALESCE(
-				(SELECT COUNT(*) = 0 FROM historico_ligacoes WHERE idoso_id = i.id),
-				true
-			) as primeira_interacao,
-			COALESCE(
-				(SELECT 
-					COUNT(CASE WHEN medicamento_tomado THEN 1 END)::float / 
-					NULLIF(COUNT(*)::float, 0) * 100
-				FROM agendamentos 
-				WHERE idoso_id = i.id AND tipo = 'lembrete_medicamento'),
-				0
-			) as taxa_adesao
-		FROM idosos i
-		WHERE i.id = $1
-	`
+	ctx := context.Background()
 
-	var data PromptData
-	err := s.db.QueryRow(query, idosoID).Scan(
-		&data.NomeIdoso,
-		&data.Idade,
-		&data.NivelCognitivo,
-		&data.TomVoz,
-		&data.LimitacoesAuditivas,
-		&data.UsaAparelhoAuditivo,
-		&data.PrimeiraInteracao,
-		&data.TaxaAdesao,
-	)
-
+	// Buscar dados do idoso
+	m, err := s.db.GetNodeByID(ctx, "idosos", idosoID)
 	if err != nil {
 		return nil, fmt.Errorf("erro ao buscar dados do idoso: %w", err)
 	}
+	if m == nil {
+		return nil, fmt.Errorf("idoso nao encontrado: %d", idosoID)
+	}
+
+	data := &PromptData{
+		NomeIdoso:           database.GetString(m, "nome"),
+		NivelCognitivo:      database.GetString(m, "nivel_cognitivo"),
+		TomVoz:              database.GetString(m, "tom_voz"),
+		LimitacoesAuditivas: database.GetBool(m, "limitacoes_auditivas"),
+		UsaAparelhoAuditivo: database.GetBool(m, "usa_aparelho_auditivo"),
+	}
+
+	// Calcular idade a partir de data_nascimento
+	dataNasc := database.GetTime(m, "data_nascimento")
+	if !dataNasc.IsZero() {
+		data.Idade = int(time.Since(dataNasc).Hours() / 24 / 365.25)
+	}
+
+	// Verificar se é primeira interação (sem histórico de ligações)
+	callCount, _ := s.db.Count(ctx, "historico_ligacoes",
+		" AND n.idoso_id = $idoso",
+		map[string]interface{}{"idoso": idosoID})
+	data.PrimeiraInteracao = callCount == 0
+
+	// Calcular taxa de adesão à medicação
+	agendamentos, _ := s.db.QueryByLabel(ctx, "agendamentos",
+		" AND n.idoso_id = $idoso AND n.tipo = $tipo",
+		map[string]interface{}{"idoso": idosoID, "tipo": "lembrete_medicamento"}, 0)
+
+	if len(agendamentos) > 0 {
+		tomados := 0
+		for _, a := range agendamentos {
+			if database.GetBool(a, "medicamento_tomado") {
+				tomados++
+			}
+		}
+		data.TaxaAdesao = float64(tomados) / float64(len(agendamentos)) * 100
+	}
 
 	// Buscar última interação
-	var ultimaInteracao sql.NullString
-	s.db.QueryRow(`
-		SELECT transcricao_resumo 
-		FROM historico_ligacoes 
-		WHERE idoso_id = $1 
-		ORDER BY inicio_chamada DESC 
-		LIMIT 1
-	`, idosoID).Scan(&ultimaInteracao)
+	ligacoes, _ := s.db.QueryByLabel(ctx, "historico_ligacoes",
+		" AND n.idoso_id = $idoso",
+		map[string]interface{}{"idoso": idosoID}, 0)
 
-	if ultimaInteracao.Valid {
-		data.UltimaInteracao = ultimaInteracao.String
+	if len(ligacoes) > 0 {
+		// Find most recent by inicio_chamada
+		var latest map[string]interface{}
+		var latestTime time.Time
+		for _, l := range ligacoes {
+			t := database.GetTime(l, "inicio_chamada")
+			if t.After(latestTime) {
+				latestTime = t
+				latest = l
+			}
+		}
+		if latest != nil {
+			data.UltimaInteracao = database.GetString(latest, "transcricao_resumo")
+		}
 	}
 
 	// Buscar preocupações recentes
-	s.getRecentConcerns(idosoID, &data)
+	s.getRecentConcerns(ctx, idosoID, data)
 
-	return &data, nil
+	return data, nil
 }
 
 // getRecentConcerns busca preocupações recentes
-func (s *TemplateService) getRecentConcerns(idosoID int64, data *PromptData) {
-	query := `
-		SELECT mensagem
-		FROM alertas
-		WHERE idoso_id = $1
-		  AND severidade IN ('critica', 'alta')
-		  AND criado_em > NOW() - INTERVAL '7 days'
-		ORDER BY criado_em DESC
-		LIMIT 3
-	`
+func (s *TemplateService) getRecentConcerns(ctx context.Context, idosoID int64, data *PromptData) {
+	sevenDaysAgo := time.Now().AddDate(0, 0, -7).UTC().Format(time.RFC3339)
 
-	rows, err := s.db.Query(query, idosoID)
+	rows, err := s.db.QueryByLabel(ctx, "alertas",
+		" AND n.idoso_id = $idoso AND n.criado_em > $since",
+		map[string]interface{}{"idoso": idosoID, "since": sevenDaysAgo}, 0)
 	if err != nil {
 		return
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var concern string
-		if err := rows.Scan(&concern); err != nil {
-			continue
+	for _, m := range rows {
+		sev := database.GetString(m, "severidade")
+		if sev == "critica" || sev == "alta" {
+			msg := database.GetString(m, "mensagem")
+			if msg != "" {
+				data.PreocupacoesRecentes = append(data.PreocupacoesRecentes, msg)
+			}
 		}
-		data.PreocupacoesRecentes = append(data.PreocupacoesRecentes, concern)
+	}
+
+	// Limit to 3 most recent (already sorted by NQL but let's be safe)
+	if len(data.PreocupacoesRecentes) > 3 {
+		data.PreocupacoesRecentes = data.PreocupacoesRecentes[:3]
 	}
 }
 
 // getTemplate busca template do banco
 func (s *TemplateService) getTemplate(nome string) (string, error) {
-	query := `
-		SELECT template
-		FROM prompt_templates
-		WHERE nome = $1 AND ativo = true
-		LIMIT 1
-	`
-
-	var template string
-	err := s.db.QueryRow(query, nome).Scan(&template)
+	ctx := context.Background()
+	rows, err := s.db.QueryByLabel(ctx, "prompt_templates",
+		" AND n.nome = $nome AND n.ativo = $ativo",
+		map[string]interface{}{"nome": nome, "ativo": true}, 1)
 	if err != nil {
 		return "", err
 	}
+	if len(rows) == 0 {
+		return "", fmt.Errorf("template nao encontrado: %s", nome)
+	}
 
-	return template, nil
+	return database.GetString(rows[0], "template"), nil
 }
 
 // getFallbackTemplate retorna template básico em caso de erro
 func (s *TemplateService) getFallbackTemplate(data *PromptData) string {
-	return fmt.Sprintf(`Você é a EVA, assistente de saúde virtual.
+	return fmt.Sprintf(`Voce e a EVA, assistente de saude virtual.
 
 O idoso se chama %s, %d anos.
-Nível cognitivo: %s
+Nivel cognitivo: %s
 Tom de voz: %s
 
 {{if .LimitacoesAuditivas}}
-IMPORTANTE: O idoso tem limitações auditivas. Fale DEVAGAR, CLARA e pausadamente.
+IMPORTANTE: O idoso tem limitacoes auditivas. Fale DEVAGAR, CLARA e pausadamente.
 {{if .UsaAparelhoAuditivo}}
-Ele usa aparelho auditivo, então pergunte se está conseguindo ouvir bem.
+Ele usa aparelho auditivo, entao pergunte se esta conseguindo ouvir bem.
 {{end}}
 {{end}}
 
-Seja calorosa, paciente e empática.
+Seja calorosa, paciente e empatica.
 Respostas CURTAS: 1-2 frases apenas.
-Fale em português brasileiro natural.
+Fale em portugues brasileiro natural.
 
 {{if .PrimeiraInteracao}}
-Esta é a primeira interação. Apresente-se e pergunte como ele está se sentindo.
+Esta e a primeira interacao. Apresente-se e pergunte como ele esta se sentindo.
 {{else}}
 {{if .UltimaInteracao}}
-Última conversa: {{.UltimaInteracao}}
+Ultima conversa: {{.UltimaInteracao}}
 {{end}}
 {{if .PreocupacoesRecentes}}
-Preocupações recentes:
+Preocupacoes recentes:
 {{range .PreocupacoesRecentes}}
 - {{.}}
 {{end}}
 {{end}}
 {{end}}
 
-Taxa de adesão à medicação: {{printf "%%.0f" .TaxaAdesao}}%%
+Taxa de adesao a medicacao: {{printf "%%.0f" .TaxaAdesao}}%%
 `, data.NomeIdoso, data.Idade, data.NivelCognitivo, data.TomVoz)
 }
 
 // SaveTemplate salva novo template no banco
 func (s *TemplateService) SaveTemplate(nome, templateText string, variaveis []string) error {
-	query := `
-		INSERT INTO prompt_templates (nome, template, variaveis_esperadas, ativo)
-		VALUES ($1, $2, $3, true)
-		ON CONFLICT (nome) 
-		DO UPDATE SET 
-			template = EXCLUDED.template,
-			variaveis_esperadas = EXCLUDED.variaveis_esperadas,
-			atualizado_em = NOW()
-	`
-
+	ctx := context.Background()
 	variaveisJSON, _ := json.Marshal(variaveis)
-	_, err := s.db.Exec(query, nome, templateText, string(variaveisJSON))
+	now := time.Now().UTC().Format(time.RFC3339)
 
-	if err != nil {
-		s.log.Error().Err(err).Msg("Erro ao salvar template")
-		return err
+	// Try upsert: find existing
+	existing, _ := s.db.QueryByLabel(ctx, "prompt_templates",
+		" AND n.nome = $nome",
+		map[string]interface{}{"nome": nome}, 1)
+
+	if len(existing) > 0 {
+		err := s.db.Update(ctx, "prompt_templates",
+			map[string]interface{}{"nome": nome},
+			map[string]interface{}{
+				"template":             templateText,
+				"variaveis_esperadas":  string(variaveisJSON),
+				"atualizado_em":        now,
+			})
+		if err != nil {
+			s.log.Error().Err(err).Msg("Erro ao salvar template")
+			return err
+		}
+	} else {
+		_, err := s.db.Insert(ctx, "prompt_templates", map[string]interface{}{
+			"nome":                nome,
+			"template":            templateText,
+			"variaveis_esperadas": string(variaveisJSON),
+			"ativo":               true,
+			"criado_em":           now,
+			"atualizado_em":       now,
+		})
+		if err != nil {
+			s.log.Error().Err(err).Msg("Erro ao salvar template")
+			return err
+		}
 	}
 
 	s.log.Info().Str("nome", nome).Msg("Template salvo com sucesso")

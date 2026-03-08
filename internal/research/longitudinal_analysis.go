@@ -4,10 +4,12 @@
 package research
 
 import (
-	"database/sql"
+	"context"
 	"fmt"
 	"log"
 	"math"
+
+	"eva/internal/brainstem/database"
 )
 
 // ============================================================================
@@ -15,11 +17,11 @@ import (
 // ============================================================================
 
 type LongitudinalAnalyzer struct {
-	db        *sql.DB
+	db        *database.DB
 	statMethods *StatisticalMethods
 }
 
-func NewLongitudinalAnalyzer(db *sql.DB) *LongitudinalAnalyzer {
+func NewLongitudinalAnalyzer(db *database.DB) *LongitudinalAnalyzer {
 	return &LongitudinalAnalyzer{
 		db:        db,
 		statMethods: NewStatisticalMethods(),
@@ -139,37 +141,31 @@ func (la *LongitudinalAnalyzer) calculateSingleLagCorrelation(
 
 // getTimeSeriesData busca dados de série temporal do banco
 func (la *LongitudinalAnalyzer) getTimeSeriesData(cohortID string, variable string) (map[string]TimeSeries, error) {
-	// Mapear nome da variável para coluna do banco
+	ctx := context.Background()
+
+	// Mapear nome da variável para campo do NietzscheDB
 	columnName := la.mapVariableToColumn(variable)
 
-	query := fmt.Sprintf(`
-		SELECT
-			anonymous_patient_id,
-			days_since_baseline,
-			%s
-		FROM research_datapoints
-		WHERE cohort_id = $1
-		  AND %s IS NOT NULL
-		ORDER BY anonymous_patient_id, days_since_baseline
-	`, columnName, columnName)
-
-	rows, err := la.db.Query(query, cohortID)
+	// Query NietzscheDB: buscar datapoints do cohort com o campo não nulo
+	rows, err := la.db.QueryByLabel(ctx, "research_datapoint",
+		" AND n.cohort_id = $cohort_id",
+		map[string]interface{}{"cohort_id": cohortID}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	seriesMap := make(map[string]TimeSeries)
 
-	for rows.Next() {
-		var patientID string
-		var day int
-		var value float64
-
-		err := rows.Scan(&patientID, &day, &value)
-		if err != nil {
+	for _, row := range rows {
+		// Filtrar registros onde o campo solicitado não é nulo
+		val, exists := row[columnName]
+		if !exists || val == nil {
 			continue
 		}
+
+		patientID := database.GetString(row, "anonymous_patient_id")
+		day := int(database.GetInt64(row, "days_since_baseline"))
+		value := database.GetFloat64(row, columnName)
 
 		if ts, exists := seriesMap[patientID]; exists {
 			ts.Days = append(ts.Days, day)
@@ -227,7 +223,7 @@ func (la *LongitudinalAnalyzer) countUniquePatients(series map[string]TimeSeries
 	return len(series)
 }
 
-// mapVariableToColumn mapeia nome da variável para coluna do banco
+// mapVariableToColumn mapeia nome da variável para campo do NietzscheDB
 func (la *LongitudinalAnalyzer) mapVariableToColumn(variable string) string {
 	mapping := map[string]string{
 		"voice_pitch_mean":      "voice_pitch_mean_hz",
@@ -249,7 +245,7 @@ func (la *LongitudinalAnalyzer) mapVariableToColumn(variable string) string {
 		return column
 	}
 
-	// Default: assume que é o nome da coluna
+	// Default: assume que é o nome do campo
 	return variable
 }
 

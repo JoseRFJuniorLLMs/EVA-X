@@ -5,16 +5,18 @@ package lacan
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
+	"sort"
 	"sync"
 	"time"
+
+	"eva/internal/brainstem/database"
 )
 
 // LacanDBConfig gerencia configurações lacanianas do banco de dados
 type LacanDBConfig struct {
-	db    *sql.DB
+	db    *database.DB
 	cache *lacanConfigCache
 	mu    sync.RWMutex
 }
@@ -91,7 +93,7 @@ type EthicalPrinciple struct {
 }
 
 // NewLacanDBConfig cria um novo gerenciador de configurações
-func NewLacanDBConfig(db *sql.DB) *LacanDBConfig {
+func NewLacanDBConfig(db *database.DB) *LacanDBConfig {
 	config := &LacanDBConfig{
 		db:    db,
 		cache: &lacanConfigCache{},
@@ -159,46 +161,33 @@ func (c *LacanDBConfig) LoadAll(ctx context.Context) error {
 // loadTransferenciaPatterns carrega padrões de transferência
 func (c *LacanDBConfig) loadTransferenciaPatterns(ctx context.Context) error {
 	// Carregar patterns
-	rows, err := c.db.QueryContext(ctx, `
-		SELECT transferencia_type, keywords
-		FROM lacan_transferencia_patterns
-		WHERE active = true
-	`)
+	rows, err := c.db.QueryByLabel(ctx, "lacan_transferencia_patterns", " AND n.active = $active", map[string]interface{}{"active": true}, 0)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var tType string
-		var keywords []string
-		if err := rows.Scan(&tType, &keywords); err != nil {
-			continue
+	for _, row := range rows {
+		tType := database.GetString(row, "transferencia_type")
+		keywords := getStringSlice(row, "keywords")
+		if tType != "" {
+			c.cache.transferenciaPatterns[tType] = keywords
 		}
-		c.cache.transferenciaPatterns[tType] = keywords
 	}
 
 	// Carregar guidance
-	guidanceRows, err := c.db.QueryContext(ctx, `
-		SELECT transferencia_type, guidance_text,
-		       COALESCE(clinical_implications, ''),
-		       COALESCE(therapeutic_approach, '')
-		FROM lacan_transferencia_guidance
-	`)
+	guidanceRows, err := c.db.QueryByLabel(ctx, "lacan_transferencia_guidance", "", nil, 0)
 	if err != nil {
 		return err
 	}
-	defer guidanceRows.Close()
 
-	for guidanceRows.Next() {
-		var tType, guidance, implications, approach string
-		if err := guidanceRows.Scan(&tType, &guidance, &implications, &approach); err != nil {
-			continue
-		}
-		c.cache.transferenciaGuidance[tType] = TransferenciaGuidance{
-			GuidanceText:         guidance,
-			ClinicalImplications: implications,
-			TherapeuticApproach:  approach,
+	for _, row := range guidanceRows {
+		tType := database.GetString(row, "transferencia_type")
+		if tType != "" {
+			c.cache.transferenciaGuidance[tType] = TransferenciaGuidance{
+				GuidanceText:         database.GetString(row, "guidance_text"),
+				ClinicalImplications: database.GetString(row, "clinical_implications"),
+				TherapeuticApproach:  database.GetString(row, "therapeutic_approach"),
+			}
 		}
 	}
 
@@ -208,44 +197,39 @@ func (c *LacanDBConfig) loadTransferenciaPatterns(ctx context.Context) error {
 // loadDesirePatterns carrega padrões de desejo
 func (c *LacanDBConfig) loadDesirePatterns(ctx context.Context) error {
 	// Carregar patterns
-	rows, err := c.db.QueryContext(ctx, `
-		SELECT latent_desire, keywords, confidence, COALESCE(description, '')
-		FROM lacan_desire_patterns
-		WHERE active = true
-	`)
+	rows, err := c.db.QueryByLabel(ctx, "lacan_desire_patterns", " AND n.active = $active", map[string]interface{}{"active": true}, 0)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var pattern DesirePattern
-		var keywords []string
-		if err := rows.Scan(&pattern.LatentDesire, &keywords, &pattern.Confidence, &pattern.Description); err != nil {
-			continue
+	for _, row := range rows {
+		pattern := DesirePattern{
+			LatentDesire: database.GetString(row, "latent_desire"),
+			Keywords:     getStringSlice(row, "keywords"),
+			Confidence:   database.GetFloat64(row, "confidence"),
+			Description:  database.GetString(row, "description"),
 		}
-		pattern.Keywords = keywords
-		c.cache.desirePatterns[pattern.LatentDesire] = pattern
+		if pattern.LatentDesire != "" {
+			c.cache.desirePatterns[pattern.LatentDesire] = pattern
+		}
 	}
 
 	// Carregar responses
-	respRows, err := c.db.QueryContext(ctx, `
-		SELECT latent_desire, suggested_response, clinical_guidance,
-		       COALESCE(dialogue_strategy, ''), COALESCE(never_do, '')
-		FROM lacan_desire_responses
-	`)
+	respRows, err := c.db.QueryByLabel(ctx, "lacan_desire_responses", "", nil, 0)
 	if err != nil {
 		return err
 	}
-	defer respRows.Close()
 
-	for respRows.Next() {
-		var desire string
-		var resp DesireResponse
-		if err := respRows.Scan(&desire, &resp.SuggestedResponse, &resp.ClinicalGuidance, &resp.DialogueStrategy, &resp.NeverDo); err != nil {
-			continue
+	for _, row := range respRows {
+		desire := database.GetString(row, "latent_desire")
+		if desire != "" {
+			c.cache.desireResponses[desire] = DesireResponse{
+				SuggestedResponse: database.GetString(row, "suggested_response"),
+				ClinicalGuidance:  database.GetString(row, "clinical_guidance"),
+				DialogueStrategy:  database.GetString(row, "dialogue_strategy"),
+				NeverDo:           database.GetString(row, "never_do"),
+			}
 		}
-		c.cache.desireResponses[desire] = resp
 	}
 
 	return nil
@@ -253,22 +237,22 @@ func (c *LacanDBConfig) loadDesirePatterns(ctx context.Context) error {
 
 // loadEmotionalKeywords carrega palavras emocionais
 func (c *LacanDBConfig) loadEmotionalKeywords(ctx context.Context) error {
-	rows, err := c.db.QueryContext(ctx, `
-		SELECT keyword, emotional_charge, COALESCE(category, ''),
-		       COALESCE(psychoanalytic_significance, ''), requires_attention
-		FROM lacan_emotional_keywords
-	`)
+	rows, err := c.db.QueryByLabel(ctx, "lacan_emotional_keywords", "", nil, 0)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var kw EmotionalKeyword
-		if err := rows.Scan(&kw.Keyword, &kw.EmotionalCharge, &kw.Category, &kw.PsychoanalyticSignificance, &kw.RequiresAttention); err != nil {
-			continue
+	for _, row := range rows {
+		kw := EmotionalKeyword{
+			Keyword:                    database.GetString(row, "keyword"),
+			EmotionalCharge:            database.GetString(row, "emotional_charge"),
+			Category:                   database.GetString(row, "category"),
+			PsychoanalyticSignificance: database.GetString(row, "psychoanalytic_significance"),
+			RequiresAttention:          database.GetBool(row, "requires_attention"),
 		}
-		c.cache.emotionalKeywords[kw.Keyword] = kw
+		if kw.Keyword != "" {
+			c.cache.emotionalKeywords[kw.Keyword] = kw
+		}
 	}
 
 	return nil
@@ -277,45 +261,38 @@ func (c *LacanDBConfig) loadEmotionalKeywords(ctx context.Context) error {
 // loadAddresseePatterns carrega padrões de destinatário
 func (c *LacanDBConfig) loadAddresseePatterns(ctx context.Context) error {
 	// Carregar patterns
-	rows, err := c.db.QueryContext(ctx, `
-		SELECT addressee_type, detection_keywords,
-		       COALESCE(symbolic_function, ''), typical_demands
-		FROM lacan_addressee_patterns
-	`)
+	rows, err := c.db.QueryByLabel(ctx, "lacan_addressee_patterns", "", nil, 0)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var pattern AddresseePattern
-		var keywords, demands []string
-		if err := rows.Scan(&pattern.AddresseeType, &keywords, &pattern.SymbolicFunction, &demands); err != nil {
-			continue
+	for _, row := range rows {
+		pattern := AddresseePattern{
+			AddresseeType:     database.GetString(row, "addressee_type"),
+			DetectionKeywords: getStringSlice(row, "detection_keywords"),
+			SymbolicFunction:  database.GetString(row, "symbolic_function"),
+			TypicalDemands:    getStringSlice(row, "typical_demands"),
 		}
-		pattern.DetectionKeywords = keywords
-		pattern.TypicalDemands = demands
-		c.cache.addresseePatterns[pattern.AddresseeType] = pattern
+		if pattern.AddresseeType != "" {
+			c.cache.addresseePatterns[pattern.AddresseeType] = pattern
+		}
 	}
 
 	// Carregar guidance
-	guidanceRows, err := c.db.QueryContext(ctx, `
-		SELECT addressee_type, guidance_text,
-		       COALESCE(intervention_strategy, ''), COALESCE(clinical_caveats, '')
-		FROM lacan_addressee_guidance
-	`)
+	guidanceRows, err := c.db.QueryByLabel(ctx, "lacan_addressee_guidance", "", nil, 0)
 	if err != nil {
 		return err
 	}
-	defer guidanceRows.Close()
 
-	for guidanceRows.Next() {
-		var aType string
-		var guidance AddresseeGuidance
-		if err := guidanceRows.Scan(&aType, &guidance.GuidanceText, &guidance.InterventionStrategy, &guidance.ClinicalCaveats); err != nil {
-			continue
+	for _, row := range guidanceRows {
+		aType := database.GetString(row, "addressee_type")
+		if aType != "" {
+			c.cache.addresseeGuidance[aType] = AddresseeGuidance{
+				GuidanceText:         database.GetString(row, "guidance_text"),
+				InterventionStrategy: database.GetString(row, "intervention_strategy"),
+				ClinicalCaveats:      database.GetString(row, "clinical_caveats"),
+			}
 		}
-		c.cache.addresseeGuidance[aType] = guidance
 	}
 
 	return nil
@@ -323,47 +300,69 @@ func (c *LacanDBConfig) loadAddresseePatterns(ctx context.Context) error {
 
 // loadEthicalPrinciples carrega princípios éticos
 func (c *LacanDBConfig) loadEthicalPrinciples(ctx context.Context) error {
-	rows, err := c.db.QueryContext(ctx, `
-		SELECT principle_code, principle_text, clinical_instruction,
-		       COALESCE(portuguese_rationale, ''), priority
-		FROM lacan_ethical_principles
-		ORDER BY priority DESC
-	`)
+	rows, err := c.db.QueryByLabel(ctx, "lacan_ethical_principles", "", nil, 0)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 
 	c.cache.ethicalPrinciples = nil
-	for rows.Next() {
-		var p EthicalPrinciple
-		if err := rows.Scan(&p.PrincipleCode, &p.PrincipleText, &p.ClinicalInstruction, &p.PortugueseRationale, &p.Priority); err != nil {
-			continue
+	for _, row := range rows {
+		p := EthicalPrinciple{
+			PrincipleCode:       database.GetString(row, "principle_code"),
+			PrincipleText:       database.GetString(row, "principle_text"),
+			ClinicalInstruction: database.GetString(row, "clinical_instruction"),
+			PortugueseRationale: database.GetString(row, "portuguese_rationale"),
+			Priority:            int(database.GetInt64(row, "priority")),
 		}
 		c.cache.ethicalPrinciples = append(c.cache.ethicalPrinciples, p)
 	}
+
+	// Sort by priority DESC (NQL has no ORDER BY)
+	sort.Slice(c.cache.ethicalPrinciples, func(i, j int) bool {
+		return c.cache.ethicalPrinciples[i].Priority > c.cache.ethicalPrinciples[j].Priority
+	})
 
 	return nil
 }
 
 // loadConfig carrega configurações gerais
 func (c *LacanDBConfig) loadConfig(ctx context.Context) error {
-	rows, err := c.db.QueryContext(ctx, `
-		SELECT config_key, config_value FROM lacan_config
-	`)
+	rows, err := c.db.QueryByLabel(ctx, "lacan_config", "", nil, 0)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var key, value string
-		if err := rows.Scan(&key, &value); err != nil {
-			continue
+	for _, row := range rows {
+		key := database.GetString(row, "config_key")
+		value := database.GetString(row, "config_value")
+		if key != "" {
+			c.cache.config[key] = value
 		}
-		c.cache.config[key] = value
 	}
 
+	return nil
+}
+
+// getStringSlice extracts a []string from a NietzscheDB content map field.
+func getStringSlice(m map[string]interface{}, key string) []string {
+	v, ok := m[key]
+	if !ok || v == nil {
+		return nil
+	}
+	if arr, ok := v.([]interface{}); ok {
+		result := make([]string, 0, len(arr))
+		for _, item := range arr {
+			if s, ok := item.(string); ok {
+				result = append(result, s)
+			} else {
+				result = append(result, fmt.Sprintf("%v", item))
+			}
+		}
+		return result
+	}
+	if arr, ok := v.([]string); ok {
+		return arr
+	}
 	return nil
 }
 

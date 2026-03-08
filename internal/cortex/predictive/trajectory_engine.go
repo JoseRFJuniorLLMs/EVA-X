@@ -4,18 +4,20 @@
 package predictive
 
 import (
-	"database/sql"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"math"
 	"math/rand"
 	"time"
+
+	"eva/internal/brainstem/database"
 )
 
 // TrajectoryEngine simula trajetorias de saude mental usando HMC + Monte Carlo
 type TrajectoryEngine struct {
-	db           *sql.DB
+	db           *database.DB
 	modelVersion string
 	hmcSampler   *HMCSampler // Hamiltonian Monte Carlo sampler
 	useHMC       bool        // Flag para alternar entre HMC e random walk classico
@@ -34,7 +36,7 @@ type PatientState struct {
 	DaysSinceLastCrisis  int
 }
 
-// TrajectorySimulation resultado de uma simulação
+// TrajectorySimulation resultado de uma simulacao
 type TrajectorySimulation struct {
 	ID                           string
 	PatientID                    int64
@@ -55,7 +57,7 @@ type TrajectorySimulation struct {
 	ModelVersion                 string
 }
 
-// DailyState estado em um dia específico da simulação
+// DailyState estado em um dia especifico da simulacao
 type DailyState struct {
 	Day       int     `json:"day"`
 	PHQ9      float64 `json:"phq9"`
@@ -64,7 +66,7 @@ type DailyState struct {
 	Crisis    bool    `json:"crisis"`
 }
 
-// InterventionScenario cenário what-if
+// InterventionScenario cenario what-if
 type InterventionScenario struct {
 	ID                      string
 	SimulationID            string
@@ -80,7 +82,7 @@ type InterventionScenario struct {
 	Feasibility             string
 }
 
-// Intervention representa uma intervenção
+// Intervention representa uma intervencao
 type Intervention struct {
 	Type           string  `json:"type"`
 	Frequency      string  `json:"frequency,omitempty"`
@@ -90,7 +92,7 @@ type Intervention struct {
 	ImpactIsolation int    `json:"impact_isolation,omitempty"`
 }
 
-// RecommendedIntervention recomendação de intervenção
+// RecommendedIntervention recomendacao de intervencao
 type RecommendedIntervention struct {
 	ID                   string
 	InterventionType     string
@@ -109,7 +111,7 @@ type RecommendedIntervention struct {
 }
 
 // NewTrajectoryEngine cria novo engine de trajetoria com HMC habilitado
-func NewTrajectoryEngine(db *sql.DB) *TrajectoryEngine {
+func NewTrajectoryEngine(db *database.DB) *TrajectoryEngine {
 	return &TrajectoryEngine{
 		db:           db,
 		modelVersion: "v2.0.0-hmc",
@@ -128,9 +130,9 @@ func (te *TrajectoryEngine) SetUseHMC(use bool) {
 	}
 }
 
-// SimulateTrajectory executa simulação Monte Carlo para um paciente
+// SimulateTrajectory executa simulacao Monte Carlo para um paciente
 func (te *TrajectoryEngine) SimulateTrajectory(patientID int64, daysAhead int, nSimulations int) (*TrajectorySimulation, error) {
-	log.Printf("🔮 [TRAJECTORY] Iniciando simulação para paciente %d (%d dias, %d simulações)", patientID, daysAhead, nSimulations)
+	log.Printf("[TRAJECTORY] Iniciando simulacao para paciente %d (%d dias, %d simulacoes)", patientID, daysAhead, nSimulations)
 	startTime := time.Now()
 
 	// 1. Buscar estado atual do paciente
@@ -139,34 +141,34 @@ func (te *TrajectoryEngine) SimulateTrajectory(patientID int64, daysAhead int, n
 		return nil, fmt.Errorf("erro ao buscar estado: %w", err)
 	}
 
-	// 2. Executar simulações Monte Carlo
+	// 2. Executar simulacoes Monte Carlo
 	results := te.runMonteCarloSimulations(currentState, daysAhead, nSimulations)
 
 	// 3. Agregar resultados
 	simulation := te.aggregateResults(patientID, daysAhead, nSimulations, results)
 	simulation.ModelVersion = te.modelVersion
 
-	// 4. Identificar fatores críticos
+	// 4. Identificar fatores criticos
 	simulation.CriticalFactors = te.identifyCriticalFactors(currentState)
 
 	// 5. Salvar no banco
 	err = te.saveSimulation(simulation, currentState)
 	if err != nil {
-		return nil, fmt.Errorf("erro ao salvar simulação: %w", err)
+		return nil, fmt.Errorf("erro ao salvar simulacao: %w", err)
 	}
 
 	computationTime := time.Since(startTime).Milliseconds()
-	log.Printf("✅ [TRAJECTORY] Simulação concluída em %dms: Crise 7d=%.1f%%, 30d=%.1f%%",
+	log.Printf("[TRAJECTORY] Simulacao concluida em %dms: Crise 7d=%.1f%%, 30d=%.1f%%",
 		computationTime, simulation.CrisisProbability7d*100, simulation.CrisisProbability30d*100)
 
 	return simulation, nil
 }
 
-// SimulateWithIntervention simula cenário com intervenção
+// SimulateWithIntervention simula cenario com intervencao
 func (te *TrajectoryEngine) SimulateWithIntervention(simulationID string, interventions []Intervention) (*InterventionScenario, error) {
-	log.Printf("💉 [TRAJECTORY] Simulando cenário com %d intervenções", len(interventions))
+	log.Printf("[TRAJECTORY] Simulando cenario com %d intervencoes", len(interventions))
 
-	// 1. Buscar simulação baseline
+	// 1. Buscar simulacao baseline
 	baseline, err := te.getSimulation(simulationID)
 	if err != nil {
 		return nil, err
@@ -178,10 +180,10 @@ func (te *TrajectoryEngine) SimulateWithIntervention(simulationID string, interv
 		return nil, err
 	}
 
-	// 3. Aplicar intervenções ao estado
+	// 3. Aplicar intervencoes ao estado
 	modifiedState := te.applyInterventions(currentState, interventions)
 
-	// 4. Executar nova simulação
+	// 4. Executar nova simulacao
 	results := te.runMonteCarloSimulations(modifiedState, 30, 500)
 	newSimulation := te.aggregateResults(baseline.PatientID, 30, 500, results)
 
@@ -204,7 +206,7 @@ func (te *TrajectoryEngine) SimulateWithIntervention(simulationID string, interv
 		scenario.EffectivenessScore = scenario.RiskReduction30d / baseline.CrisisProbability30d
 	}
 
-	// 7. Salvar cenário
+	// 7. Salvar cenario
 	err = te.saveScenario(scenario)
 	if err != nil {
 		return nil, err
@@ -213,7 +215,7 @@ func (te *TrajectoryEngine) SimulateWithIntervention(simulationID string, interv
 	return scenario, nil
 }
 
-// GenerateRecommendations gera recomendações baseadas na simulação
+// GenerateRecommendations gera recomendacoes baseadas na simulacao
 func (te *TrajectoryEngine) GenerateRecommendations(simulationID string) ([]RecommendedIntervention, error) {
 	simulation, err := te.getSimulation(simulationID)
 	if err != nil {
@@ -222,44 +224,44 @@ func (te *TrajectoryEngine) GenerateRecommendations(simulationID string) ([]Reco
 
 	var recommendations []RecommendedIntervention
 
-	// Regras de recomendação baseadas no risco
+	// Regras de recomendacao baseadas no risco
 
-	// 1. Risco crítico (>60% em 30 dias)
+	// 1. Risco critico (>60% em 30 dias)
 	if simulation.CrisisProbability30d > 0.6 {
 		recommendations = append(recommendations, RecommendedIntervention{
 			InterventionType:      "psychiatric_consultation",
 			Priority:              "critical",
 			UrgencyTimeframe:      "24-48h",
-			Title:                 "Consulta psiquiátrica urgente",
-			Description:           "Agendar consulta psiquiátrica de emergência devido ao alto risco de crise.",
+			Title:                 "Consulta psiquiatrica urgente",
+			Description:           "Agendar consulta psiquiatrica de emergencia devido ao alto risco de crise.",
 			Rationale:             fmt.Sprintf("Probabilidade de crise em 30 dias: %.0f%%", simulation.CrisisProbability30d*100),
 			ExpectedRiskReduction: 0.25,
 			ConfidenceLevel:       0.85,
 			ActionSteps: []string{
-				"Contatar psiquiatra responsável",
-				"Agendar consulta em até 48h",
-				"Preparar relatório EVA para consulta",
+				"Contatar psiquiatra responsavel",
+				"Agendar consulta em ate 48h",
+				"Preparar relatorio EVA para consulta",
 			},
 			ResponsibleParties: []string{"familiar", "psiquiatra"},
 			EstimatedCost:      350.00,
 		})
 	}
 
-	// 2. Adesão medicamentosa baixa
+	// 2. Adesao medicamentosa baixa
 	if simulation.ProjectedMedicationAdherence < 0.6 {
 		recommendations = append(recommendations, RecommendedIntervention{
 			InterventionType:      "medication_adherence_boost",
 			Priority:              "high",
 			UrgencyTimeframe:      "3-5 dias",
-			Title:                 "Intensificar lembretes de medicação",
-			Description:           "Implementar protocolo intensivo de lembretes de medicação com acompanhamento.",
-			Rationale:             fmt.Sprintf("Adesão projetada: %.0f%% (abaixo do mínimo seguro de 70%%)", simulation.ProjectedMedicationAdherence*100),
+			Title:                 "Intensificar lembretes de medicacao",
+			Description:           "Implementar protocolo intensivo de lembretes de medicacao com acompanhamento.",
+			Rationale:             fmt.Sprintf("Adesao projetada: %.0f%% (abaixo do minimo seguro de 70%%)", simulation.ProjectedMedicationAdherence*100),
 			ExpectedRiskReduction: 0.15,
 			ExpectedPHQ9Improvement: 3.0,
 			ConfidenceLevel:       0.75,
 			ActionSteps: []string{
 				"Ativar lembretes 2x/dia no app",
-				"Configurar confirmação por voz",
+				"Configurar confirmacao por voz",
 				"Alertar cuidador sobre doses",
 			},
 			ResponsibleParties: []string{"EVA", "cuidador"},
@@ -274,14 +276,14 @@ func (te *TrajectoryEngine) GenerateRecommendations(simulationID string) ([]Reco
 			Priority:              "medium",
 			UrgencyTimeframe:      "1 semana",
 			Title:                 "Protocolo de higiene do sono",
-			Description:           "Implementar rotina de sono com técnicas de relaxamento guiadas pela EVA.",
-			Rationale:             fmt.Sprintf("Sono projetado: %.1f horas (mínimo saudável: 6h)", simulation.ProjectedSleepHours),
+			Description:           "Implementar rotina de sono com tecnicas de relaxamento guiadas pela EVA.",
+			Rationale:             fmt.Sprintf("Sono projetado: %.1f horas (minimo saudavel: 6h)", simulation.ProjectedSleepHours),
 			ExpectedRiskReduction: 0.10,
 			ConfidenceLevel:       0.70,
 			ActionSteps: []string{
-				"Ativar histórias para dormir às 21h",
-				"Evitar interações intensas após 20h",
-				"Monitorar padrão de sono por 7 dias",
+				"Ativar historias para dormir as 21h",
+				"Evitar interacoes intensas apos 20h",
+				"Monitorar padrao de sono por 7 dias",
 			},
 			ResponsibleParties: []string{"EVA", "paciente"},
 			EstimatedCost:      0,
@@ -295,14 +297,14 @@ func (te *TrajectoryEngine) GenerateRecommendations(simulationID string) ([]Reco
 			Priority:              "high",
 			UrgencyTimeframe:      "48h",
 			Title:                 "Aumentar contato familiar",
-			Description:           "Coordenar chamadas de vídeo com familiares e visitas presenciais.",
-			Rationale:             fmt.Sprintf("Projeção de %d dias sem contato humano significativo", simulation.ProjectedIsolationDays),
+			Description:           "Coordenar chamadas de video com familiares e visitas presenciais.",
+			Rationale:             fmt.Sprintf("Projecao de %d dias sem contato humano significativo", simulation.ProjectedIsolationDays),
 			ExpectedRiskReduction: 0.12,
 			ConfidenceLevel:       0.68,
 			ActionSteps: []string{
-				"Alertar familiar primário",
+				"Alertar familiar primario",
 				"Agendar 2 videochamadas esta semana",
-				"Sugerir visita presencial se possível",
+				"Sugerir visita presencial se possivel",
 			},
 			ResponsibleParties: []string{"familiar", "EVA"},
 			EstimatedCost:      0,
@@ -315,31 +317,31 @@ func (te *TrajectoryEngine) GenerateRecommendations(simulationID string) ([]Reco
 			InterventionType:      "therapy_intensification",
 			Priority:              te.getPriorityByPHQ9(simulation.ProjectedPHQ9),
 			UrgencyTimeframe:      "1 semana",
-			Title:                 "Intensificar acompanhamento terapêutico",
-			Description:           "Aumentar frequência de interações terapêuticas e considerar psicoterapia.",
-			Rationale:             fmt.Sprintf("PHQ-9 projetado: %.0f (depressão moderadamente severa)", simulation.ProjectedPHQ9),
+			Title:                 "Intensificar acompanhamento terapeutico",
+			Description:           "Aumentar frequencia de interacoes terapeuticas e considerar psicoterapia.",
+			Rationale:             fmt.Sprintf("PHQ-9 projetado: %.0f (depressao moderadamente severa)", simulation.ProjectedPHQ9),
 			ExpectedRiskReduction: 0.18,
 			ExpectedPHQ9Improvement: 4.5,
 			ConfidenceLevel:       0.72,
 			ActionSteps: []string{
-				"Ativar conversas terapêuticas diárias",
+				"Ativar conversas terapeuticas diarias",
 				"Aplicar PHQ-9 semanal",
 				"Considerar encaminhamento para psicoterapia",
 			},
-			ResponsibleParties: []string{"EVA", "psicólogo"},
+			ResponsibleParties: []string{"EVA", "psicologo"},
 			EstimatedCost:      200.00,
 		})
 	}
 
-	// Salvar recomendações
+	// Salvar recomendacoes
 	for i := range recommendations {
 		err := te.saveRecommendation(simulationID, &recommendations[i])
 		if err != nil {
-			log.Printf("⚠️ [TRAJECTORY] Erro ao salvar recomendação: %v", err)
+			log.Printf("[TRAJECTORY] Erro ao salvar recomendacao: %v", err)
 		}
 	}
 
-	log.Printf("📋 [TRAJECTORY] Geradas %d recomendações para simulação %s", len(recommendations), simulationID)
+	log.Printf("[TRAJECTORY] Geradas %d recomendacoes para simulacao %s", len(recommendations), simulationID)
 
 	return recommendations, nil
 }
@@ -412,15 +414,15 @@ func (te *TrajectoryEngine) runRandomWalkTrajectory(state *PatientState, daysAhe
 
 // calculateDailyCrisisProbability calcula probabilidade de crise em um dia
 func (te *TrajectoryEngine) calculateDailyCrisisProbability(phq9, adherence, sleep float64) float64 {
-	// Modelo logístico simplificado
-	// Em produção: usar rede Bayesiana treinada
+	// Modelo logistico simplificado
+	// Em producao: usar rede Bayesiana treinada
 
 	logit := -5.0 // Base (baixa probabilidade)
 
 	// PHQ9 aumenta risco
 	logit += (phq9 - 10) * 0.15
 
-	// Má adesão aumenta risco
+	// Ma adesao aumenta risco
 	logit += (0.7 - adherence) * 2.0
 
 	// Sono ruim aumenta risco
@@ -432,7 +434,7 @@ func (te *TrajectoryEngine) calculateDailyCrisisProbability(phq9, adherence, sle
 	return prob
 }
 
-// aggregateResults agrega resultados das simulações
+// aggregateResults agrega resultados das simulacoes
 func (te *TrajectoryEngine) aggregateResults(patientID int64, daysAhead int, n int, results [][]DailyState) *TrajectorySimulation {
 	crisisCount7d := 0
 	crisisCount30d := 0
@@ -469,16 +471,12 @@ func (te *TrajectoryEngine) aggregateResults(patientID int64, daysAhead int, n i
 		}
 	}
 
-	// Calcular médias
+	// Calcular medias
 	avgPHQ9 := average(finalPHQ9s)
 	avgAdherence := average(finalAdherences)
 	avgSleep := average(finalSleeps)
 
-	// Pegar amostra de 10 trajetórias
-	sampleSize := 10
-	if len(results) < sampleSize {
-		sampleSize = len(results)
-	}
+	// Pegar amostra de 10 trajetorias
 	sampleTrajectories := make([]DailyState, 0)
 	if len(results) > 0 && len(results[0]) > 0 {
 		sampleTrajectories = results[0][:min(30, len(results[0]))]
@@ -501,29 +499,30 @@ func (te *TrajectoryEngine) aggregateResults(patientID int64, daysAhead int, n i
 
 // getCurrentState busca estado atual do paciente
 func (te *TrajectoryEngine) getCurrentState(patientID int64) (*PatientState, error) {
+	ctx := context.Background()
 	state := &PatientState{PatientID: patientID}
 
-	// Buscar último PHQ-9
-	query := `
-		SELECT score FROM clinical_scale_results
-		WHERE idoso_id = $1 AND scale_type = 'phq9'
-		ORDER BY completed_at DESC LIMIT 1
-	`
-	te.db.QueryRow(query, patientID).Scan(&state.PHQ9Score)
+	// Buscar ultimo PHQ-9
+	rows, err := te.db.QueryByLabel(ctx, "clinical_scale_results",
+		" AND n.idoso_id = $idoso_id AND n.scale_type = $scale_type",
+		map[string]interface{}{"idoso_id": patientID, "scale_type": "phq9"}, 1)
+	if err == nil && len(rows) > 0 {
+		state.PHQ9Score = database.GetFloat64(rows[0], "score")
+	}
 
-	// Buscar adesão medicamentosa (placeholder)
-	state.MedicationAdherence = 0.65 // TODO: Integrar com sistema de medicação
+	// Buscar adesao medicamentosa (placeholder)
+	state.MedicationAdherence = 0.65 // TODO: Integrar com sistema de medicacao
 
-	// Buscar sono médio (placeholder)
+	// Buscar sono medio (placeholder)
 	state.SleepHours = 5.5 // TODO: Integrar com monitoramento de sono
 
 	// Buscar isolamento (placeholder)
-	state.SocialIsolationDays = 3 // TODO: Calcular baseado em interações
+	state.SocialIsolationDays = 3 // TODO: Calcular baseado em interacoes
 
 	return state, nil
 }
 
-// identifyCriticalFactors identifica fatores críticos
+// identifyCriticalFactors identifica fatores criticos
 func (te *TrajectoryEngine) identifyCriticalFactors(state *PatientState) []string {
 	var factors []string
 
@@ -546,7 +545,7 @@ func (te *TrajectoryEngine) identifyCriticalFactors(state *PatientState) []strin
 // Helpers
 
 func (te *TrajectoryEngine) applyInterventions(state *PatientState, interventions []Intervention) *PatientState {
-	modified := *state // Cópia
+	modified := *state // Copia
 
 	for _, intervention := range interventions {
 		modified.MedicationAdherence += intervention.ImpactAdherence
@@ -571,7 +570,7 @@ func (te *TrajectoryEngine) generateScenarioName(interventions []Intervention) s
 	if len(interventions) == 1 {
 		return fmt.Sprintf("Com %s", interventions[0].Type)
 	}
-	return fmt.Sprintf("Com %d intervenções", len(interventions))
+	return fmt.Sprintf("Com %d intervencoes", len(interventions))
 }
 
 func (te *TrajectoryEngine) calculateCost(interventions []Intervention) float64 {
@@ -611,108 +610,125 @@ func (te *TrajectoryEngine) getPriorityByPHQ9(phq9 float64) string {
 	return "medium"
 }
 
-// Funções de banco de dados
+// Funcoes de banco de dados (NietzscheDB)
 
 func (te *TrajectoryEngine) saveSimulation(sim *TrajectorySimulation, state *PatientState) error {
+	ctx := context.Background()
 	trajectoriesJSON, _ := json.Marshal(sim.SampleTrajectories)
 	initialStateJSON, _ := json.Marshal(state)
+	criticalFactorsJSON, _ := json.Marshal(sim.CriticalFactors)
 
-	query := `
-		INSERT INTO trajectory_simulations (
-			patient_id, days_ahead, n_simulations,
-			crisis_probability_7d, crisis_probability_30d, hospitalization_probability_30d,
-			projected_phq9_score, projected_medication_adherence, projected_sleep_hours,
-			critical_factors, sample_trajectories, initial_state, model_version
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-		RETURNING id
-	`
+	content := map[string]interface{}{
+		"patient_id":                     sim.PatientID,
+		"simulation_date":                time.Now().Format(time.RFC3339),
+		"days_ahead":                     sim.DaysAhead,
+		"n_simulations":                  sim.NSimulations,
+		"crisis_probability_7d":          sim.CrisisProbability7d,
+		"crisis_probability_30d":         sim.CrisisProbability30d,
+		"hospitalization_probability_30d": sim.HospitalizationProbability30d,
+		"projected_phq9_score":           sim.ProjectedPHQ9,
+		"projected_medication_adherence": sim.ProjectedMedicationAdherence,
+		"projected_sleep_hours":          sim.ProjectedSleepHours,
+		"critical_factors":               string(criticalFactorsJSON),
+		"sample_trajectories":            string(trajectoriesJSON),
+		"initial_state":                  string(initialStateJSON),
+		"model_version":                  sim.ModelVersion,
+	}
 
-	var id string
-	err := te.db.QueryRow(
-		query,
-		sim.PatientID, sim.DaysAhead, sim.NSimulations,
-		sim.CrisisProbability7d, sim.CrisisProbability30d, sim.HospitalizationProbability30d,
-		sim.ProjectedPHQ9, sim.ProjectedMedicationAdherence, sim.ProjectedSleepHours,
-		pqArray(sim.CriticalFactors), trajectoriesJSON, initialStateJSON, sim.ModelVersion,
-	).Scan(&id)
-
+	id, err := te.db.Insert(ctx, "trajectory_simulations", content)
 	if err != nil {
 		return err
 	}
 
-	sim.ID = id
+	sim.ID = fmt.Sprintf("%d", id)
 	return nil
 }
 
 func (te *TrajectoryEngine) getSimulation(id string) (*TrajectorySimulation, error) {
-	query := `
-		SELECT id, patient_id, simulation_date, days_ahead, n_simulations,
-		       crisis_probability_7d, crisis_probability_30d, hospitalization_probability_30d,
-		       projected_phq9_score, projected_medication_adherence, projected_sleep_hours,
-		       critical_factors, model_version
-		FROM trajectory_simulations WHERE id = $1
-	`
-
-	sim := &TrajectorySimulation{}
-	var criticalFactors []byte
-
-	err := te.db.QueryRow(query, id).Scan(
-		&sim.ID, &sim.PatientID, &sim.SimulationDate, &sim.DaysAhead, &sim.NSimulations,
-		&sim.CrisisProbability7d, &sim.CrisisProbability30d, &sim.HospitalizationProbability30d,
-		&sim.ProjectedPHQ9, &sim.ProjectedMedicationAdherence, &sim.ProjectedSleepHours,
-		&criticalFactors, &sim.ModelVersion,
-	)
-
+	ctx := context.Background()
+	rows, err := te.db.QueryByLabel(ctx, "trajectory_simulations",
+		" AND n.id = $sim_id",
+		map[string]interface{}{"sim_id": id}, 1)
 	if err != nil {
 		return nil, err
 	}
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("simulation not found: %s", id)
+	}
 
-	// Parse critical factors (NietzscheDB array)
-	// TODO: Properly parse NietzscheDB array
+	m := rows[0]
+	sim := &TrajectorySimulation{
+		ID:                            database.GetString(m, "id"),
+		PatientID:                     database.GetInt64(m, "patient_id"),
+		SimulationDate:                database.GetTime(m, "simulation_date"),
+		DaysAhead:                     int(database.GetInt64(m, "days_ahead")),
+		NSimulations:                  int(database.GetInt64(m, "n_simulations")),
+		CrisisProbability7d:           database.GetFloat64(m, "crisis_probability_7d"),
+		CrisisProbability30d:          database.GetFloat64(m, "crisis_probability_30d"),
+		HospitalizationProbability30d: database.GetFloat64(m, "hospitalization_probability_30d"),
+		ProjectedPHQ9:                 database.GetFloat64(m, "projected_phq9_score"),
+		ProjectedMedicationAdherence:  database.GetFloat64(m, "projected_medication_adherence"),
+		ProjectedSleepHours:           database.GetFloat64(m, "projected_sleep_hours"),
+		ModelVersion:                  database.GetString(m, "model_version"),
+	}
 
 	return sim, nil
 }
 
 func (te *TrajectoryEngine) saveScenario(scenario *InterventionScenario) error {
+	ctx := context.Background()
 	interventionsJSON, _ := json.Marshal(scenario.Interventions)
 
-	query := `
-		INSERT INTO intervention_scenarios (
-			simulation_id, patient_id, scenario_type, scenario_name, interventions,
-			crisis_probability_7d, crisis_probability_30d, risk_reduction_7d, risk_reduction_30d,
-			effectiveness_score, estimated_cost_monthly, feasibility
-		) VALUES ($1, (SELECT patient_id FROM trajectory_simulations WHERE id = $1),
-		         $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-		RETURNING id
-	`
+	content := map[string]interface{}{
+		"simulation_id":          scenario.SimulationID,
+		"scenario_type":          scenario.ScenarioType,
+		"scenario_name":          scenario.ScenarioName,
+		"interventions":          string(interventionsJSON),
+		"crisis_probability_7d":  scenario.CrisisProbability7d,
+		"crisis_probability_30d": scenario.CrisisProbability30d,
+		"risk_reduction_7d":      scenario.RiskReduction7d,
+		"risk_reduction_30d":     scenario.RiskReduction30d,
+		"effectiveness_score":    scenario.EffectivenessScore,
+		"estimated_cost_monthly": scenario.EstimatedCostMonthly,
+		"feasibility":            scenario.Feasibility,
+	}
 
-	return te.db.QueryRow(
-		query,
-		scenario.SimulationID, scenario.ScenarioType, scenario.ScenarioName, interventionsJSON,
-		scenario.CrisisProbability7d, scenario.CrisisProbability30d,
-		scenario.RiskReduction7d, scenario.RiskReduction30d,
-		scenario.EffectivenessScore, scenario.EstimatedCostMonthly, scenario.Feasibility,
-	).Scan(&scenario.ID)
+	id, err := te.db.Insert(ctx, "intervention_scenarios", content)
+	if err != nil {
+		return err
+	}
+	scenario.ID = fmt.Sprintf("%d", id)
+	return nil
 }
 
 func (te *TrajectoryEngine) saveRecommendation(simulationID string, rec *RecommendedIntervention) error {
-	query := `
-		INSERT INTO recommended_interventions (
-			simulation_id, patient_id, intervention_type, priority, urgency_timeframe,
-			title, description, rationale, expected_risk_reduction, expected_phq9_improvement,
-			confidence_level, action_steps, responsible_parties, estimated_cost
-		) VALUES ($1, (SELECT patient_id FROM trajectory_simulations WHERE id = $1),
-		         $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-		RETURNING id
-	`
+	ctx := context.Background()
+	actionStepsJSON, _ := json.Marshal(rec.ActionSteps)
+	responsibleJSON, _ := json.Marshal(rec.ResponsibleParties)
 
-	return te.db.QueryRow(
-		query,
-		simulationID, rec.InterventionType, rec.Priority, rec.UrgencyTimeframe,
-		rec.Title, rec.Description, rec.Rationale,
-		rec.ExpectedRiskReduction, rec.ExpectedPHQ9Improvement, rec.ConfidenceLevel,
-		pqArray(rec.ActionSteps), pqArray(rec.ResponsibleParties), rec.EstimatedCost,
-	).Scan(&rec.ID)
+	content := map[string]interface{}{
+		"simulation_id":            simulationID,
+		"intervention_type":        rec.InterventionType,
+		"priority":                 rec.Priority,
+		"urgency_timeframe":        rec.UrgencyTimeframe,
+		"title":                    rec.Title,
+		"description":              rec.Description,
+		"rationale":                rec.Rationale,
+		"expected_risk_reduction":  rec.ExpectedRiskReduction,
+		"expected_phq9_improvement": rec.ExpectedPHQ9Improvement,
+		"confidence_level":         rec.ConfidenceLevel,
+		"action_steps":             string(actionStepsJSON),
+		"responsible_parties":      string(responsibleJSON),
+		"estimated_cost":           rec.EstimatedCost,
+		"status":                   "pending",
+	}
+
+	id, err := te.db.Insert(ctx, "recommended_interventions", content)
+	if err != nil {
+		return err
+	}
+	rec.ID = fmt.Sprintf("%d", id)
+	return nil
 }
 
 // Utility functions
@@ -740,10 +756,4 @@ func max(a, b int) int {
 		return a
 	}
 	return b
-}
-
-// pqArray helper for NietzscheDB arrays
-func pqArray(arr []string) interface{} {
-	// Placeholder - use github.com/lib/pq.Array in production
-	return arr
 }

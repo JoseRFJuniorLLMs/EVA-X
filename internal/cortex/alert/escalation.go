@@ -5,12 +5,12 @@ package alert
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
 	"sync"
 	"time"
 
+	"eva/internal/brainstem/database"
 	"eva/internal/brainstem/push"
 	"eva/internal/motor/email"
 	"eva/internal/motor/sms"
@@ -77,7 +77,7 @@ type EscalationService struct {
 	firebase    *push.FirebaseService
 	twilio      *sms.TwilioService
 	emailSvc    *email.EmailService
-	db          *sql.DB
+	db          *database.DB
 	callbackURL string
 
 	// Escalation timeouts by priority
@@ -92,7 +92,7 @@ type EscalationConfig struct {
 	Firebase    *push.FirebaseService
 	Twilio      *sms.TwilioService
 	Email       *email.EmailService
-	DB          *sql.DB
+	DB          *database.DB
 	CallbackURL string // Base URL for call acknowledgment
 }
 
@@ -380,35 +380,30 @@ func (s *EscalationService) GetContactsForElder(elderID int64) ([]CaregiverConta
 		return nil, fmt.Errorf("database not configured")
 	}
 
-	query := `
-		SELECT c.id, c.nome, c.fcm_token, c.telefone, c.email,
-		       COALESCE(ci.prioridade, 99) as prioridade
-		FROM cuidadores c
-		LEFT JOIN cuidador_idoso ci ON c.id = ci.cuidador_id AND ci.idoso_id = $1
-		WHERE ci.idoso_id = $1 OR c.tipo = 'responsavel'
-		ORDER BY prioridade ASC
-	`
-
-	rows, err := s.db.Query(query, elderID)
+	ctx := context.Background()
+	rows, err := s.db.QueryByLabel(ctx, "cuidadores",
+		" AND n.idoso_id = $idoso_id AND n.ativo = $ativo",
+		map[string]interface{}{
+			"idoso_id": elderID,
+			"ativo":    true,
+		}, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query contacts: %w", err)
 	}
-	defer rows.Close()
 
 	var contacts []CaregiverContact
-	for rows.Next() {
-		var c CaregiverContact
-		var fcmToken, phone, emailAddr sql.NullString
-
-		if err := rows.Scan(&c.ID, &c.Name, &fcmToken, &phone, &emailAddr, &c.Priority); err != nil {
-			log.Printf("⚠️ Erro ao ler contato: %v", err)
-			continue
+	for _, m := range rows {
+		c := CaregiverContact{
+			ID:          database.GetInt64(m, "id"),
+			Name:        database.GetString(m, "nome"),
+			FCMToken:    database.GetString(m, "fcm_token"),
+			PhoneNumber: database.GetString(m, "telefone"),
+			Email:       database.GetString(m, "email"),
+			Priority:    int(database.GetInt64(m, "prioridade")),
 		}
-
-		c.FCMToken = fcmToken.String
-		c.PhoneNumber = phone.String
-		c.Email = emailAddr.String
-
+		if c.Priority == 0 {
+			c.Priority = 99
+		}
 		contacts = append(contacts, c)
 	}
 
@@ -421,26 +416,24 @@ func (s *EscalationService) saveEscalationLog(result *EscalationResult) {
 		return
 	}
 
-	query := `
-		INSERT INTO escalation_logs (
-			alert_id, elder_name, reason, priority,
-			acknowledged, acknowledged_by, acknowledged_at,
-			final_channel, attempts_count, started_at, completed_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-	`
-
-	var ackAt *time.Time
+	ctx := context.Background()
+	content := map[string]interface{}{
+		"alert_id":        result.AlertID,
+		"elder_name":      result.ElderName,
+		"reason":          result.Reason,
+		"priority":        string(result.Priority),
+		"acknowledged":    result.Acknowledged,
+		"acknowledged_by": result.AcknowledgedBy,
+		"final_channel":   string(result.FinalChannel),
+		"attempts_count":  len(result.Attempts),
+		"started_at":      result.StartedAt.Format(time.RFC3339),
+		"completed_at":    result.CompletedAt.Format(time.RFC3339),
+	}
 	if result.Acknowledged {
-		ackAt = &result.AcknowledgedAt
+		content["acknowledged_at"] = result.AcknowledgedAt.Format(time.RFC3339)
 	}
 
-	_, err := s.db.Exec(query,
-		result.AlertID, result.ElderName, result.Reason, string(result.Priority),
-		result.Acknowledged, result.AcknowledgedBy, ackAt,
-		string(result.FinalChannel), len(result.Attempts),
-		result.StartedAt, result.CompletedAt,
-	)
-
+	_, err := s.db.Insert(ctx, "escalation_logs", content)
 	if err != nil {
 		log.Printf("⚠️ Erro ao salvar log de escalonamento: %v", err)
 	}
