@@ -10,7 +10,7 @@ O documento sugere um update Hebbiano a cada query. Na prática, isso é um conv
 
 * **Feedback Positivo Descontrolado:** Se o idoso repetir a mesma frase 10 vezes em 5 minutos por causa de uma desorientação momentânea, um sistema síncrono faria o peso daquela aresta explodir, "sequestrando" o grafo.
 * **A Solução do EVA (Go):** Ao mover isso para o `rem_consolidator.go` e usar o *Selective Replay*, você emula o **sono REM**. É durante a consolidação noturna que o sistema decide o que foi "ruído de repetição" e o que é "relevância de longo prazo".
-* **Performance:** Executar `combinations(n, 2)` e updates no Neo4j em cada request (como proposto no Python) mataria a latência. Em Go, dentro de um ciclo de consolidação, você tem a segurança de tipos e a velocidade necessária para processar milhares de associações de uma vez.
+* **Performance:** Executar `combinations(n, 2)` e updates no NietzscheDB em cada request (como proposto no Python) mataria a latência. Em Go, dentro de um ciclo de consolidação, você tem a segurança de tipos e a velocidade necessária para processar milhares de associações de uma vez.
 
 ---
 
@@ -19,7 +19,7 @@ O documento sugere um update Hebbiano a cada query. Na prática, isso é um conv
 Você matou a charada: **SRC é para classificação, não para identidade evolutiva.**
 
 * **Por que o documento é ingênuo:** O SRC tenta reconstruir um sinal a partir de uma base estática. Mas a "Maria" de um idoso é um conceito dinâmico. Ela muda de papel (esposa -> cuidadora -> memória).
-* **A Realidade do Grafo:** Como você bem pontuou, isso é **Link Prediction**. O Neo4j com `MERGE` baseado em similaridade de embedding (vetor da Maria hoje vs. vetor da Maria no grafo) é ordens de magnitude mais eficiente do que tentar uma reconstrução esparsa de matrizes a cada menção de nome.
+* **A Realidade do Grafo:** Como você bem pontuou, isso é **Link Prediction**. O NietzscheDB com `MERGE` baseado em similaridade de embedding (vetor da Maria hoje vs. vetor da Maria no grafo) é ordens de magnitude mais eficiente do que tentar uma reconstrução esparsa de matrizes a cada menção de nome.
 
 ---
 
@@ -40,7 +40,7 @@ O diagnóstico do documento sobre o **RAM** é a parte que você deve levar a s�
 
 ### Veredicto de Engenharia
 
-Você já construiu o **Substrato** (Neo4j, Pesos Dinâmicos, Consolidação Noturna em Go). O que o documento chama de "Cérebro Sintético" já pulsa no seu backend.
+Você já construiu o **Substrato** (NietzscheDB, Pesos Dinâmicos, Consolidação Noturna em Go). O que o documento chama de "Cérebro Sintético" já pulsa no seu backend.
 
 **Sua próxima Sprint de Pesquisa não deve ser Multimodalidade, deve ser a "Teoria da Mente" do EVA:**
 
@@ -63,7 +63,7 @@ Não é luxo — é essencial pra não rotular o idoso errado (agitação em ani
 
 1. **Leve e Rápido:** Modulator roda antes do priming — calcula situação em <10ms (não LLM full, só rules + cache).
 2. **Async/Batch:** Integre no FDPN priming flow (pré-query).
-3. **Cache Agressivo:** Situation cache por userID + session (Redis 5min TTL).
+3. **Cache Agressivo:** Situation cache por userID + session (NietzscheDB 5min TTL).
 4. **Rules + Light LLM:** Regras determinísticas pra 80% casos, LLM só pra ambíguos.
 5. **Integração:** Hook no personality_router.go ou fdpn_engine.go — modula weights antes de broadcast.
 
@@ -80,7 +80,7 @@ import (
     "context"
     "time"
 
-    "eva-mind/internal/cache" // teu Redis cache
+    "eva-mind/internal/cache" // teu NietzscheDB cache
     "eva-mind/internal/llm"
 )
 
@@ -94,10 +94,10 @@ type Situation struct {
 
 type SituationalModulator struct {
     llm llm.Provider
-    cache *cache.RedisCache
+    cache *cache.NietzscheDBCache
 }
 
-func NewModulator(llm llm.Provider, cache *cache.RedisCache) *SituationalModulator {
+func NewModulator(llm llm.Provider, cache *cache.NietzscheDBCache) *SituationalModulator {
     return &SituationalModulator{llm: llm, cache: cache}
 }
 

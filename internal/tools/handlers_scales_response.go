@@ -398,13 +398,18 @@ func (h *ToolsHandler) handleSubmitCSSRSResponse(idosoID int64, sessionID string
 		}
 
 		// Alerta também via push/email tradicional
-		_ = actions.AlertFamilyWithSeverity(h.db.Conn, h.pushService, h.emailService, idosoID,
-			fmt.Sprintf("🚨🚨🚨 EMERGÊNCIA: Risco suicida CRÍTICO detectado (C-SSRS Q%d positiva). AÇÃO IMEDIATA NECESSÁRIA.", questionNumber),
-			"critica")
+		if h.db != nil && h.db.Conn != nil {
+			_ = actions.AlertFamilyWithSeverity(h.db.Conn, h.pushService, h.emailService, idosoID,
+				fmt.Sprintf("🚨🚨🚨 EMERGÊNCIA: Risco suicida CRÍTICO detectado (C-SSRS Q%d positiva). AÇÃO IMEDIATA NECESSÁRIA.", questionNumber),
+				"critica")
+		}
 	}
 
 	// 4. Verificar se completou todas as perguntas
 	var responsesCount int
+	if h.db == nil || h.db.Conn == nil {
+		return map[string]interface{}{"error": "Database indisponivel para C-SSRS"}, nil
+	}
 	queryCount := `SELECT COUNT(*) FROM clinical_assessment_responses WHERE assessment_id = $1`
 	h.db.Conn.QueryRow(queryCount, assessmentID).Scan(&responsesCount)
 
@@ -511,8 +516,10 @@ func (h *ToolsHandler) finalizeCSSRSAssessment(idosoID int64, assessmentID int64
 	}
 
 	// Alerta família/equipe via sistema tradicional
-	_ = actions.AlertFamilyWithSeverity(h.db.Conn, h.pushService, h.emailService, idosoID,
-		alertMessage, alertSeverity)
+	if h.db != nil && h.db.Conn != nil {
+		_ = actions.AlertFamilyWithSeverity(h.db.Conn, h.pushService, h.emailService, idosoID,
+			alertMessage, alertSeverity)
+	}
 
 	// 5. Retornar resultado
 	response := map[string]interface{}{

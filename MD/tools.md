@@ -167,8 +167,8 @@
 | Ferramenta | O que faz |
 |---|---|
 | `search_my_code` | Busca semântica no código-fonte Go da EVA (indexado em vector DB) |
-| `query_my_database` | SELECT read-only nas tabelas internas do PostgreSQL |
-| `list_my_collections` | Lista coleções Qdrant com contagem de pontos |
+| `query_my_database` | SELECT read-only nas tabelas internas do NietzscheDB |
+| `list_my_collections` | Lista coleções NietzscheDB com contagem de pontos |
 | `system_stats` | Estatísticas do sistema: databases, memória, runtime |
 | `update_self_knowledge` | Atualiza auto-conhecimento (módulo, conceito, database, API, arquitetura, tool, agent) |
 | `search_self_knowledge` | Busca na base de auto-conhecimento |
@@ -200,7 +200,7 @@
 
 | Ferramenta | O que faz |
 |---|---|
-| `run_sql_select` | Executa SELECT read-only no PostgreSQL |
+| `run_sql_select` | Executa SELECT read-only no NietzscheDB |
 | `change_voice` | Muda voz da EVA em runtime (Puck, Charon, Kore, Fenrir, Aoede) |
 | `change_user_directive` | ARCHITECT ONLY: Muda diretivas do usuário (idioma, voz, legacy_mode) |
 
@@ -219,11 +219,11 @@ Config: `.mcp.json` | Auth: `X-MCP-Key` (env `MCP_API_KEY`)
 
 | MCP Tool | Internal | O que faz |
 |---|---|---|
-| `eva_remember` | `mcp_remember` | Armazena memoria na tabela memories (PostgreSQL) |
+| `eva_remember` | `mcp_remember` | Armazena memoria na tabela memories (NietzscheDB) |
 | `eva_recall` | `mcp_recall` | Busca memorias por texto (ILIKE) |
-| `eva_teach` | `mcp_teach_eva` | Ensina algo a EVA — grava CoreMemory no Neo4j Core (:7688) |
-| `eva_identity` | `mcp_get_identity` | Retorna identidade da EVA (EvaSelf do Neo4j Core) |
-| `eva_learn_topic` | `mcp_learn_topic` | EVA estuda topico autonomamente (web search + Qdrant) |
+| `eva_teach` | `mcp_teach_eva` | Ensina algo a EVA — grava CoreMemory no NietzscheDB Core (:7688) |
+| `eva_identity` | `mcp_get_identity` | Retorna identidade da EVA (EvaSelf do NietzscheDB Core) |
+| `eva_learn_topic` | `mcp_learn_topic` | EVA estuda topico autonomamente (web search + NietzscheDB) |
 
 ### Communication (7)
 
@@ -261,10 +261,10 @@ Config: `.mcp.json` | Auth: `X-MCP-Key` (env `MCP_API_KEY`)
 
 | MCP Tool | Internal | O que faz |
 |---|---|---|
-| `eva_query_postgres` | `query_postgresql` | Query SQL SELECT no PostgreSQL (130+ tabelas) |
-| `eva_query_neo4j` | `query_neo4j` | Query Cypher no Neo4j geral (:7687) — read-only |
-| `eva_query_neo4j_core` | `mcp_query_neo4j_core` | Query Cypher no Neo4j Core (:7688) — read-only |
-| `eva_query_qdrant` | `query_qdrant` | Busca vetorial no Qdrant (20+ colecoes, embeddings 3072-dim) |
+| `eva_query_postgres` | `query_NietzscheDB` | Query SQL SELECT no NietzscheDB (130+ tabelas) |
+| `eva_query_NietzscheDB` | `query_NietzscheDB` | Query Cypher no NietzscheDB geral (:7687) — read-only |
+| `eva_query_NietzscheDB_core` | `mcp_query_NietzscheDB_core` | Query Cypher no NietzscheDB Core (:7688) — read-only |
+| `eva_query_NietzscheDB` | `query_NietzscheDB` | Busca vetorial no NietzscheDB (20+ colecoes, embeddings 3072-dim) |
 
 ### Code & Skills (5)
 
@@ -321,7 +321,7 @@ Config: `.mcp.json` | Auth: `X-MCP-Key` (env `MCP_API_KEY`)
 
 | Endpoint | O que faz |
 |---|---|
-| `POST /mcp/tools/remember` | Armazena memoria (PostgreSQL) |
+| `POST /mcp/tools/remember` | Armazena memoria (NietzscheDB) |
 | `POST /mcp/tools/recall` | Busca memorias por texto (ILIKE) |
 | `GET /mcp/resources` | Lista memorias como MCP resources |
 | `GET /mcp/prompts` | Lista prompts (stubs hardcoded) |
@@ -332,4 +332,4 @@ Config: `.mcp.json` | Auth: `X-MCP-Key` (env `MCP_API_KEY`)
 - **Dynamic Tools** (`available_tools` table, migration `016`) — registro dinamico com rate limiting, permissoes por role, log de invocacoes
 - **Tool Discovery** (`internal/tools/discovery.go`) — merge de tools estaticas (Go) + dinamicas (DB) com cache de 5 min
 - **Swarm Agents** — Google, Wellness, Scholar, Kids, Self-Awareness — cada um registra seus tools no registry
-- **MCP Handlers** (`internal/tools/mcp_handlers.go`) — 8 handlers dedicados para o bridge MCP (memoria, identidade, selfcode, neo4j core)
+- **MCP Handlers** (`internal/tools/mcp_handlers.go`) — 8 handlers dedicados para o bridge MCP (memoria, identidade, selfcode, NietzscheDB core)

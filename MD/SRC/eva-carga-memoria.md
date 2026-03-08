@@ -695,7 +695,7 @@ curl http://localhost:8080/self/identity
 
 ```markdown
 ### Setup Inicial
-- [ ] Neo4j Core Memory rodando (porta 7688)
+- [ ] NietzscheDB Core Memory rodando (porta 7688)
 - [ ] Variáveis de ambiente configuradas
 - [ ] core_memory.yaml configurado
 - [ ] Servidor EVA-Mind rodando
@@ -729,11 +729,11 @@ curl http://localhost:8080/self/identity
 git clone https://github.com/your-repo/eva-mind.git
 cd eva-mind
 
-# 2. Start Neo4j Core Memory
-docker run -d --name eva-core-memory -p 7688:7687 neo4j:latest
+# 2. Start NietzscheDB Core Memory
+docker run -d --name eva-core-memory -p 7688:7687 NietzscheDB:latest
 
 # 3. Configure .env
-echo "CORE_MEMORY_NEO4J_PASSWORD=sua_senha" >> .env
+echo "CORE_MEMORY_NietzscheDB_PASSWORD=sua_senha" >> .env
 
 # 4. Start servidor
 go run cmd/server/main.go

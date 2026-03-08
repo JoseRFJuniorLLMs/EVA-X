@@ -151,7 +151,7 @@ for rows.Next() {
 // ❌ Não verifica rows.Err() após loop
 ```
 **Problema:** Não verifica `rows.Err()` após loop. Connection leak potencial.
-**Impacto:** Esgotamento de conexões do pool PostgreSQL.
+**Impacto:** Esgotamento de conexões do pool NietzscheDB.
 **Linhas:** 83-100
 
 **Solução Sugerida:**
@@ -193,7 +193,7 @@ $ ls -la d:/DEV/EVA-Mind/.env
 
 **Conteúdo Típico:**
 ```env
-DATABASE_URL=postgresql://user:password@host:5432/db
+DATABASE_URL=NietzscheDB://user:password@host:5432/db
 GEMINI_API_KEY=AIzaSy...
 FIREBASE_CREDENTIALS_PATH=./credentials.json
 TWILIO_AUTH_TOKEN=...
@@ -203,7 +203,7 @@ TWILIO_AUTH_TOKEN=...
 **Impacto:**
 - Vazamento de credenciais se repositório for público/vazado
 - Violação LGPD (dados sensíveis expostos)
-- Comprometimento de contas (Gemini, Twilio, Firebase, PostgreSQL)
+- Comprometimento de contas (Gemini, Twilio, Firebase, NietzscheDB)
 
 **Ação IMEDIATA:**
 ```bash
@@ -218,7 +218,7 @@ git commit -m "🔒 Remove .env from Git tracking"
 # 3. ROTACIONAR TODAS AS CREDENCIAIS
 # - Gerar nova GEMINI_API_KEY no Google Cloud Console
 # - Regenerar TWILIO_AUTH_TOKEN
-# - Trocar senha do PostgreSQL
+# - Trocar senha do NietzscheDB
 # - Regenerar Firebase credentials
 
 # 4. Limpar histórico do Git (CRÍTICO!)
@@ -358,7 +358,7 @@ POST /api/v1/associations/prune/:patient_id
 import "github.com/your-org/eva-mind/api"
 
 // ...
-assocHandler := api.NewAssociationsHandler(edgeZonesService, neo4jDriver)
+assocHandler := api.NewAssociationsHandler(edgeZonesService, NietzscheDBDriver)
 assocHandler.RegisterRoutes(router)
 ```
 
@@ -390,7 +390,7 @@ Handler implementado mas rotas não registradas.
 
 #### Solução:
 ```go
-entityResolver := entities.NewEntityResolver(embeddingService, neo4jDriver)
+entityResolver := entities.NewEntityResolver(embeddingService, NietzscheDBDriver)
 entityHandler := api.NewEntityHandler(entityResolver)
 entityHandler.RegisterRoutes(router)
 ```
@@ -507,9 +507,9 @@ func main() {
 
     // ✅ Instanciar Core Memory Engine
     coreMemoryEngine, err := self.NewCoreMemoryEngine(
-        "bolt://localhost:7688",  // Neo4j separado
-        "neo4j",
-        os.Getenv("CORE_MEMORY_NEO4J_PASSWORD"),
+        "bolt://localhost:7688",  // NietzscheDB separado
+        "NietzscheDB",
+        os.Getenv("CORE_MEMORY_NietzscheDB_PASSWORD"),
         "eva_core_memory",
         reflectionService,
         anonymizationService,
@@ -976,7 +976,7 @@ func (p *CrisisProtocol) HandleChildAbuse(ctx context.Context, patientID int64, 
 ```
 
 **Problema:**
-- Dados sensíveis de crises armazenados em **texto claro** no PostgreSQL
+- Dados sensíveis de crises armazenados em **texto claro** no NietzscheDB
 - Violação LGPD Art. 46 (dados sensíveis de saúde devem ser criptografados)
 - Violação HIPAA (dados médicos não criptografados)
 
@@ -1107,7 +1107,7 @@ func (p *CrisisProtocol) StoreCrisisRecord(ctx context.Context, record CrisisRec
 }
 ```
 
-**Schema PostgreSQL:**
+**Schema NietzscheDB:**
 ```sql
 -- Adicionar coluna de encryption
 ALTER TABLE crisis_records
@@ -1169,7 +1169,7 @@ func (r *RAMEngine) ProcessQuery(ctx context.Context, patientID int64, query str
     // Gerar interpretações...
     interpretations := r.generator.Generate(ctx, query, context)
 
-    // ✅ Armazenar no PostgreSQL
+    // ✅ Armazenar no NietzscheDB
     for _, interp := range interpretations {
         interp.ID = uuid.New().String()
 
@@ -1229,7 +1229,7 @@ func (r *RAMEngine) GetInterpretationByID(ctx context.Context, patientID int64, 
     }
     r.cacheMu.RUnlock()
 
-    // ✅ Buscar no PostgreSQL
+    // ✅ Buscar no NietzscheDB
     var interp Interpretation
     var supportingFactsJSON, contradictionsJSON, reviewFlagsJSON []byte
 
@@ -1702,7 +1702,7 @@ O projeto **EVA-Mind** possui uma base de código **ambiciosa e bem estruturada*
 ```bash
 # DIA 1 - MANHÃ
 1. git rm --cached .env
-2. Rotacionar credenciais (Gemini, Twilio, PostgreSQL, Firebase)
+2. Rotacionar credenciais (Gemini, Twilio, NietzscheDB, Firebase)
 3. Adicionar .env ao .gitignore
 
 # DIA 1 - TARDE

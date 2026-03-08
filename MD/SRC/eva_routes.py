@@ -5,7 +5,7 @@ Mostra como plugar o HebbianUpdater no fluxo real de busca do EVA.
 
 Fluxo:
   1. Query chega em POST /memory/search
-  2. Neo4j retorna nós relevantes
+  2. NietzscheDB retorna nós relevantes
   3. HebbianUpdater.process_session() reforça as arestas dos nós retornados
   4. Zonas "consolidated" são injetadas no contexto da resposta
 ════════════════════════════════════════════════════════════════════
@@ -67,9 +67,9 @@ async def lifespan(app: FastAPI):
         threshold_emerging=float(os.getenv("HEBB_THRESHOLD_EMERG", "0.3")),
     )
     create_hebbian_updater(
-        neo4j_uri=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
-        neo4j_user=os.getenv("NEO4J_USER", "neo4j"),
-        neo4j_password=os.getenv("NEO4J_PASSWORD", "password"),
+        NietzscheDB_uri=os.getenv("NietzscheDB_URI", "bolt://localhost:7687"),
+        NietzscheDB_user=os.getenv("NietzscheDB_USER", "NietzscheDB"),
+        NietzscheDB_password=os.getenv("NietzscheDB_PASSWORD", "password"),
         config=config,
     )
     logger.info("EVA startup completo.")
@@ -102,9 +102,9 @@ async def memory_search(
     reforçando as conexões entre o que foi ativado junto.
     """
 
-    # ── 1. Sua lógica de busca Neo4j existente ──────────────────────
+    # ── 1. Sua lógica de busca NietzscheDB existente ──────────────────────
     # Substitua este bloco pelo seu código real de busca semântica
-    memory_results = await _mock_neo4j_search(req.query, req.top_k)
+    memory_results = await _mock_NietzscheDB_search(req.query, req.top_k)
     activated_ids = [r["id"] for r in memory_results]
 
     # ── 2. Atualização Hebb ─────────────────────────────────────────
@@ -170,12 +170,12 @@ async def get_associations(
 
 
 # ─────────────────────────────────────────────
-# MOCK — substitua pelo Neo4j real
+# MOCK — substitua pelo NietzscheDB real
 # ─────────────────────────────────────────────
 
-async def _mock_neo4j_search(query: str, top_k: int) -> list[dict]:
+async def _mock_NietzscheDB_search(query: str, top_k: int) -> list[dict]:
     """
-    Placeholder: substitua pela sua busca semântica real no Neo4j.
+    Placeholder: substitua pela sua busca semântica real no NietzscheDB.
     Deve retornar lista de dicts com ao menos {"id": str, ...}.
     """
     return [

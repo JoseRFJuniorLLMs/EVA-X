@@ -504,7 +504,7 @@ func GetDefaultTools() []interface{} {
 			"function_declarations": []interface{}{
 				map[string]interface{}{
 					"name":        "run_sql_select",
-					"description": "Executa uma consulta SQL SELECT (apenas leitura) no banco de dados para responder perguntas sobre o sistema. Use valid PostgreSQL syntax.",
+					"description": "Executa uma consulta SQL SELECT (apenas leitura) no banco de dados para responder perguntas sobre o sistema. Use valid NietzscheDB syntax.",
 					"parameters": map[string]interface{}{
 						"type": "object",
 						"properties": map[string]interface{}{
@@ -725,8 +725,8 @@ func GetDefaultTools() []interface{} {
 				},
 				// 🗄️ Database Access
 				map[string]interface{}{
-					"name":        "query_postgresql",
-					"description": "Executar query SELECT no PostgreSQL (apenas leitura)",
+					"name":        "query_NietzscheDB",
+					"description": "Executar query SELECT no NietzscheDB (apenas leitura)",
 					"parameters": map[string]interface{}{
 						"type": "object",
 						"properties": map[string]interface{}{

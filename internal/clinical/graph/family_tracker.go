@@ -139,7 +139,7 @@ func (f *FamilyTracker) storeChange(ctx context.Context, change *FamilyChange) e
 	err := f.db.QueryRowContext(ctx, `
 		SELECT EXISTS(
 			SELECT 1 FROM family_changes
-			WHERE patient_id = $1 AND person_neo4j_id = $2 AND change_type = $3
+			WHERE patient_id = $1 AND person_NietzscheDB_id = $2 AND change_type = $3
 			AND detected_at > NOW() - INTERVAL '7 days'
 		)
 	`, change.PatientID, change.PersonID, change.ChangeType).Scan(&exists)
@@ -151,7 +151,7 @@ func (f *FamilyTracker) storeChange(ctx context.Context, change *FamilyChange) e
 
 	return f.db.QueryRowContext(ctx, `
 		INSERT INTO family_changes (
-			patient_id, change_type, person_neo4j_id, person_name, relationship, detected_at
+			patient_id, change_type, person_NietzscheDB_id, person_name, relationship, detected_at
 		) VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING id
 	`, change.PatientID, change.ChangeType, change.PersonID, change.PersonName,
@@ -162,7 +162,7 @@ func (f *FamilyTracker) storeChange(ctx context.Context, change *FamilyChange) e
 // GetRecentChanges retrieves recent family changes
 func (f *FamilyTracker) GetRecentChanges(ctx context.Context, patientID int64, days int) ([]FamilyChange, error) {
 	rows, err := f.db.QueryContext(ctx, `
-		SELECT id, patient_id, change_type, person_neo4j_id, person_name, relationship, detected_at
+		SELECT id, patient_id, change_type, person_NietzscheDB_id, person_name, relationship, detected_at
 		FROM family_changes
 		WHERE patient_id = $1 AND detected_at > NOW() - INTERVAL '$2 days'
 		ORDER BY detected_at DESC

@@ -45,7 +45,7 @@ func generateSimilarEmbedding(base []float64, noise float64, seed int64) []float
 	return emb
 }
 
-func TestScoreDissonance_Basic(t *testing.T) {
+func TestScoNietzscheDBsonance_Basic(t *testing.T) {
 	dim := 64
 	base := generateEmbedding(dim, 42)
 
@@ -60,7 +60,7 @@ func TestScoreDissonance_Basic(t *testing.T) {
 		{ID: "m5", Embedding: generateEmbedding(dim, 888), ActivationScore: 0.1},
 	}
 
-	scores := ScoreDissonance(memories, 3)
+	scores := ScoNietzscheDBsonance(memories, 3)
 	require.Len(t, scores, 5)
 
 	// Should be sorted by dissonance DESC
@@ -79,7 +79,7 @@ func TestScoreDissonance_Basic(t *testing.T) {
 		"low-activation outlier should have less dissonance than high-activation outlier")
 }
 
-func TestScoreDissonance_AllSimilar(t *testing.T) {
+func TestScoNietzscheDBsonance_AllSimilar(t *testing.T) {
 	dim := 64
 	base := generateEmbedding(dim, 42)
 
@@ -93,7 +93,7 @@ func TestScoreDissonance_AllSimilar(t *testing.T) {
 		}
 	}
 
-	scores := ScoreDissonance(memories, 5)
+	scores := ScoNietzscheDBsonance(memories, 5)
 	require.Len(t, scores, 10)
 
 	// All should have high coherence → low dissonance
@@ -103,24 +103,24 @@ func TestScoreDissonance_AllSimilar(t *testing.T) {
 	}
 }
 
-func TestScoreDissonance_EmptyAndSmall(t *testing.T) {
-	assert.Nil(t, ScoreDissonance(nil, 5))
-	assert.Nil(t, ScoreDissonance([]EpisodicMemory{}, 5))
+func TestScoNietzscheDBsonance_EmptyAndSmall(t *testing.T) {
+	assert.Nil(t, ScoNietzscheDBsonance(nil, 5))
+	assert.Nil(t, ScoNietzscheDBsonance([]EpisodicMemory{}, 5))
 
 	// Single memory
-	scores := ScoreDissonance([]EpisodicMemory{
+	scores := ScoNietzscheDBsonance([]EpisodicMemory{
 		{ID: "m1", Embedding: generateEmbedding(32, 1), ActivationScore: 1.0},
 	}, 5)
 	require.Len(t, scores, 1)
 }
 
-func TestScoreDissonance_NoEmbeddings(t *testing.T) {
+func TestScoNietzscheDBsonance_NoEmbeddings(t *testing.T) {
 	memories := []EpisodicMemory{
 		{ID: "m1", Embedding: nil, ActivationScore: 0.8},
 		{ID: "m2", Embedding: []float64{}, ActivationScore: 0.5},
 	}
 
-	scores := ScoreDissonance(memories, 3)
+	scores := ScoNietzscheDBsonance(memories, 3)
 	require.Len(t, scores, 2)
 
 	// Should get neutral coherence (0.5)
@@ -184,7 +184,7 @@ func BenchmarkDissonanceScoring(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		ScoreDissonance(memories, 5)
+		ScoNietzscheDBsonance(memories, 5)
 	}
 }
 

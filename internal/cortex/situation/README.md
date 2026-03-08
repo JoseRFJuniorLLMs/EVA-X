@@ -42,7 +42,7 @@ User Query
 ┌─────────────────────────────────────┐
 │ 1. Situational Modulator            │
 │    - Infer(text, events) → Situation│
-│    - Cache Redis (5min TTL)         │
+│    - Cache NietzscheDB (5min TTL)         │
 │    - <10ms latency                  │
 └─────────────────────────────────────┘
     │
@@ -95,8 +95,8 @@ import "eva-mind/internal/cortex/situation"
 ### 2. Inicializar o Modulator
 
 ```go
-// Com cache Redis
-modulator := situation.NewModulator(redisClient, &situation.Config{
+// Com cache NietzscheDB
+modulator := situation.NewModulator(NietzscheDBClient, &situation.Config{
     CacheTTL: 5 * time.Minute,
     StressorKeywords: situation.getDefaultStressorKeywords(), // ou customizado
 })

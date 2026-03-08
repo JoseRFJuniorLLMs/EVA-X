@@ -66,6 +66,11 @@ var initialIntervals = []float64{
 
 // NewSpacedRepetitionService cria novo serviço
 func NewSpacedRepetitionService(db *sql.DB) *SpacedRepetitionService {
+	if db == nil {
+		log.Printf("⚠️ [SPACED] NietzscheDB unavailable — running in degraded mode")
+		return &SpacedRepetitionService{}
+	}
+
 	svc := &SpacedRepetitionService{
 		db: db,
 	}
@@ -92,6 +97,9 @@ func (s *SpacedRepetitionService) SetNotifyFunc(fn func(idosoID int64, msgType s
 
 // CaptureMemory captura um novo item para reforço de memória
 func (s *SpacedRepetitionService) CaptureMemory(ctx context.Context, idosoID int64, content, category, trigger string, importance int) (*MemoryItem, error) {
+	if s.db == nil {
+		return nil, fmt.Errorf("NietzscheDB unavailable")
+	}
 	if content == "" {
 		return nil, fmt.Errorf("conteúdo não pode ser vazio")
 	}
@@ -146,6 +154,9 @@ func (s *SpacedRepetitionService) CaptureMemory(ctx context.Context, idosoID int
 
 // RecordReview registra resultado de uma revisão
 func (s *SpacedRepetitionService) RecordReview(ctx context.Context, itemID int64, quality int, remembered bool) (*MemoryItem, error) {
+	if s.db == nil {
+		return nil, fmt.Errorf("NietzscheDB unavailable")
+	}
 	// Buscar item atual
 	item, err := s.GetItem(ctx, itemID)
 	if err != nil {
@@ -188,6 +199,9 @@ func (s *SpacedRepetitionService) RecordReview(ctx context.Context, itemID int64
 
 // GetPendingReviews retorna itens pendentes de revisão
 func (s *SpacedRepetitionService) GetPendingReviews(ctx context.Context, idosoID int64, limit int) ([]MemoryItem, error) {
+	if s.db == nil {
+		return nil, fmt.Errorf("NietzscheDB unavailable")
+	}
 	if limit <= 0 {
 		limit = 5
 	}
@@ -237,6 +251,9 @@ func (s *SpacedRepetitionService) GetPendingReviews(ctx context.Context, idosoID
 
 // GetItem busca um item específico
 func (s *SpacedRepetitionService) GetItem(ctx context.Context, itemID int64) (*MemoryItem, error) {
+	if s.db == nil {
+		return nil, fmt.Errorf("NietzscheDB unavailable")
+	}
 	query := `
 		SELECT id, idoso_id, content, category, COALESCE(trigger_phrase, ''), importance,
 		       repetition_count, ease_factor, interval_hours, next_review, last_review,
@@ -269,6 +286,9 @@ func (s *SpacedRepetitionService) GetItem(ctx context.Context, itemID int64) (*M
 
 // GetStats retorna estatísticas de memória do idoso
 func (s *SpacedRepetitionService) GetStats(ctx context.Context, idosoID int64) (map[string]interface{}, error) {
+	if s.db == nil {
+		return nil, fmt.Errorf("NietzscheDB unavailable")
+	}
 	query := `
 		SELECT
 			COUNT(*) as total,
@@ -301,12 +321,18 @@ func (s *SpacedRepetitionService) GetStats(ctx context.Context, idosoID int64) (
 
 // PauseItem pausa reforços de um item
 func (s *SpacedRepetitionService) PauseItem(ctx context.Context, itemID int64) error {
+	if s.db == nil {
+		return fmt.Errorf("NietzscheDB unavailable")
+	}
 	_, err := s.db.ExecContext(ctx, "UPDATE spaced_memory_items SET status = 'paused', updated_at = NOW() WHERE id = $1", itemID)
 	return err
 }
 
 // ResumeItem retoma reforços de um item
 func (s *SpacedRepetitionService) ResumeItem(ctx context.Context, itemID int64) error {
+	if s.db == nil {
+		return fmt.Errorf("NietzscheDB unavailable")
+	}
 	_, err := s.db.ExecContext(ctx, "UPDATE spaced_memory_items SET status = 'active', next_review = NOW(), updated_at = NOW() WHERE id = $1", itemID)
 	return err
 }
@@ -391,7 +417,7 @@ func (s *SpacedRepetitionService) processRemindersLoop() {
 }
 
 func (s *SpacedRepetitionService) sendPendingReminders() {
-	if s.notifyFunc == nil {
+	if s.db == nil || s.notifyFunc == nil {
 		return
 	}
 

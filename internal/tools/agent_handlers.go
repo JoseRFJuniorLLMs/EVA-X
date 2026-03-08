@@ -163,6 +163,9 @@ func (h *ToolsHandler) handlePlayMusic(idosoID int64, args map[string]interface{
 
 	// Tentar buscar via API se tiver token
 	go func() {
+		if h.db == nil || h.db.Conn == nil {
+			return
+		}
 		// Buscar token Spotify do usuário (se existir)
 		var spotifyToken string
 		h.db.Conn.QueryRow("SELECT spotify_access_token FROM idosos WHERE id = $1", idosoID).Scan(&spotifyToken)

@@ -365,7 +365,7 @@ func (p *ProsodyAnalyzer) assessHydration(features *ProsodyFeatures) string {
 	return "good"
 }
 
-// saveToDatabase saves analysis to PostgreSQL
+// saveToDatabase saves analysis to NietzscheDB
 func (p *ProsodyAnalyzer) saveToDatabase(idosoID int64, result *AnalysisResult) error {
 	query := `
 		INSERT INTO voice_prosody (

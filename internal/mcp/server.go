@@ -39,6 +39,10 @@ type Server struct {
 
 // NewServer creates a new MCP server
 func NewServer(db *sql.DB) *Server {
+	if db == nil {
+		log.Warn().Msg("⚠️ [MCP] NietzscheDB unavailable — running in degraded mode")
+	}
+
 	s := &Server{
 		db:     db,
 		router: mux.NewRouter(),
@@ -84,6 +88,10 @@ type Resource struct {
 
 // listResources lists available memory resources
 func (s *Server) listResources(w http.ResponseWriter, r *http.Request) {
+	if s.db == nil {
+		http.Error(w, `{"error":"NietzscheDB unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
 	ctx := r.Context()
 
 	// Get patient_id from query params
@@ -138,6 +146,10 @@ func (s *Server) listResources(w http.ResponseWriter, r *http.Request) {
 
 // getResource retrieves a specific memory resource
 func (s *Server) getResource(w http.ResponseWriter, r *http.Request) {
+	if s.db == nil {
+		http.Error(w, `{"error":"NietzscheDB unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
 	ctx := r.Context()
 	vars := mux.Vars(r)
 	resourceID := vars["id"]
@@ -179,6 +191,10 @@ type RememberRequest struct {
 
 // rememberTool stores a new memory
 func (s *Server) rememberTool(w http.ResponseWriter, r *http.Request) {
+	if s.db == nil {
+		http.Error(w, `{"error":"NietzscheDB unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
 	ctx := r.Context()
 
 	var req RememberRequest
@@ -246,6 +262,10 @@ func (s *Server) recallTool(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fallback: text search
+	if s.db == nil {
+		http.Error(w, `{"error":"NietzscheDB unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, content, event_time, importance_score
 		FROM memories

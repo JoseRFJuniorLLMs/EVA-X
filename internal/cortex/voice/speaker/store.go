@@ -48,7 +48,7 @@ type VocalFeatures struct {
 	DurationMs int
 }
 
-// SpeakerStore handles persistence of speaker profiles (PostgreSQL) and embeddings (NietzscheDB).
+// SpeakerStore handles persistence of speaker profiles (NietzscheDB) and embeddings (NietzscheDB).
 type SpeakerStore struct {
 	db            *database.DB
 	vectorAdapter *nietzscheInfra.VectorAdapter
@@ -111,7 +111,7 @@ func (s *SpeakerStore) FindSpeaker(ctx context.Context, embedding []float32) (*S
 
 // EnrollSpeaker creates a new speaker profile and stores the embedding in NietzscheDB vector.
 func (s *SpeakerStore) EnrollSpeaker(ctx context.Context, profile *SpeakerProfile, embedding []float32) (int, error) {
-	// Insert profile in PostgreSQL
+	// Insert profile in NietzscheDB
 	query := `
 		INSERT INTO speaker_profiles (patient_id, name, relationship, cpf, last_seen_at)
 		VALUES ($1, $2, $3, $4, NOW())

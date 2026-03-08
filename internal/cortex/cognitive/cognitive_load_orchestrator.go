@@ -132,7 +132,7 @@ func (clo *CognitiveLoadOrchestrator) RecordInteraction(load InteractionLoad) er
 	}
 
 	// 5. Atualizar cache NietzscheDB
-	err = clo.updateRedisCache(load.PatientID)
+	err = clo.updateNietzscheDBCache(load.PatientID)
 	if err != nil {
 		log.Printf("⚠️ [COGNITIVE] Erro ao atualizar cache: %v", err)
 	}
@@ -162,7 +162,7 @@ func (clo *CognitiveLoadOrchestrator) GetCurrentState(patientID int64) (*Cogniti
 		}
 	}
 
-	// Buscar do PostgreSQL
+	// Buscar do NietzscheDB
 	query := `
 		SELECT
 			patient_id, current_load_score, load_24h, load_7d,
@@ -533,7 +533,7 @@ func (clo *CognitiveLoadOrchestrator) applyDecision(decision *LoadDecision) erro
 }
 
 // Helper: Atualizar cache
-func (clo *CognitiveLoadOrchestrator) updateRedisCache(patientID int64) error {
+func (clo *CognitiveLoadOrchestrator) updateNietzscheDBCache(patientID int64) error {
 	state, err := clo.GetCurrentState(patientID)
 	if err != nil {
 		return err

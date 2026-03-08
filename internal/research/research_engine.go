@@ -28,12 +28,18 @@ type ResearchEngine struct {
 
 // NewResearchEngine cria novo motor de pesquisa
 func NewResearchEngine(db *sql.DB) *ResearchEngine {
+	if db == nil {
+		log.Printf("⚠️ [RESEARCH] NietzscheDB unavailable — running in degraded mode")
+		return &ResearchEngine{
+			statisticalMethods: NewStatisticalMethods(),
+		}
+	}
 	return &ResearchEngine{
-		db:                db,
-		anonymizer:        NewAnonymizer(db),
+		db:                   db,
+		anonymizer:           NewAnonymizer(db),
 		longitudinalAnalyzer: NewLongitudinalAnalyzer(db),
-		statisticalMethods: NewStatisticalMethods(),
-		cohortBuilder:     NewCohortBuilder(db),
+		statisticalMethods:   NewStatisticalMethods(),
+		cohortBuilder:        NewCohortBuilder(db),
 	}
 }
 

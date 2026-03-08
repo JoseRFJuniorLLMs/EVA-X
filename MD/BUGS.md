@@ -108,12 +108,12 @@ Valores como "MORTO", "FEIO", "ALEJADO", "IA" injetados diretamente no prompt do
 1. Voz em tempo real (WebSocket + Gemini Live API)
 2. Chat REST para Malária-Angola
 3. Chat WebSocket (`/ws/eva`) com core memory
-4. CRUD de Pacientes (PostgreSQL, 47 colunas)
+4. CRUD de Pacientes (NietzscheDB, 47 colunas)
 5. JWT Auth (bcrypt, access 15min + refresh 7d)
 6. Agendamento de medicamentos + push FCM
 7. Escalação de emergência (push → email)
-8. Neo4j grafo semântico de pacientes
-9. Qdrant busca vetorial (1536D)
+8. NietzscheDB grafo semântico de pacientes
+9. NietzscheDB busca vetorial (1536D)
 10. Swarm multi-agente (12 agentes, circuit breaker)
 11. 150+ tools com function calling
 12. Escalas clínicas PHQ-9, GAD-7, C-SSRS
@@ -138,10 +138,10 @@ Valores como "MORTO", "FEIO", "ALEJADO", "IA" injetados diretamente no prompt do
 - RAM Engine — instanciado com adapters para LLM, Embedding, Retrieval, Graph, Hebbian, Database
 
 ### Corrigidos:
-- 10 TODOs de extração Neo4j em edge_zones.go, dual_weights.go, hebbian_realtime.go
+- 10 TODOs de extração NietzscheDB em edge_zones.go, dual_weights.go, hebbian_realtime.go
 - ExtractFacts() implementado com Gemini LLM real
 - DetectContradictions() implementado com Gemini LLM real
-- MCP recall com busca vetorial (Qdrant + fallback ILIKE)
+- MCP recall com busca vetorial (NietzscheDB + fallback ILIKE)
 
 ### Implementados (backlog):
 - Cliente gRPC do NietzscheDB — Go SDK pronto: `sdk-papa-caolho` (Nietzsche-Database/sdks/go/, 22 RPCs). Falta: reescrever `internal/brainstem/infrastructure/nietzsche/client.go` para usar o SDK
@@ -158,7 +158,7 @@ Valores como "MORTO", "FEIO", "ALEJADO", "IA" injetados diretamente no prompt do
 
 | Módulo | Status |
 |--------|--------|
-| Memory Orchestrator | Pipeline parcial (Qdrant + PostgreSQL writes são stubs) |
+| Memory Orchestrator | Pipeline parcial (NietzscheDB + NietzscheDB writes são stubs) |
 | Memory Scheduler | Krylov maintenance é stub |
 
 ---

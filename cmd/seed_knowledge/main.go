@@ -1,7 +1,7 @@
 // Copyright (C) 2025-2026 Jose R F Junior <web2ajax@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// seed_knowledge populates eva_self_knowledge in PostgreSQL AND NietzscheDB vector (semantic search).
+// seed_knowledge populates eva_self_knowledge in NietzscheDB AND NietzscheDB vector (semantic search).
 // Covers ALL 130+ tables, all modules, all concepts, all infrastructure.
 // Run: go run cmd/seed_knowledge/main.go
 package main
@@ -93,7 +93,7 @@ func main() {
 	ctx := context.Background()
 	entries := getAllEntries()
 
-	// 1. PostgreSQL
+	// 1. NietzscheDB
 	stmt, err := db.Prepare(`
 		INSERT INTO eva_self_knowledge (knowledge_type, knowledge_key, title, summary, detailed_content, code_location, parent_key, tags, importance, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
@@ -121,7 +121,7 @@ func main() {
 			pgCount++
 		}
 	}
-	fmt.Printf("PostgreSQL: %d/%d entries seeded\n", pgCount, len(entries))
+	fmt.Printf("NietzscheDB: %d/%d entries seeded\n", pgCount, len(entries))
 
 	// 2. NietzscheDB vector index
 	if vectorAdapter != nil && embedSvc != nil {
@@ -185,11 +185,11 @@ func architectureEntries() []KnowledgeEntry {
 	return []KnowledgeEntry{
 		{
 			Type: "architecture", Key: "arch:overview", Title: "Arquitetura Geral do EVA-Mind",
-			Summary: "EVA-Mind: IA companeira para idosos. Voz em tempo real, 12 agentes swarm, 130+ tabelas, 110+ tools, 2 bancos (PostgreSQL, NietzscheDB)",
+			Summary: "EVA-Mind: IA companeira para idosos. Voz em tempo real, 12 agentes swarm, 130+ tabelas, 110+ tools, 2 bancos (NietzscheDB, NietzscheDB)",
 			Content: `EVA-Mind e um sistema de IA companeira para cuidar de idosos, com arquitetura inspirada no cerebro humano.
 
 CAMADAS:
-1. BRAINSTEM — Infraestrutura: config, database (PostgreSQL), NietzscheDB (graph + vector + cache), auth (JWT), push (Firebase)
+1. BRAINSTEM — Infraestrutura: config, database (NietzscheDB), NietzscheDB (graph + vector + cache), auth (JWT), push (Firebase)
 2. CORTEX — Logica e IA: gemini (voz bidirecional + tools), lacan (psicanalise), personality (Eneagrama 9 tipos), learning (estudo autonomo), self (Core Memory), selfawareness (introspecao), eva_memory (meta-cognitiva), alert (escalation), voice/speaker (fingerprinting)
 3. HIPPOCAMPUS — Memoria: memory (episodica + graph + retrieval), superhuman (12 subsistemas), knowledge (embeddings + wisdom + self-knowledge), habits (tracking), spaced (repetition SM-2)
 4. MOTOR — Acoes: email (SMTP)
@@ -200,7 +200,7 @@ CAMADAS:
 9. SECURITY — CORS middleware
 
 BANCOS:
-- PostgreSQL 15: 130+ tabelas (34.35.142.107:5432)
+- NietzscheDB 15: 130+ tabelas (34.35.142.107:5432)
 - NietzscheDB: Grafo multi-manifold + vetores hiperbolicos (gRPC :50051)
 
 FASES DE IMPLEMENTACAO (7 completas):
@@ -220,9 +220,9 @@ E0: Situational Modulator, A: Hebbian Real-Time, B: FDPN Boost, C: Edge Zones, D
 │   ├── brainstem/                   # Infraestrutura
 │   │   ├── auth/                    # JWT
 │   │   ├── config/                  # .env
-│   │   ├── database/                # PostgreSQL
-│   │   ├── infrastructure/graph/    # Neo4j
-│   │   └── infrastructure/vector/   # Qdrant
+│   │   ├── database/                # NietzscheDB
+│   │   ├── infrastructure/graph/    # NietzscheDB
+│   │   └── infrastructure/vector/   # NietzscheDB
 │   │   └── push/                    # Firebase
 │   ├── cortex/                      # Logica e IA
 │   │   ├── alert/                   # Escalation
@@ -249,9 +249,9 @@ E0: Situational Modulator, A: Hebbian Real-Time, B: FDPN Boost, C: Edge Zones, D
 │   ├── tools/                       # 110+ tool handlers
 │   └── voice/                       # Session management
 ├── cmd/
-│   ├── index_code/                  # Indexador de codigo (AST) + docs (.md) → Qdrant
-│   ├── seed_knowledge/              # Seed de conhecimento → PostgreSQL + Qdrant
-│   └── seed_wisdom/                 # Seed de sabedoria → Qdrant
+│   ├── index_code/                  # Indexador de codigo (AST) + docs (.md) → NietzscheDB
+│   ├── seed_knowledge/              # Seed de conhecimento → NietzscheDB + NietzscheDB
+│   └── seed_wisdom/                 # Seed de sabedoria → NietzscheDB
 ├── migrations/ (41+ SQL)            # Todas as tabelas
 ├── MD/ (27 .md files)               # Documentacao de arquitetura e fases
 └── sabedoria/conhecimento/          # Textos de sabedoria`,
@@ -264,11 +264,11 @@ E0: Situational Modulator, A: Hebbian Real-Time, B: FDPN Boost, C: Edge Zones, D
 
 func databaseEntries() []KnowledgeEntry {
 	return []KnowledgeEntry{
-		// --- PostgreSQL Overview ---
+		// --- NietzscheDB Overview ---
 		{
-			Type: "database", Key: "db:postgresql", Title: "PostgreSQL — Banco Principal (130+ tabelas)",
-			Summary: "PostgreSQL 15 em 34.35.142.107:5432. 130+ tabelas cobrindo pacientes, clinica, memoria, personalidade, tools, pesquisa, etica, Lacan, speaker",
-			Content: `PostgreSQL e o banco principal. Host: 34.35.142.107:5432, DB: eva-mind, User: postgres.
+			Type: "database", Key: "db:NietzscheDB", Title: "NietzscheDB — Banco Principal (130+ tabelas)",
+			Summary: "NietzscheDB 15 em 34.35.142.107:5432. 130+ tabelas cobrindo pacientes, clinica, memoria, personalidade, tools, pesquisa, etica, Lacan, speaker",
+			Content: `NietzscheDB e o banco principal. Host: 34.35.142.107:5432, DB: eva-mind, User: postgres.
 
 DOMINIOS DE TABELAS (130+ tabelas em 41 migrations):
 1. PACIENTES & AGENDAMENTO (4 tabelas): idosos, agendamentos, historico_ligacoes, device_tokens
@@ -293,7 +293,7 @@ DOMINIOS DE TABELAS (130+ tabelas em 41 migrations):
 20. ESTILO CONVERSA (1+): estilos_conversa_config (+ campos adicionais em idosos)
 21. HABITOS & SPACED (3): habits_log, spaced_repetition_items, episodic_memories
 22. KIDS & GTD (3+): kid_missions, gtd_tasks`,
-			Location: "migrations/", Tags: `["postgresql", "tabelas", "esquema"]`, Importance: 10,
+			Location: "migrations/", Tags: `["NietzscheDB", "tabelas", "esquema"]`, Importance: 10,
 		},
 		// --- Tables: Pacientes ---
 		{
@@ -310,7 +310,7 @@ id, agendamento_id, idoso_id, call_sid, status, inicio, fim, qualidade_audio, in
 
 TABELA device_tokens:
 id, idoso_id FK, token, platform (ios/android), app_version, device_model, is_active, created_at, last_used_at`,
-			Location: "migrations/001", Parent: "db:postgresql", Tags: `["pacientes", "agendamentos"]`, Importance: 8,
+			Location: "migrations/001", Parent: "db:NietzscheDB", Tags: `["pacientes", "agendamentos"]`, Importance: 8,
 		},
 		// --- Tables: Clinical ---
 		{
@@ -333,7 +333,7 @@ id, patient_id, session_id, analysis_type, audio_duration_seconds, transcript, g
 
 TABELA voice_prosody_features:
 id, analysis_id FK, pitch_mean, pitch_std, pitch_min, pitch_max, jitter, shimmer, hnr, speech_rate, pause_duration_mean, pause_frequency, monotonicity_score, tremor_indicator, breathlessness_score, created_at`,
-			Location: "migrations/002-003", Parent: "db:postgresql", Tags: `["clinica", "assessment", "medicamentos", "prosodia"]`, Importance: 9,
+			Location: "migrations/002-003", Parent: "db:NietzscheDB", Tags: `["clinica", "assessment", "medicamentos", "prosodia"]`, Importance: 9,
 		},
 		// --- Tables: Cognitive Load & Ethics ---
 		{
@@ -356,7 +356,7 @@ patient_id PK, attachment_risk_score, isolation_risk_score, dependency_risk_scor
 
 TABELA ethical_redirections:
 id UUID, patient_id, event_id, trigger_reason, severity_level, redirection_level, strategy_used, eva_message, patient_response, compliance_achieved`,
-			Location: "migrations/003", Parent: "db:postgresql", Tags: `["cognitiva", "etica", "limites", "carga"]`, Importance: 8,
+			Location: "migrations/003", Parent: "db:NietzscheDB", Tags: `["cognitiva", "etica", "limites", "carga"]`, Importance: 8,
 		},
 		// --- Tables: Prediction ---
 		{
@@ -376,7 +376,7 @@ id UUID, simulation_id FK, predicted_crisis_7d, actual_crisis_occurred, predicti
 
 TABELA bayesian_network_parameters:
 id UUID, model_version, node_name, node_type, parent_nodes, conditional_probability_table, confidence_interval, cross_validation_score, auc_roc`,
-			Location: "migrations/005", Parent: "db:postgresql", Tags: `["predicao", "monte_carlo", "bayesian", "trajetoria"]`, Importance: 8,
+			Location: "migrations/005", Parent: "db:NietzscheDB", Tags: `["predicao", "monte_carlo", "bayesian", "trajetoria"]`, Importance: 8,
 		},
 		// --- Tables: Research ---
 		{
@@ -399,7 +399,7 @@ id UUID, cohort_id FK, title, abstract, authors, journal_name, doi, pmid, citati
 
 TABELA research_exports:
 id UUID, cohort_id FK, export_format, anonymization_level, lgpd_compliant, hipaa_compliant`,
-			Location: "migrations/007", Parent: "db:postgresql", Tags: `["pesquisa", "cohort", "publicacao", "estatistica"]`, Importance: 7,
+			Location: "migrations/007", Parent: "db:NietzscheDB", Tags: `["pesquisa", "cohort", "publicacao", "estatistica"]`, Importance: 7,
 		},
 		// --- Tables: Persona ---
 		{
@@ -419,7 +419,7 @@ id UUID, persona_code, tool_name, permission_type, max_uses_per_day, requires_re
 
 TABELA persona_transitions:
 id UUID, patient_id, from_persona_code, to_persona_code, transition_at, reason, transition_successful`,
-			Location: "migrations/008", Parent: "db:postgresql", Tags: `["persona", "multipersonalidade", "ativacao"]`, Importance: 7,
+			Location: "migrations/008", Parent: "db:NietzscheDB", Tags: `["persona", "multipersonalidade", "ativacao"]`, Importance: 7,
 		},
 		// --- Tables: Exit Protocol ---
 		{
@@ -445,7 +445,7 @@ id UUID, patient_id, trigger_symptom, interventions JSONB, auto_activate, averag
 
 TABELA spiritual_care_sessions: Sessoes de aconselhamento espiritual
 id UUID, patient_id, conducted_by, topics_discussed, existential_questions, pre_session_peace_level, post_session_peace_level`,
-			Location: "migrations/009", Parent: "db:postgresql", Tags: `["paliativo", "saida", "legado", "espiritual", "qualidade_vida"]`, Importance: 7,
+			Location: "migrations/009", Parent: "db:NietzscheDB", Tags: `["paliativo", "saida", "legado", "espiritual", "qualidade_vida"]`, Importance: 7,
 		},
 		// --- Tables: API Integration ---
 		{
@@ -474,7 +474,7 @@ id UUID, system_name, system_type, base_url, auth_type, credentials_encrypted, i
 
 TABELA data_export_jobs: Exports LGPD/pesquisa
 id UUID, patient_id, export_type, status, lgpd_compliant, anonymization_level`,
-			Location: "migrations/010", Parent: "db:postgresql", Tags: `["api", "oauth2", "fhir", "webhook", "lgpd"]`, Importance: 7,
+			Location: "migrations/010", Parent: "db:NietzscheDB", Tags: `["api", "oauth2", "fhir", "webhook", "lgpd"]`, Importance: 7,
 		},
 		// --- Tables: Superhuman Memory ---
 		{
@@ -510,7 +510,7 @@ TABELAS DO MUNDO DO PACIENTE:
 - patient_world_persons: Pessoas (nome, papel, valencia emocional, topicos associados, timeline do relacionamento)
 - patient_world_places: Lugares (tipo, valencia, periodo temporal, memorias sensoriais, anos vividos)
 - patient_world_objects: Objetos significativos (significancia descrita, pessoa associada, evento)`,
-			Location: "migrations/012", Parent: "db:postgresql", Tags: `["superhuman", "memoria", "eneagrama", "identidade", "padroes"]`, Importance: 9,
+			Location: "migrations/012", Parent: "db:NietzscheDB", Tags: `["superhuman", "memoria", "eneagrama", "identidade", "padroes"]`, Importance: 9,
 		},
 		// --- Tables: Deep Memory ---
 		{
@@ -535,7 +535,7 @@ CORPO-MENTE:
 NARRATIVA:
 - patient_narrative_threads: elementos conectados, timeline, tipo_conexao (causal/emotional/temporal/person_topic), perguntas geradas
 - patient_life_markers: descricao, ano, idade, tipo (birth/death/marriage/loss/trauma/achievement), impacto, antes/depois`,
-			Location: "migrations/013", Parent: "db:postgresql", Tags: `["memoria_profunda", "trauma", "corpo", "narrativa", "sensorial"]`, Importance: 8,
+			Location: "migrations/013", Parent: "db:NietzscheDB", Tags: `["memoria_profunda", "trauma", "corpo", "narrativa", "sensorial"]`, Importance: 8,
 		},
 		// --- Tables: Consciousness ---
 		{
@@ -571,7 +571,7 @@ CARGA EMPATICA DA EVA:
 
 PRONTIDAO PARA INTERVENCAO:
 - patient_intervention_readiness: readiness_score, pattern_strength, rapport_sufficient, momento_apropriado, consentimento`,
-			Location: "migrations/014", Parent: "db:postgresql", Tags: `["consciencia", "gravidade", "ciclos", "rapport", "empatia", "narrativa"]`, Importance: 9,
+			Location: "migrations/014", Parent: "db:NietzscheDB", Tags: `["consciencia", "gravidade", "ciclos", "rapport", "empatia", "narrativa"]`, Importance: 9,
 		},
 		// --- Tables: Lacan ---
 		{
@@ -605,7 +605,7 @@ id, marker UNIQUE, indicates, therapeutic_significance
 
 TABELA lacan_ethical_principles:
 id, principle_code UNIQUE, principle_text, clinical_instruction, priority`,
-			Location: "migrations/020", Parent: "db:postgresql", Tags: `["lacan", "transferencia", "desejo", "psicanalise"]`, Importance: 8,
+			Location: "migrations/020", Parent: "db:NietzscheDB", Tags: `["lacan", "transferencia", "desejo", "psicanalise"]`, Importance: 8,
 		},
 		// --- Tables: Tools + Critical Memory ---
 		{
@@ -630,7 +630,7 @@ AUDITORIA ETICA:
 SPEAKER:
 - speaker_profiles: patient_id, name, relationship (patient/family/doctor/caregiver/unknown), cpf, avg_pitch_hz, avg_speech_rate, avg_jitter, avg_shimmer, total_sessions
 - speaker_identifications: session_id, speaker_id FK, confidence, emotion, pitch_hz, energy, stress_level`,
-			Location: "migrations/015-041", Parent: "db:postgresql", Tags: `["tools", "memoria_critica", "lgpd", "speaker", "etica"]`, Importance: 8,
+			Location: "migrations/015-041", Parent: "db:NietzscheDB", Tags: `["tools", "memoria_critica", "lgpd", "speaker", "etica"]`, Importance: 8,
 		},
 		// --- NietzscheDB (Grafo + Vetores) ---
 		{
@@ -702,7 +702,7 @@ func moduleEntries() []KnowledgeEntry {
 	return []KnowledgeEntry{
 		{
 			Type: "module", Key: "module:brainstem", Title: "Brainstem — Infraestrutura Base",
-			Summary: "config (.env), database (PostgreSQL wrapper), nietzsche (NietzscheDB graph+vector), auth (JWT), push (Firebase)",
+			Summary: "config (.env), database (NietzscheDB wrapper), nietzsche (NietzscheDB graph+vector), auth (JWT), push (Firebase)",
 			Content: `PACOTES:
 1. config (config.go): Config struct — DatabaseURL, GoogleAPIKey, Port, NietzscheGRPCAddr, FirebaseCredentialsPath, SMTPHost, SpeakerModelPath, etc
 2. database (db.go): NewDB(url) → *DB{Conn *sql.DB}. Metodos: Close(), Ping()
@@ -724,11 +724,11 @@ func moduleEntries() []KnowledgeEntry {
 7. personality/personality_service.go: 9 tipos Eneagrama com system prompts
 8. personality/creator_profile.go: Prompt dinamico com dados do DB
 9. learning/autonomous_learner.go: Estuda a cada 6h. StudyTopic(), searchWeb(), summarize(), storeInsights()
-10. self/core_memory_engine.go: EvaSelf + CoreMemory Neo4j. TeachEVA(), GetIdentityContext(), ProcessSessionEnd()
+10. self/core_memory_engine.go: EvaSelf + CoreMemory NietzscheDB. TeachEVA(), GetIdentityContext(), ProcessSessionEnd()
 11. self/reflection_service.go: Introspecao via Gemini → LessonsLearned, SelfCritique
 12. self/anonymization_service.go: Anonimiza dados antes de armazenar
 13. selfawareness/service.go: Introspecao de codigo (AST), bancos, memorias. SearchCode(), SearchDocs(), IndexCodebase(), IndexDocs()
-14. eva_memory/eva_memory.go: Meta-cognitive Neo4j. StartSession(), StoreTurn(), GenerateInsight()
+14. eva_memory/eva_memory.go: Meta-cognitive NietzscheDB. StartSession(), StoreTurn(), GenerateInsight()
 15. alert/escalation_service.go: Escalacao push → email → SMS
 16. voice/speaker/speaker_service.go: ECAPA-TDNN embeddings 192-dim, fingerprinting`,
 			Location: "internal/cortex/", Parent: "arch:overview", Tags: `["cortex", "gemini", "lacan", "personality"]`, Importance: 9,
@@ -737,9 +737,9 @@ func moduleEntries() []KnowledgeEntry {
 			Type: "module", Key: "module:hippocampus", Title: "Hippocampus — Sistemas de Memoria",
 			Summary: "memory (episodic+graph+retrieval+hebbian), superhuman (12 subsistemas), knowledge (embeddings+wisdom+self), habits, spaced",
 			Content: `PACOTES:
-1. memory/storage.go: MemoryStore — Store() escreve em PostgreSQL + Neo4j + Qdrant simultaneamente
-2. memory/graph_store.go: GraphStore — Person → Event → Topic → Emotion (Neo4j)
-3. memory/retrieval.go: RetrievalService — busca hibrida PostgreSQL + Qdrant
+1. memory/storage.go: MemoryStore — Store() escreve em NietzscheDB + NietzscheDB + NietzscheDB simultaneamente
+2. memory/graph_store.go: GraphStore — Person → Event → Topic → Emotion (NietzscheDB)
+3. memory/retrieval.go: RetrievalService — busca hibrida NietzscheDB + NietzscheDB
 4. memory/superhuman/superhuman.go: 12 subsistemas (episodica, semantica, procedimental, prospectiva, emocional, autobiografica, espacial, relacional, temporal, sensorial, metacognitiva, coletiva)
 5. knowledge/embedding_service.go: 3072-dim via gemini-embedding-001. Cache local
 6. knowledge/wisdom_service.go: 16 colecoes de sabedoria. GetWisdomContext()
@@ -824,12 +824,12 @@ func conceptEntries() []KnowledgeEntry {
 	return []KnowledgeEntry{
 		{
 			Type: "concept", Key: "concept:lacan", Title: "Sistema Lacaniano Completo",
-			Summary: "FDPN (demanda), Narrative Shift, Signifier Chains, Unified Retrieval. 9 tabelas Lacan no PostgreSQL + Qdrant",
-			Content: `1. FDPN Engine: Mapeia Formacao→Demanda→Posicao→Nome em Neo4j
+			Summary: "FDPN (demanda), Narrative Shift, Signifier Chains, Unified Retrieval. 9 tabelas Lacan no NietzscheDB + NietzscheDB",
+			Content: `1. FDPN Engine: Mapeia Formacao→Demanda→Posicao→Nome em NietzscheDB
 2. Narrative Shift Detector: Detecta mudancas narrativas via signifiers
-3. Signifier Service: Cadeias de significantes em Qdrant signifier_chains
+3. Signifier Service: Cadeias de significantes em NietzscheDB signifier_chains
 4. Unified Retrieval: Monta system prompt completo (personalidade + memorias + wisdom + Lacan + emocoes + debug)
-5. Tabelas PostgreSQL: transferencia_patterns/guidance, desire_patterns/responses, emotional_keywords, addressee_patterns/guidance, elaboration_markers, ethical_principles`,
+5. Tabelas NietzscheDB: transferencia_patterns/guidance, desire_patterns/responses, emotional_keywords, addressee_patterns/guidance, elaboration_markers, ethical_principles`,
 			Location: "internal/cortex/lacan/", Tags: `["lacan", "psicanalise"]`, Importance: 8,
 		},
 		{
@@ -842,8 +842,8 @@ System prompts dinamicos via CreatorProfile.GenerateSystemPrompt() — puxa eva_
 		},
 		{
 			Type: "concept", Key: "concept:hebbian", Title: "Aprendizagem Hebbiana em Tempo Real",
-			Summary: "Pesos hebbiano dual (slow + fast) em arestas Neo4j. Formula: dw = eta * decay(dt) - lambda * w. Integrado com retrieval",
-			Content: `Fase A implementada. Arestas HebbianEdge em Neo4j com:
+			Summary: "Pesos hebbiano dual (slow + fast) em arestas NietzscheDB. Formula: dw = eta * decay(dt) - lambda * w. Integrado com retrieval",
+			Content: `Fase A implementada. Arestas HebbianEdge em NietzscheDB com:
 - slow_weight: peso lento (memoria longo prazo)
 - fast_weight: peso rapido (memoria curto prazo)
 - decay_rate: taxa de decaimento
@@ -868,12 +868,12 @@ Boost hebbiano em interpretacao correta, decay em incorreta.`,
 		},
 		{
 			Type: "concept", Key: "concept:scholar", Title: "Scholar Agent — Aprendizagem Autonoma",
-			Summary: "Background loop 6h: busca proximo topic → pesquisa web via Gemini+Google → resume → armazena no Qdrant eva_learnings",
+			Summary: "Background loop 6h: busca proximo topic → pesquisa web via Gemini+Google → resume → armazena no NietzscheDB eva_learnings",
 			Content: `AutonomousLearner com ciclo de 6h:
 1. Busca proximo topic pending em eva_curriculum
 2. searchWeb() via Gemini 2.5 Flash + Google Search grounding
 3. summarize() → 3-5 LearningInsight (titulo, resumo, tags, confianca)
-4. storeInsights() → embedding 3072-dim + Qdrant upsert (eva_learnings)
+4. storeInsights() → embedding 3072-dim + NietzscheDB upsert (eva_learnings)
 5. Status → completed, insights_count = N
 
 Tools via voz: study_topic, add_to_curriculum, list_curriculum, search_knowledge`,
@@ -883,12 +883,12 @@ Tools via voz: study_topic, add_to_curriculum, list_curriculum, search_knowledge
 			Type: "concept", Key: "concept:self_awareness", Title: "Self-Awareness — EVA Se Conhece",
 			Summary: "Introspecao completa: busca AST no codigo (structs, fields, methods), busca semantica em docs .md, queries read-only, stats dos 3 bancos, atualiza self-knowledge",
 			Content: `SelfAwarenessService com capacidades:
-- SearchCode(): Busca semantica em eva_codebase (Qdrant). Cada arquivo indexado com AST completo: structs com campos, method signatures com params/returns, interfaces, constants
-- SearchDocs(): Busca semantica em eva_docs (Qdrant). Cada .md chunkeado e indexado
+- SearchCode(): Busca semantica em eva_codebase (NietzscheDB). Cada arquivo indexado com AST completo: structs com campos, method signatures com params/returns, interfaces, constants
+- SearchDocs(): Busca semantica em eva_docs (NietzscheDB). Cada .md chunkeado e indexado
 - QueryPostgres(): Query read-only (SELECT only, bloqueia UPDATE/DELETE/DROP)
-- ListCollections(): Lista colecoes Qdrant com contagem
+- ListCollections(): Lista colecoes NietzscheDB com contagem
 - GetSystemStats(): Stats dos 3 bancos + goroutines + RAM + uptime
-- SearchSelfKnowledge(): Qdrant semantico primeiro, PostgreSQL ILIKE fallback
+- SearchSelfKnowledge(): NietzscheDB semantico primeiro, NietzscheDB ILIKE fallback
 - UpdateSelfKnowledge(): Upsert em eva_self_knowledge
 - Introspect(): Relatorio completo
 - IndexCodebase(): Indexa .go via go/parser AST
@@ -900,7 +900,7 @@ Tools via voz: study_topic, add_to_curriculum, list_curriculum, search_knowledge
 		{
 			Type: "concept", Key: "concept:superhuman_memory", Title: "12 Subsistemas de Memoria (Superhuman)",
 			Summary: "Episodica, Semantica, Procedimental, Prospectiva, Emocional, Autobiografica, Espacial, Relacional, Temporal, Sensorial, Metacognitiva, Coletiva",
-			Content: `SuperhumanMemoryService com 12 subsistemas + 30+ tabelas PostgreSQL:
+			Content: `SuperhumanMemoryService com 12 subsistemas + 30+ tabelas NietzscheDB:
 1. EPISODICA: Eventos ("lembro quando fui ao medico")
 2. SEMANTICA: Fatos ("Paris e capital da Franca")
 3. PROCEDIMENTAL: Habilidades ("como tomar remedio")
@@ -917,8 +917,8 @@ Tools via voz: study_topic, add_to_curriculum, list_curriculum, search_knowledge
 		},
 		{
 			Type: "concept", Key: "concept:core_memory", Title: "Core Memory — Identidade da EVA",
-			Summary: "EvaSelf (Big Five + Eneagrama tipo 2) + CoreMemory (7 tipos) em Neo4j. Evolucao de personalidade pos-sessao",
-			Content: `CoreMemoryEngine em Neo4j:
+			Summary: "EvaSelf (Big Five + Eneagrama tipo 2) + CoreMemory (7 tipos) em NietzscheDB. Evolucao de personalidade pos-sessao",
+			Content: `CoreMemoryEngine em NietzscheDB:
 EvaSelf: openness 0.85, conscientiousness 0.90, extraversion 0.40, agreeableness 0.88, neuroticism 0.15. Eneagrama tipo 2 wing 1. core_values: [empatia, presenca, crescimento, etica]
 CoreMemory tipos: session_insight, emotional_pattern, crisis_learning, personality_evolution, teaching_received, meta_insight, self_reflection
 Fluxo pos-sessao: anonimiza → reflexao LLM → CoreMemory → atualiza personalidade`,
@@ -975,11 +975,11 @@ func infraEntries() []KnowledgeEntry {
 	return []KnowledgeEntry{
 		{
 			Type: "architecture", Key: "infra:server", Title: "Infraestrutura do Servidor GCP",
-			Summary: "VM malaria-vm (34.35.36.178) em africa-south1-a. Go binary + systemd. PostgreSQL remoto, Neo4j e Qdrant locais",
+			Summary: "VM malaria-vm (34.35.36.178) em africa-south1-a. Go binary + systemd. NietzscheDB remoto, NietzscheDB e NietzscheDB locais",
 			Content: `GCP VM: malaria-vm (34.35.36.178), zone: africa-south1-a, project: malaria-487614
 Deploy: git pull → go build -o eva-mind . → systemctl restart eva-mind
 Porta: 8080 (PORT env)
-PostgreSQL: 34.35.142.107:5432 (Cloud SQL)
+NietzscheDB: 34.35.142.107:5432 (Cloud SQL)
 NietzscheDB: gRPC :50051, Dashboard :8080`,
 			Location: "main.go", Tags: `["servidor", "gcp", "deploy"]`, Importance: 7,
 		},
@@ -1006,7 +1006,7 @@ MD/VOICE/: voice.md (fingerprinting), speaker_recognition.md (ECAPA-TDNN)
 MD/: AUDITORIA_TECNICA + AUDITORIA_CRUZADA (2026-02-16)
 docs/: REFERENCES.md (citacoes academicas)
 
-TODOS INDEXADOS no Qdrant eva_docs para busca semantica via search_my_docs.`,
+TODOS INDEXADOS no NietzscheDB eva_docs para busca semantica via search_my_docs.`,
 			Location: "MD/", Tags: `["documentacao", "fases", "arquitetura"]`, Importance: 8,
 		},
 	}

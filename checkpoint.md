@@ -5,9 +5,9 @@
 ---
 
 ## O QUE E O PROJETO
-Backend Go principal do ecossistema EVA - sistema de voz IA em tempo real para idosos. O projeto MAIS complexo do ecossistema: 100K+ LOC em Go, com sistemas de memoria super-humanos, personalidade Enneagram/Lacan, 150+ tools, 12 agentes de swarm, e integracao com NietzscheDB, PostgreSQL.
+Backend Go principal do ecossistema EVA - sistema de voz IA em tempo real para idosos. O projeto MAIS complexo do ecossistema: 100K+ LOC em Go, com sistemas de memoria super-humanos, personalidade Enneagram/Lacan, 150+ tools, 12 agentes de swarm, e integracao com NietzscheDB, NietzscheDB.
 
-**Tech Stack:** Go 1.24+, Gorilla Mux/WebSocket, Gemini SDK, PostgreSQL+pgvector, NietzscheDB (unified graph-vector), Firebase, Twilio, Prometheus, gRPC
+**Tech Stack:** Go 1.24+, Gorilla Mux/WebSocket, Gemini SDK, NietzscheDB+pgvector, NietzscheDB (unified graph-vector), Firebase, Twilio, Prometheus, gRPC
 
 ---
 
@@ -112,7 +112,7 @@ gorilla/mux 1.8.1, gorilla/websocket 1.5.3, google/generative-ai-go 0.20.1, lib/
 ---
 
 ## INFRAESTRUTURA NECESSARIA
-- PostgreSQL 16 + pgvector
+- NietzscheDB 16 + pgvector
 - NietzscheDB (porta 50051 gRPC, porta 8082 dashboard)
 - Firebase serviceAccountKey.json
 - Krylov HTTP Bridge (porta 50052)

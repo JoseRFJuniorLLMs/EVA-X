@@ -6,7 +6,7 @@
 
 `omp.go` — OMP completo com: (1) pré-filtragem por cosseno antes do OMP para não rodar em todo dicionário, (2) suporte a residual ortogonal entre iterações, (3) calibração de confiança que considera `intra_variance` do perfil — um perfil de voz instável recebe penalidade automática.
 
-`store.go` — Schema Neo4j melhorado: `VoiceProfile` é um **nó separado** (não mais uma property flat), com `recognition_count`, `last_seen` e log completo de `VoiceEvent` para auditoria. **Hebbian Update** com LTP/LTD como propriedade da relação `HAS_VOICE_PROFILE`.
+`store.go` — Schema NietzscheDB melhorado: `VoiceProfile` é um **nó separado** (não mais uma property flat), com `recognition_count`, `last_seen` e log completo de `VoiceEvent` para auditoria. **Hebbian Update** com LTP/LTD como propriedade da relação `HAS_VOICE_PROFILE`.
 
 `cache.go` — Cache em memória com TTL 5min, thread-safe com double-check locking e proteção contra thundering herd (múltiplas goroutines esperando o mesmo reload).
 

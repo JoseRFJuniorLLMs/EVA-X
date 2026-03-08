@@ -68,7 +68,7 @@ func TestEntityResolver_CosineSimilarity(t *testing.T) {
 }
 
 func TestEntityResolver_FindDuplicateEntities(t *testing.T) {
-	mockNeo4j := &mockNeo4jClient{
+	mockGraph := &mockGraphClient{
 		entities: []map[string]interface{}{
 			{
 				"node_id":   "entity_1",
@@ -99,7 +99,7 @@ func TestEntityResolver_FindDuplicateEntities(t *testing.T) {
 		},
 	}
 
-	resolver := NewEntityResolver(mockNeo4j, mockEmbedder, nil)
+	resolver := NewEntityResolver(mockGraph, mockEmbedder, nil)
 	resolver.SetSimilarityThreshold(0.85)
 
 	// Executar
@@ -137,7 +137,7 @@ func TestEntityResolver_FindDuplicateEntities(t *testing.T) {
 }
 
 func TestEntityResolver_ResolveEntityName(t *testing.T) {
-	mockNeo4j := &mockNeo4jClient{
+	mockGraph := &mockGraphClient{
 		entities: []map[string]interface{}{
 			{
 				"node_id":   "entity_1",
@@ -156,7 +156,7 @@ func TestEntityResolver_ResolveEntityName(t *testing.T) {
 		},
 	}
 
-	resolver := NewEntityResolver(mockNeo4j, mockEmbedder, nil)
+	resolver := NewEntityResolver(mockGraph, mockEmbedder, nil)
 	resolver.SetSimilarityThreshold(0.85)
 
 	tests := []struct {
@@ -205,13 +205,13 @@ func TestEntityResolver_ResolveEntityName(t *testing.T) {
 }
 
 func TestEntityResolver_MergeSingleEntity(t *testing.T) {
-	mockNeo4j := &mockNeo4jClient{
+	mockGraph := &mockGraphClient{
 		mergeSuccess: true,
 		edgesMoved:   3,
 	}
 
 	resolver := &EntityResolver{
-		neo4j: mockNeo4j,
+		graph: mockGraph,
 	}
 
 	candidate := MergeCandidate{
@@ -265,7 +265,7 @@ func TestEntityResolver_CalculateConfidence(t *testing.T) {
 }
 
 func TestEntityResolver_AutoResolve_DryRun(t *testing.T) {
-	mockNeo4j := &mockNeo4jClient{
+	mockGraph := &mockGraphClient{
 		entities: []map[string]interface{}{
 			{
 				"node_id":   "entity_1",
@@ -289,7 +289,7 @@ func TestEntityResolver_AutoResolve_DryRun(t *testing.T) {
 		},
 	}
 
-	resolver := NewEntityResolver(mockNeo4j, mockEmbedder, nil)
+	resolver := NewEntityResolver(mockGraph, mockEmbedder, nil)
 
 	// DryRun = true (não executa merges)
 	stats, err := resolver.AutoResolve(context.Background(), 123, true)
@@ -312,7 +312,7 @@ func TestEntityResolver_AutoResolve_DryRun(t *testing.T) {
 }
 
 func TestEntityResolver_AutoResolve_Execute(t *testing.T) {
-	mockNeo4j := &mockNeo4jClient{
+	mockGraph := &mockGraphClient{
 		entities: []map[string]interface{}{
 			{
 				"node_id":   "entity_1",
@@ -338,7 +338,7 @@ func TestEntityResolver_AutoResolve_Execute(t *testing.T) {
 		},
 	}
 
-	resolver := NewEntityResolver(mockNeo4j, mockEmbedder, nil)
+	resolver := NewEntityResolver(mockGraph, mockEmbedder, nil)
 
 	// DryRun = false (executa merges)
 	stats, err := resolver.AutoResolve(context.Background(), 123, false)
@@ -383,13 +383,13 @@ func TestEntityResolver_ThresholdConfiguration(t *testing.T) {
 
 // Mock implementations
 
-type mockNeo4jClient struct {
+type mockGraphClient struct {
 	entities     []map[string]interface{}
 	mergeSuccess bool
 	edgesMoved   int
 }
 
-func (m *mockNeo4jClient) ExecuteQuery(ctx context.Context, query string, params map[string]interface{}) ([]map[string]interface{}, error) {
+func (m *mockGraphClient) ExecuteQuery(ctx context.Context, query string, params map[string]interface{}) ([]map[string]interface{}, error) {
 	// Detectar tipo de query
 	if contains(query, "MATCH (p:Patient)") && contains(query, "MENTIONS") {
 		// Query de getPatientEntities

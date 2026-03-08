@@ -1,4 +1,4 @@
-# EVA: Pos-Migracao Neo4j + Qdrant + Redis → NietzscheDB
+# EVA: Pos-Migracao NietzscheDB + NietzscheDB + NietzscheDB → NietzscheDB
 
 > Documento gerado em 2026-02-20 — Auditoria completa de perdas, ganhos e trabalho necessario.
 
@@ -14,16 +14,16 @@
 - **Mitigacao:** Armazenar timestamps como Unix float64 no content JSON. Toda matematica de datas move para Go (`time.Now().Unix()`, `time.Since()`)
 - **Impacto:** ALTO — toca virtualmente toda query Cypher do codebase
 
-#### Redis Audio Buffer (RPush/LRange/Expire)
-- **Onde:** `internal/brainstem/infrastructure/redis/client.go`
+#### NietzscheDB Audio Buffer (RPush/LRange/Expire)
+- **Onde:** `internal/brainstem/infrastructure/NietzscheDB/client.go`
 - **O que perde:** Lista com TTL para chunks de audio em tempo real
-- **Mitigacao:** Redis NAO pode ser substituido para audio. Manter Redis para audio buffer OU usar buffer in-memory com TTL no Go (sessoes de audio sao curtas, ~5min)
+- **Mitigacao:** NietzscheDB NAO pode ser substituido para audio. Manter NietzscheDB para audio buffer OU usar buffer in-memory com TTL no Go (sessoes de audio sao curtas, ~5min)
 - **Impacto:** CRITICO para voz em tempo real
 
-#### Redis Cache Generico (Set/Get/TTL)
-- **Onde:** `internal/brainstem/infrastructure/cache/redis.go`
+#### NietzscheDB Cache Generico (Set/Get/TTL)
+- **Onde:** `internal/brainstem/infrastructure/cache/NietzscheDB.go`
 - **O que perde:** Cache de sessao com expiracao automatica
-- **Mitigacao:** Buffer in-memory com TTL no Go (sync.Map + goroutine de limpeza) ou manter Redis
+- **Mitigacao:** Buffer in-memory com TTL no Go (sync.Map + goroutine de limpeza) ou manter NietzscheDB
 - **Impacto:** MEDIO — cache e otimizacao, nao funcionalidade core
 
 #### Pattern Miner — Reescrita Total
@@ -52,8 +52,8 @@
 - **Mitigacao:** Dividir em queries NQL sequenciais com passagem de resultado no Go
 - **Impacto:** ALTO — exige re-arquitetura de queries compostas
 
-#### Filtragem por Payload (Qdrant `user_id` filter)
-- **Onde:** qdrant_client.go SearchWithScore
+#### Filtragem por Payload (NietzscheDB `user_id` filter)
+- **Onde:** NietzscheDB_client.go SearchWithScore
 - **O que perde:** `Filter{Must: [Field{Key: "user_id", Match: Integer}]}`
 - **Mitigacao:** Usar collections por usuario (`memory_user_42`) ou codificar user_id no node_type
 - **Impacto:** ALTO — toda busca semantica filtra por usuario
@@ -101,7 +101,7 @@
 - **Mitigacao:** Aceitar consistencia eventual ou implementar retry otimista
 - **Impacto:** MEDIO — risco de inconsistencia em operacoes compostas
 
-#### Batch Upsert (Qdrant)
+#### Batch Upsert (NietzscheDB)
 - **Onde:** Autonomous learner, bulk ingestion
 - **Mitigacao:** Loop Go com InsertNode individual
 - **Impacto:** BAIXO — performance concern para bulk ops
@@ -130,7 +130,7 @@
   - Memorias episodicas especificas vivem perto da borda
 - **Impacto clinico:** KNN retorna resultados semanticamente mais ricos porque hierarquia esta codificada na posicao, nao apenas na estrutura de arestas
 - **Propriedades nativas:** `n.depth` (profundidade hiperbolica), `n.hausdorff_local` (dimensao fractal local)
-- **Impossivel no sistema atual:** Sim — Neo4j + Qdrant nao tem nocao de profundidade geometrica
+- **Impossivel no sistema atual:** Sim — NietzscheDB + NietzscheDB nao tem nocao de profundidade geometrica
 
 #### Difusao por Heat Kernel (DIFFUSE)
 ```nql
@@ -140,7 +140,7 @@ DIFFUSE FROM $session_node WITH t = [0.1, 1.0, 10.0] MAX_HOPS 5
   - `t=0.1`: apenas vizinhos imediatos ativam
   - `t=10.0`: nos semanticamente distantes mas topologicamente conectados ativam — modela "associacao livre" na recordacao psicanalitica
 - **Substitui:** `community.go` inteiro (355 linhas de Laplacian/k-means manual)
-- **Impossivel no sistema atual:** Sim — Neo4j nao tem operador de difusao nativo
+- **Impossivel no sistema atual:** Sim — NietzscheDB nao tem operador de difusao nativo
 
 #### 13 Funcoes Espectrais (Matematicos)
 | Funcao | Uso Clinico para EVA |
@@ -158,7 +158,7 @@ DIFFUSE FROM $session_node WITH t = [0.1, 1.0, 10.0] MAX_HOPS 5
 | `KLEIN_DIST(prop, vec)` | Interpolacao geodesica entre conceitos |
 | `MINKOWSKI_NORM(prop)` | Profundidade/especificidade de um no de memoria |
 | `LOBACHEVSKY_ANGLE(prop, vec)` | Divergencia angular no espaco hiperbolico |
-- **Impossivel no sistema atual:** Sim — Neo4j nao tem nenhuma dessas funcoes
+- **Impossivel no sistema atual:** Sim — NietzscheDB nao tem nenhuma dessas funcoes
 
 #### Reconstrucao Sensorial (RECONSTRUCT — Phase 11)
 ```nql
@@ -176,39 +176,39 @@ INVOKE ZARATUSTRA IN "patient_graph" CYCLES 3 ALPHA 0.15 DECAY 0.05
   - Arestas sao criadas, fortalecidas ou podadas baseado em `energy` e `hausdorff_local`
   - Mimetiza crescimento sinaptico biologico
 - **Substitui:** `synaptogenesis.go` (280 linhas) + `pruning.go` inteiros
-- **Impossivel no sistema atual:** Sim — crescimento autonomo do grafo nao existe em Neo4j
+- **Impossivel no sistema atual:** Sim — crescimento autonomo do grafo nao existe em NietzscheDB
 
 ### 2.2 GANHOS ARQUITETURAIS
 
 #### Unificacao Graph + Vector em Um Unico No
 - **Antes:** Mesma memoria existe em 3 sistemas:
-  - PostgreSQL (transcricao raw)
-  - Qdrant (embedding semantico)
-  - Neo4j (no episodico no grafo)
+  - NietzscheDB (transcricao raw)
+  - NietzscheDB (embedding semantico)
+  - NietzscheDB (no episodico no grafo)
 - **Depois:** Um unico `Node` com `{id, content, embedding: PoincareVector, energy, node_type}`
-- **Ganho:** Elimina join cross-system que `MemoryStore.RetrieveHybrid()` faz entre Neo4j + Qdrant + PostgreSQL
+- **Ganho:** Elimina join cross-system que `MemoryStore.RetrieveHybrid()` faz entre NietzscheDB + NietzscheDB + NietzscheDB
 - **Impacto:** Simplificacao massiva da camada de retrieval
 
-#### Duas Instancias Neo4j → Duas Collections
-- **Antes:** Neo4j :7687 (paciente) + Neo4j :7688 (EVA core) — 2 processos, 2 configs, 2 conexoes
+#### Duas Instancias NietzscheDB → Duas Collections
+- **Antes:** NietzscheDB :7687 (paciente) + NietzscheDB :7688 (EVA core) — 2 processos, 2 configs, 2 conexoes
 - **Depois:** `"patient_graph"` e `"eva_core"` no mesmo NietzscheDB
 - **Ganho:** Deploy simplificado, um unico processo, isolamento total via CollectionManager
 
 #### Ciclo de Vida por Energia
-- **Antes:** `fast_weight` + `slow_weight` em arestas Neo4j (dual_weights.go: 383 linhas) + `hebbian_realtime.go` (358 linhas) + `edge_zones.go` (451 linhas)
+- **Antes:** `fast_weight` + `slow_weight` em arestas NietzscheDB (dual_weights.go: 383 linhas) + `hebbian_realtime.go` (358 linhas) + `edge_zones.go` (451 linhas)
 - **Depois:** `node.energy ∈ [0.0, 1.0]` nativo — acesso aumenta energia, inatividade decai, energy=0 → poda automatica pelo L-System
 - **Ganho:** ~1200 linhas de Go substituidas por semantica nativa do banco
 
 #### HNSW Cosine Nativo
 - **Config:** `NIETZSCHE_VECTOR_BACKEND=embedded` + `NIETZSCHE_VECTOR_METRIC=cosine`
-- **Ganho:** Busca vetorial sem dependencia externa (Qdrant eliminado)
+- **Ganho:** Busca vetorial sem dependencia externa (NietzscheDB eliminado)
 
 #### Multi-Collection com Dimensoes Independentes
 - **Ganho:** Cada collection pode ter dimensao diferente:
   - `memories`: 3072D (text-embedding-004)
   - `speaker_embeddings`: 192D (ECAPA-TDNN)
   - `patient_graph`: 3072D
-- **Antes:** Qdrant exigia uma collection por dimensao (ja era assim)
+- **Antes:** NietzscheDB exigia uma collection por dimensao (ja era assim)
 
 ---
 
@@ -220,7 +220,7 @@ INVOKE ZARATUSTRA IN "patient_graph" CYCLES 3 ALPHA 0.15 DECAY 0.05
 |----------|-----------|------------|
 | Timestamps Unix | Converter todos `datetime()` para `float64` Unix epoch no content JSON | Todos os 12 arquivos com Cypher temporal |
 | Threshold recalibration | Recalibrar todos `minScore` cosine → distancia hiperbolica | retrieval.go, embedding_service.go, speaker/store.go |
-| User isolation | Definir estrategia: collection-per-user vs user_id em node_type | qdrant_client.go → vector_adapter.go |
+| User isolation | Definir estrategia: collection-per-user vs user_id em node_type | NietzscheDB_client.go → vector_adapter.go |
 | `speaker_embeddings` dim fix | DefaultCollections() diz 3072 mas real e 192 (ECAPA-TDNN) | client.go EnsureCollections() |
 
 ### 3.2 PRIORIDADE 1 — Primeiras Semanas
@@ -265,7 +265,7 @@ INVOKE ZARATUSTRA IN "patient_graph" CYCLES 3 ALPHA 0.15 DECAY 0.05
 | Features Cypher sem equivalente NQL | 9 (datetime, CASE, WITH, UNWIND, COLLECT, reduce, stdev, NOT EXISTS, constraints) | ALTA |
 | Queries que precisam reescrita total | 3 (pattern_miner, temporal_decay, community complex queries) | MUITO ALTA |
 | Queries que precisam refatoracao | ~47 (33 MERGE + 13 paths + misc) | MEDIA |
-| Funcionalidade Redis perdida | 0 (Redis mantido para audio/cache OU substituido por in-memory Go) | NENHUMA |
+| Funcionalidade NietzscheDB perdida | 0 (NietzscheDB mantido para audio/cache OU substituido por in-memory Go) | NENHUMA |
 | Throughput batch perdido | Sim (batch upsert → loop individual) | BAIXA |
 | Transacoes ACID perdidas | Sim (sem transacoes explicitas) | MEDIA |
 
@@ -274,14 +274,14 @@ INVOKE ZARATUSTRA IN "patient_graph" CYCLES 3 ALPHA 0.15 DECAY 0.05
 |-----------|-----------|---------|
 | Linhas de Go potencialmente eliminaveis | ~2027 (community, synaptogenesis, pruning, dual_weights, hebbian, edge_zones) | ALTO |
 | Funcoes espectrais novas | 13 (inexistentes no sistema atual) | TRANSFORMACIONAL |
-| Sistemas externos eliminados | 2 (Neo4j + Qdrant → NietzscheDB unico) | ALTO |
-| Instancias de banco eliminadas | 3 (2 Neo4j + 1 Qdrant → 1 NietzscheDB) | ALTO |
+| Sistemas externos eliminados | 2 (NietzscheDB + NietzscheDB → NietzscheDB unico) | ALTO |
+| Instancias de banco eliminadas | 3 (2 NietzscheDB + 1 NietzscheDB → 1 NietzscheDB) | ALTO |
 | Operadores novos | 3 (DIFFUSE, RECONSTRUCT, INVOKE ZARATUSTRA) | TRANSFORMACIONAL |
 | Unificacao graph+vector | Sim (3 sistemas → 1) | ARQUITETURAL |
 
 ### Veredito
 
-**A migracao vale a pena.** As perdas sao principalmente sintaticas (features do Cypher que precisam ser reimplementadas no Go application layer) — nenhuma capacidade fundamental e perdida. Os ganhos sao fundamentais: geometria hiperbolica, funcoes espectrais, difusao por heat kernel, e motor de crescimento autonomo (Zaratustra) sao capacidades que simplesmente nao existem em nenhuma combinacao de Neo4j + Qdrant + Redis.
+**A migracao vale a pena.** As perdas sao principalmente sintaticas (features do Cypher que precisam ser reimplementadas no Go application layer) — nenhuma capacidade fundamental e perdida. Os ganhos sao fundamentais: geometria hiperbolica, funcoes espectrais, difusao por heat kernel, e motor de crescimento autonomo (Zaratustra) sao capacidades que simplesmente nao existem em nenhuma combinacao de NietzscheDB + NietzscheDB + NietzscheDB.
 
 O custo principal e **tempo de refatoracao** (~8 fases, estimativa de 2-3 semanas de trabalho focado). O retorno e um sistema unificado com capacidades clinicas imposssiveis no stack anterior.
 
@@ -289,7 +289,7 @@ O custo principal e **tempo de refatoracao** (~8 fases, estimativa de 2-3 semana
 
 ## 5. ARQUIVOS AFETADOS — MAPA COMPLETO
 
-### Neo4j → NietzscheDB (33 MERGE + 13 paths + misc)
+### NietzscheDB → NietzscheDB (33 MERGE + 13 paths + misc)
 | Arquivo | MERGEs | Paths *N | Complexidade |
 |---------|--------|----------|-------------|
 | `hippocampus/memory/graph_store.go` | 6 | 2 | Media |
@@ -307,7 +307,7 @@ O custo principal e **tempo de refatoracao** (~8 fases, estimativa de 2-3 semana
 | `hippocampus/knowledge/graph_reasoning.go` | 0 | 1 | Baixa |
 | `memory/consolidation/pruning.go` | 0 | 1 | Media |
 
-### Qdrant → NietzscheDB (8 arquivos)
+### NietzscheDB → NietzscheDB (8 arquivos)
 | Arquivo | Operacao | Collection |
 |---------|----------|-----------|
 | `cortex/brain/memory.go` | Upsert | memories |
@@ -319,17 +319,17 @@ O custo principal e **tempo de refatoracao** (~8 fases, estimativa de 2-3 semana
 | `cortex/voice/speaker/store.go` | Upsert/Search | speaker_embeddings |
 | `cortex/learning/autonomous_learner.go` | Upsert/Search | eva_learnings |
 
-### Redis → In-Memory Go (2 arquivos)
+### NietzscheDB → In-Memory Go (2 arquivos)
 | Arquivo | Operacao | Substituto |
 |---------|----------|-----------|
-| `infrastructure/redis/client.go` | RPush/LRange/Del + TTL | audio_buffer.go (in-memory) |
-| `infrastructure/cache/redis.go` | Set/Get + TTL | sync.Map + TTL goroutine |
+| `infrastructure/NietzscheDB/client.go` | RPush/LRange/Del + TTL | audio_buffer.go (in-memory) |
+| `infrastructure/cache/NietzscheDB.go` | Set/Get + TTL | sync.Map + TTL goroutine |
 
 ---
 
 ## 6. VEREDITO FINAL — 100% CONCLUIDO
 
-A migração de Neo4j, Qdrant e Redis para o **NietzscheDB** foi finalizada e validada. 
+A migração de NietzscheDB, NietzscheDB e NietzscheDB para o **NietzscheDB** foi finalizada e validada. 
 
 - **Substrato Unificado:** Todos os pontos de montagem de memória agora utilizam gRPC + NQL.
 - **Segurança:** RBAC e Criptografia at-rest integrados (Sprint 10).

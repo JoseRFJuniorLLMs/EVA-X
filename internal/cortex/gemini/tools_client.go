@@ -492,7 +492,7 @@ Resposta: {"tool": "list_curriculum", "args": {"status": "completed"}}
 - get_code_diff: Ver diferenças no código
 
 🗄️ ACESSO DIRETO A BASES DE DADOS:
-- query_postgresql: Executar query SELECT no PostgreSQL (args: query)
+- query_NietzscheDB: Executar query SELECT no NietzscheDB (args: query)
 - query_nietzsche: Consultar NietzscheDB — grafo + vetores (args: endpoint, params)
 
 🖥️ SANDBOX + BROWSER + CRON:
@@ -577,7 +577,7 @@ Fala: "EVA, roda os testes"
 Resposta: {"tool": "run_tests", "args": {}}
 
 Fala: "EVA, consulta quantos idosos tem no banco"
-Resposta: {"tool": "query_postgresql", "args": {"query": "SELECT COUNT(*) FROM idosos"}}
+Resposta: {"tool": "query_NietzscheDB", "args": {"query": "SELECT COUNT(*) FROM idosos"}}
 
 Fala: "EVA, busca no grafo as conexões do paciente"
 Resposta: {"tool": "query_nietzsche", "args": {"endpoint": "graph", "params": {"collection": "patient_graph", "query": "neighbors", "node_id": "patient_1", "limit": 10}}}

@@ -27,7 +27,7 @@ type HebbianRealTime interface {
 	DecayWeight(ctx context.Context, sourceID, targetID string, factor float64) error
 }
 
-// Database interface para PostgreSQL
+// Database interface para NietzscheDB
 type Database interface {
 	StoreFeedback(ctx context.Context, feedback *Feedback) error
 	GetFeedbackHistory(ctx context.Context, patientID int64, limit int) ([]Feedback, error)

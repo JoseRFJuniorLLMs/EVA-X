@@ -1,6 +1,6 @@
 # 📊 Registros de Acesso e Uso no EVA-Mind
 
-Sim, **existe um sistema completo de auditoria e logs** no PostgreSQL do EVA-Mind. Aqui está tudo o que é registrado:
+Sim, **existe um sistema completo de auditoria e logs** no NietzscheDB do EVA-Mind. Aqui está tudo o que é registrado:
 
 ---
 
@@ -150,7 +150,7 @@ ORDER BY requested_at DESC;
 
 ## 7️⃣ Cleanup Automático de Logs Antigos
 
-Função PostgreSQL para limpeza:
+Função NietzscheDB para limpeza:
 ```sql
 SELECT cleanup_expired_audit_logs();
 -- Remove automaticamente logs com mais de 365 dias

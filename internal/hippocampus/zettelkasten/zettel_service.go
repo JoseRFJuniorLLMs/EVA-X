@@ -141,7 +141,7 @@ func (zs *ZettelService) CreateFromConversation(ctx context.Context, idosoID int
 		UpdatedAt: time.Now(),
 	}
 
-	// 5. Salvar no PostgreSQL
+	// 5. Salvar no NietzscheDB
 	if err := zs.saveZettel(ctx, zettel); err != nil {
 		return nil, fmt.Errorf("erro ao salvar zettel: %w", err)
 	}
@@ -279,7 +279,7 @@ func (zs *ZettelService) GetRelated(ctx context.Context, zettelID string, depth 
 		return zs.getRelatedFromGraph(ctx, zettelID, depth)
 	}
 
-	// Fallback para PostgreSQL
+	// Fallback para NietzscheDB
 	return zs.getRelatedFromSQL(ctx, zettelID)
 }
 
@@ -440,7 +440,7 @@ func (zs *ZettelService) GetGraphMap(ctx context.Context, idosoID int64, centerZ
 		return zs.getGraphFromNietzsche(ctx, idosoID, centerZettelID, depth)
 	}
 
-	// Fallback: construir do PostgreSQL
+	// Fallback: construir do NietzscheDB
 	zettels, err := zs.getAllZettels(ctx, idosoID, 100)
 	if err != nil {
 		return nil, err
@@ -1097,7 +1097,7 @@ func (zs *ZettelService) getRelatedFromGraph(ctx context.Context, zettelID strin
 		ids = ids[:20]
 	}
 
-	// Buscar zettels do PostgreSQL pelos IDs
+	// Buscar zettels do NietzscheDB pelos IDs
 	query := `
 		SELECT id, title, content, zettel_type, source, entities, tags,
 		       linked_zettels, metadata, created_at, updated_at, access_count
@@ -1200,7 +1200,7 @@ func (zs *ZettelService) getGraphFromNietzsche(ctx context.Context, idosoID int6
 		}
 	}
 
-	// Get edges from PostgreSQL zettel_links (more reliable for known links)
+	// Get edges from NietzscheDB zettel_links (more reliable for known links)
 	links, _ := zs.getAllLinks(ctx, idosoID)
 	nodeSet := make(map[string]bool)
 	for _, n := range graphData.Nodes {

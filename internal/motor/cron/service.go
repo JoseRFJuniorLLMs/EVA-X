@@ -38,6 +38,7 @@ type Service struct {
 	mu       sync.RWMutex
 	executor TaskExecutor
 	stop     chan struct{}
+	stopOnce sync.Once
 	running  bool
 }
 
@@ -56,10 +57,13 @@ func (s *Service) SetExecutor(executor TaskExecutor) {
 
 // Start inicia o loop do scheduler
 func (s *Service) Start() {
+	s.mu.Lock()
 	if s.running {
+		s.mu.Unlock()
 		return
 	}
 	s.running = true
+	s.mu.Unlock()
 
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
@@ -79,12 +83,12 @@ func (s *Service) Start() {
 	}()
 }
 
-// Stop para o scheduler
+// Stop para o scheduler (safe to call multiple times)
 func (s *Service) Stop() {
-	if s.running {
+	s.stopOnce.Do(func() {
 		close(s.stop)
 		s.running = false
-	}
+	})
 }
 
 // CreateTask cria nova tarefa agendada

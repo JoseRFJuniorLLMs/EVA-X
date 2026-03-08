@@ -108,7 +108,7 @@ func (c *EnneagramDBConfig) LoadAll(ctx context.Context) error {
 	}
 
 	c.cache.loadedAt = time.Now()
-	log.Printf("✅ [EnneagramDBConfig] Configurações carregadas do PostgreSQL")
+	log.Printf("✅ [EnneagramDBConfig] Configurações carregadas do NietzscheDB")
 
 	return nil
 }
