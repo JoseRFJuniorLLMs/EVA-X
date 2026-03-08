@@ -47,7 +47,7 @@ func main() {
 	}
 	defer nietzscheClient.Close()
 
-	db := database.NewNietzscheDB(nietzscheClient.SDK(), nil)
+	db := database.NewNietzscheDB(nietzscheClient.SDK())
 	vectorAdapter := nietzscheInfra.NewVectorAdapter(nietzscheClient)
 
 	var embedSvc *knowledge.EmbeddingService

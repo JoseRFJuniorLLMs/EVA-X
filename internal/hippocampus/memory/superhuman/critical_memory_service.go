@@ -78,13 +78,16 @@ func (s *CriticalMemoryService) CreateOrUpdateCluster(ctx context.Context, idoso
 		cluster.TotalMentions = int(database.GetInt64(m, "total_mentions")) + 1
 		cluster.CoherenceScore = database.GetFloat64(m, "coherence_score")
 
-		s.db.Update(ctx, "patient_memory_clusters",
+		if err := s.db.Update(ctx, "patient_memory_clusters",
 			map[string]interface{}{"idoso_id": idosoID, "cluster_name": clusterName},
 			map[string]interface{}{
 				"total_mentions":  cluster.TotalMentions,
 				"last_occurrence": now,
 				"updated_at":      now,
-			})
+			}); err != nil {
+			log.Printf("[critical_memory] update memory_clusters failed: %v", err)
+			return nil, fmt.Errorf("update memory_clusters: %w", err)
+		}
 	} else {
 		id, err := s.db.Insert(ctx, "patient_memory_clusters", map[string]interface{}{
 			"idoso_id":          idosoID,
@@ -125,16 +128,23 @@ func (s *CriticalMemoryService) AddToCluster(ctx context.Context, clusterID, ido
 	}
 
 	// Update member count
-	memberRows, _ := s.db.QueryByLabel(ctx, "cluster_members",
+	memberRows, err2 := s.db.QueryByLabel(ctx, "cluster_members",
 		" AND n.cluster_id = $cid",
 		map[string]interface{}{"cid": clusterID}, 0)
+	if err2 != nil {
+		log.Printf("[CLUSTER] Error querying cluster members for cluster %d: %v", clusterID, err2)
+		return err2
+	}
 
-	s.db.Update(ctx, "patient_memory_clusters",
+	if err := s.db.Update(ctx, "patient_memory_clusters",
 		map[string]interface{}{"id": clusterID},
 		map[string]interface{}{
 			"member_count": len(memberRows),
 			"updated_at":   now,
-		})
+		}); err != nil {
+		log.Printf("[critical_memory] update memory_clusters member_count failed: %v", err)
+		return fmt.Errorf("update memory_clusters member_count: %w", err)
+	}
 
 	return nil
 }
@@ -211,13 +221,15 @@ func (s *CriticalMemoryService) ClusterSimilarMemories(ctx context.Context, idos
 			}
 
 			now := time.Now().Format(time.RFC3339)
-			s.db.Update(ctx, "patient_memory_clusters",
+			if err := s.db.Update(ctx, "patient_memory_clusters",
 				map[string]interface{}{"id": cluster.ID},
 				map[string]interface{}{
 					"member_count":    len(metaphors),
 					"dominant_emotion": mType,
 					"updated_at":      now,
-				})
+				}); err != nil {
+				log.Printf("[critical_memory] update memory_clusters metaphor cluster failed: %v", err)
+			}
 		}
 	}
 
@@ -235,7 +247,9 @@ func (s *CriticalMemoryService) ClusterSimilarMemories(ctx context.Context, idos
 
 		if mentionCount >= 5 {
 			clusterName := fmt.Sprintf("conversas_sobre_%s", strings.ToLower(personName))
-			s.CreateOrUpdateCluster(ctx, idosoID, clusterName, "person")
+			if _, err := s.CreateOrUpdateCluster(ctx, idosoID, clusterName, "person"); err != nil {
+				log.Printf("[ABSTRACTION] Error creating cluster for person '%s' (patient %d): %v", personName, idosoID, err)
+			}
 		}
 	}
 
@@ -273,16 +287,26 @@ func (s *CriticalMemoryService) ForgetTopic(ctx context.Context, idosoID int64, 
 
 	var affected []map[string]interface{}
 	for _, table := range tables {
-		rows, _ := s.db.QueryByLabel(ctx, table,
+		rows, err := s.db.QueryByLabel(ctx, table,
 			" AND n.idoso_id = $idoso",
 			map[string]interface{}{"idoso": idosoID}, 0)
+		if err != nil {
+			log.Printf("[FORGET] Error querying table '%s' for patient %d: %v", table, idosoID, err)
+			return nil, err
+		}
 
 		count := 0
 		for _, m := range rows {
 			// Check if any field contains the topic
-			content, _ := json.Marshal(m)
+			content, err := json.Marshal(m)
+			if err != nil {
+				log.Printf("[FORGET] Error marshaling row content in table '%s': %v", table, err)
+				continue
+			}
 			if strings.Contains(strings.ToLower(string(content)), strings.ToLower(topic)) {
-				s.db.SoftDelete(ctx, table, map[string]interface{}{"id": database.GetInt64(m, "id")})
+				if err := s.db.SoftDelete(ctx, table, map[string]interface{}{"id": database.GetInt64(m, "id")}); err != nil {
+					log.Printf("[critical_memory] soft delete in table '%s' failed: %v", table, err)
+				}
 				count++
 			}
 		}
@@ -296,7 +320,7 @@ func (s *CriticalMemoryService) ForgetTopic(ctx context.Context, idosoID int64, 
 	}
 
 	// Record the forgotten operation
-	id, _ := s.db.Insert(ctx, "forgotten_memories", map[string]interface{}{
+	id, err := s.db.Insert(ctx, "forgotten_memories", map[string]interface{}{
 		"idoso_id":          idosoID,
 		"memory_type":       "topic",
 		"memory_identifier": topic,
@@ -307,6 +331,10 @@ func (s *CriticalMemoryService) ForgetTopic(ctx context.Context, idosoID int64, 
 		"forgotten_at":      now,
 		"created_at":        now,
 	})
+	if err != nil {
+		log.Printf("[FORGET] Error inserting forgotten_memories record for topic '%s' (patient %d): %v", topic, idosoID, err)
+		return nil, err
+	}
 
 	fm := &ForgottenMemory{
 		ID:               id,
@@ -331,16 +359,22 @@ func (s *CriticalMemoryService) ForgetPerson(ctx context.Context, idosoID int64,
 	deletedCount := 0
 
 	// Delete from person-specific tables
-	personRows, _ := s.db.QueryByLabel(ctx, "patient_world_persons",
+	personRows, err := s.db.QueryByLabel(ctx, "patient_world_persons",
 		" AND n.idoso_id = $idoso AND n.person_name = $name",
 		map[string]interface{}{"idoso": idosoID, "name": personName}, 0)
+	if err != nil {
+		log.Printf("[FORGET] Error querying patient_world_persons for person '%s' (patient %d): %v", personName, idosoID, err)
+		return nil, err
+	}
 	for _, m := range personRows {
-		s.db.SoftDelete(ctx, "patient_world_persons", map[string]interface{}{"id": database.GetInt64(m, "id")})
+		if err := s.db.SoftDelete(ctx, "patient_world_persons", map[string]interface{}{"id": database.GetInt64(m, "id")}); err != nil {
+			log.Printf("[critical_memory] soft delete patient_world_persons failed: %v", err)
+		}
 		deletedCount++
 	}
 
 	// Record the forgotten operation
-	id, _ := s.db.Insert(ctx, "forgotten_memories", map[string]interface{}{
+	id, err2 := s.db.Insert(ctx, "forgotten_memories", map[string]interface{}{
 		"idoso_id":          idosoID,
 		"memory_type":       "person",
 		"memory_identifier": personName,
@@ -350,6 +384,10 @@ func (s *CriticalMemoryService) ForgetPerson(ctx context.Context, idosoID int64,
 		"forgotten_at":      now,
 		"created_at":        now,
 	})
+	if err2 != nil {
+		log.Printf("[FORGET] Error inserting forgotten_memories record for person '%s' (patient %d): %v", personName, idosoID, err2)
+		return nil, err2
+	}
 
 	fm := &ForgottenMemory{
 		ID:               id,
@@ -392,7 +430,9 @@ func (s *CriticalMemoryService) GetForgottenItems(ctx context.Context, idosoID i
 		if raw, ok := m["affected_tables"]; ok && raw != nil {
 			switch v := raw.(type) {
 			case string:
-				json.Unmarshal([]byte(v), &fm.AffectedTables)
+				if err := json.Unmarshal([]byte(v), &fm.AffectedTables); err != nil {
+					log.Printf("[FORGET] Error unmarshaling affected_tables for forgotten memory %d: %v", fm.ID, err)
+				}
 			case []interface{}:
 				for _, item := range v {
 					if mm, ok := item.(map[string]interface{}); ok {
@@ -432,9 +472,13 @@ func (s *CriticalMemoryService) ApplyTemporalDecay(ctx context.Context, idosoID 
 	}
 
 	// Apply decay to memory gravity
-	gravityRows, _ := s.db.QueryByLabel(ctx, "patient_memory_gravity",
+	gravityRows, err2 := s.db.QueryByLabel(ctx, "patient_memory_gravity",
 		" AND n.idoso_id = $idoso",
 		map[string]interface{}{"idoso": idosoID}, 0)
+	if err2 != nil {
+		log.Printf("[DECAY] Error querying patient_memory_gravity for patient %d: %v", idosoID, err2)
+		return nil, err2
+	}
 
 	memoriesDecayed := 0
 	for _, m := range gravityRows {
@@ -461,12 +505,14 @@ func (s *CriticalMemoryService) ApplyTemporalDecay(ctx context.Context, idosoID 
 			newWeight = 0.01
 		}
 
-		s.db.Update(ctx, "patient_memory_gravity",
+		if err := s.db.Update(ctx, "patient_memory_gravity",
 			map[string]interface{}{"id": database.GetInt64(m, "id")},
 			map[string]interface{}{
 				"current_weight": newWeight,
 				"updated_at":     time.Now().Format(time.RFC3339),
-			})
+			}); err != nil {
+			log.Printf("[critical_memory] update memory_gravity decay failed: %v", err)
+		}
 		memoriesDecayed++
 	}
 
@@ -493,7 +539,7 @@ func (s *CriticalMemoryService) GetTemporalConfig(ctx context.Context, idosoID i
 	if len(rows) == 0 {
 		// Create default config
 		now := time.Now().Format(time.RFC3339)
-		s.db.Insert(ctx, "patient_temporal_config", map[string]interface{}{
+		if _, err := s.db.Insert(ctx, "patient_temporal_config", map[string]interface{}{
 			"idoso_id":             idosoID,
 			"default_decay_rate":   0.1,
 			"trauma_decay_rate":    0.02,
@@ -502,7 +548,10 @@ func (s *CriticalMemoryService) GetTemporalConfig(ctx context.Context, idosoID i
 			"recency_boost_factor": 1.5,
 			"created_at":           now,
 			"updated_at":           now,
-		})
+		}); err != nil {
+			log.Printf("[DECAY] Error inserting default temporal config for patient %d: %v", idosoID, err)
+			return nil, err
+		}
 		return &TemporalConfig{
 			IdosoID:            idosoID,
 			DefaultDecayRate:   0.1,
@@ -561,7 +610,9 @@ func (s *CriticalMemoryService) MarkAsAnchorMemory(ctx context.Context, idosoID 
 // GetWeightedMemories returns memories with temporal weight applied
 func (s *CriticalMemoryService) GetWeightedMemories(ctx context.Context, idosoID int64, minWeight float64) ([]*MemoryGravity, error) {
 	// First apply decay
-	s.ApplyTemporalDecay(ctx, idosoID)
+	if _, err := s.ApplyTemporalDecay(ctx, idosoID); err != nil {
+		log.Printf("[DECAY] Error applying temporal decay for patient %d: %v", idosoID, err)
+	}
 
 	rows, err := s.db.QueryByLabel(ctx, "patient_memory_gravity",
 		" AND n.idoso_id = $idoso",
@@ -684,8 +735,12 @@ func (s *CriticalMemoryService) AuditResponse(ctx context.Context, idosoID int64
 	// Log audit
 	if len(audit.RulesTriggered) > 0 {
 		now := time.Now().Format(time.RFC3339)
-		rulesJSON, _ := json.Marshal(audit.RulesTriggered)
-		s.db.Insert(ctx, "ethical_audit_log", map[string]interface{}{
+		rulesJSON, err := json.Marshal(audit.RulesTriggered)
+		if err != nil {
+			log.Printf("[ETHICAL] Error marshaling rules_triggered for patient %d: %v", idosoID, err)
+			rulesJSON = []byte("[]")
+		}
+		if _, err := s.db.Insert(ctx, "ethical_audit_log", map[string]interface{}{
 			"idoso_id":           idosoID,
 			"original_response":  response,
 			"rules_triggered":    string(rulesJSON),
@@ -695,7 +750,9 @@ func (s *CriticalMemoryService) AuditResponse(ctx context.Context, idosoID int64
 			"needs_human_review": audit.NeedsHumanReview,
 			"audited_at":         now,
 			"created_at":         now,
-		})
+		}); err != nil {
+			log.Printf("[ETHICAL] Error inserting audit log for patient %d: %v", idosoID, err)
+		}
 
 		log.Printf("[ETHICAL] Audit triggered %d rules for patient %d (severity: %s)",
 			len(audit.RulesTriggered), idosoID, audit.Severity)
@@ -812,7 +869,11 @@ func (s *CriticalMemoryService) GetPendingHumanReviews(ctx context.Context) ([]m
 
 		// Get patient name
 		patientName := ""
-		idosoRow, _ := s.db.GetNodeByID(ctx, "idosos", idosoID)
+		idosoRow, err := s.db.GetNodeByID(ctx, "idosos", idosoID)
+		if err != nil {
+			log.Printf("[ETHICAL] Error getting patient node %d: %v", idosoID, err)
+			return nil, err
+		}
 		if idosoRow != nil {
 			patientName = database.GetString(idosoRow, "nome")
 		}
@@ -821,7 +882,9 @@ func (s *CriticalMemoryService) GetPendingHumanReviews(ctx context.Context) ([]m
 		if raw, ok := m["rules_triggered"]; ok && raw != nil {
 			switch v := raw.(type) {
 			case string:
-				json.Unmarshal([]byte(v), &rules)
+				if err := json.Unmarshal([]byte(v), &rules); err != nil {
+					log.Printf("[ETHICAL] Error unmarshaling rules_triggered for audit log %d: %v", database.GetInt64(m, "id"), err)
+				}
 			case []interface{}:
 				rules = v
 			}
@@ -866,7 +929,10 @@ func (s *CriticalMemoryService) GenerateCriticalMirrors(ctx context.Context, ido
 	var outputs []*MirrorOutput
 
 	// 1. Abstracted patterns (instead of raw data)
-	clusters, _ := s.GetAbstractedPatterns(ctx, idosoID)
+	clusters, err := s.GetAbstractedPatterns(ctx, idosoID)
+	if err != nil {
+		log.Printf("[MIRROR] Error getting abstracted patterns for patient %d: %v", idosoID, err)
+	}
 	for _, c := range clusters[:minInt(3, len(clusters))] {
 		if c.TotalMentions >= 5 {
 			dataPoints := []string{c.AbstractedSummary}
@@ -897,7 +963,10 @@ func (s *CriticalMemoryService) GenerateCriticalMirrors(ctx context.Context, ido
 	}
 
 	// 2. Weighted memories (with recency applied)
-	weightedMemories, _ := s.GetWeightedMemories(ctx, idosoID, 0.6)
+	weightedMemories, err2 := s.GetWeightedMemories(ctx, idosoID, 0.6)
+	if err2 != nil {
+		log.Printf("[MIRROR] Error getting weighted memories for patient %d: %v", idosoID, err2)
+	}
 	if len(weightedMemories) > 0 {
 		recentCount := 0
 		for _, m := range weightedMemories {

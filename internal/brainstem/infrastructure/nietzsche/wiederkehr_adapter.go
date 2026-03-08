@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"eva/internal/brainstem/logger"
+	"eva/internal/util"
 )
 
 // WiederkehrAdapter wraps NietzscheDB's Wiederkehr daemon agent system for EVA.
@@ -195,13 +196,13 @@ func (w *WiederkehrAdapter) ListDaemons(ctx context.Context, collection string) 
 			}
 		}
 		if v, ok := row["energy"]; ok {
-			d.Energy = toFloat64(v)
+			d.Energy = util.ToFloat64(v)
 		}
 		if v, ok := row["interval_secs"]; ok {
-			d.IntervalSecs = toFloat64(v)
+			d.IntervalSecs = util.ToFloat64(v)
 		}
 		if v, ok := row["last_run"]; ok {
-			d.LastRun = toFloat64(v)
+			d.LastRun = util.ToFloat64(v)
 		}
 		daemons = append(daemons, d)
 	}
@@ -404,20 +405,3 @@ func (w *WiederkehrAdapter) PruneDaemons(ctx context.Context, collection string,
 	return pruned, nil
 }
 
-// ── Internal helpers ─────────────────────────────────────────────────────────
-
-// toFloat64 converts an interface{} to float64 (handles float64 and json.Number).
-func toFloat64(v interface{}) float64 {
-	switch val := v.(type) {
-	case float64:
-		return val
-	case float32:
-		return float64(val)
-	case int:
-		return float64(val)
-	case int64:
-		return float64(val)
-	default:
-		return 0
-	}
-}

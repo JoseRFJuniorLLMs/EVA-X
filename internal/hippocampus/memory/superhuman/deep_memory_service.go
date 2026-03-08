@@ -151,21 +151,28 @@ func (s *DeepMemoryService) DetectAvoidance(ctx context.Context, idosoID int64, 
 			}
 
 			// NietzscheDB via db layer
-			rows, _ := s.db.QueryByLabel(ctx, "patient_persistent_memories",
+			rows, err := s.db.QueryByLabel(ctx, "patient_persistent_memories",
 				" AND n.idoso_id = $idoso AND n.persistent_topic = $topic",
 				map[string]interface{}{"idoso": idosoID, "topic": currentTopic}, 1)
+			if err != nil {
+				log.Printf("[deep_memory] QueryByLabel failed: %v", err)
+				return err
+			}
 
 			if len(rows) > 0 {
 				m := rows[0]
-				s.db.Update(ctx, "patient_persistent_memories",
+				if err := s.db.Update(ctx, "patient_persistent_memories",
 					map[string]interface{}{"idoso_id": idosoID, "persistent_topic": currentTopic},
 					map[string]interface{}{
 						"avoidance_attempts": int(database.GetInt64(m, "avoidance_attempts")) + 1,
 						"last_occurrence":    ts,
 						"updated_at":         ts,
-					})
+					}); err != nil {
+					log.Printf("[deep_memory] update persistent_memories failed: %v", err)
+					return err
+				}
 			} else {
-				s.db.Insert(ctx, "patient_persistent_memories", map[string]interface{}{
+				if _, err := s.db.Insert(ctx, "patient_persistent_memories", map[string]interface{}{
 					"idoso_id":           idosoID,
 					"persistent_topic":   currentTopic,
 					"avoidance_attempts": 1,
@@ -173,17 +180,23 @@ func (s *DeepMemoryService) DetectAvoidance(ctx context.Context, idosoID int64, 
 					"last_occurrence":    ts,
 					"created_at":         ts,
 					"updated_at":         ts,
-				})
+				}); err != nil {
+					log.Printf("[deep_memory] insert persistent_memories failed: %v", err)
+					return err
+				}
 			}
 
 			// Record occurrence
-			s.db.Insert(ctx, "persistent_memory_occurrences", map[string]interface{}{
+			if _, err := s.db.Insert(ctx, "persistent_memory_occurrences", map[string]interface{}{
 				"idoso_id":        idosoID,
 				"occurrence_type": "avoidance",
 				"verbatim":        text,
 				"occurred_at":     ts,
 				"persistent_topic": currentTopic,
-			})
+			}); err != nil {
+				log.Printf("[deep_memory] insert persistent_memory_occurrences failed: %v", err)
+				return err
+			}
 
 			log.Printf("[PERSISTENCE] Avoidance detected for topic '%s'", currentTopic)
 			break
@@ -213,13 +226,16 @@ func (s *DeepMemoryService) DetectReturn(ctx context.Context, idosoID int64, tex
 		if strings.Contains(textLower, strings.ToLower(topic)) {
 			ts := timestamp.Format(time.RFC3339)
 
-			s.db.Update(ctx, "patient_persistent_memories",
+			if err := s.db.Update(ctx, "patient_persistent_memories",
 				map[string]interface{}{"idoso_id": idosoID, "persistent_topic": topic},
 				map[string]interface{}{
 					"return_count":   int(database.GetInt64(m, "return_count")) + 1,
 					"last_occurrence": ts,
 					"updated_at":     ts,
-				})
+				}); err != nil {
+				log.Printf("[deep_memory] update persistent_memories (return) failed: %v", err)
+				return err
+			}
 
 			log.Printf("[PERSISTENCE] Return detected to topic '%s'", topic)
 		}
@@ -303,7 +319,11 @@ func (s *DeepMemoryService) DetectBodySymptom(ctx context.Context, idosoID int64
 				location = match[1]
 			}
 
-			topicsJSON, _ := json.Marshal(precedingTopics)
+			topicsJSON, err := json.Marshal(precedingTopics)
+			if err != nil {
+				log.Printf("[deep_memory] json.Marshal precedingTopics failed: %v", err)
+				topicsJSON = []byte("[]")
+			}
 			ts := timestamp.Format(time.RFC3339)
 
 			// NietzscheDB first: MergeNode on "deep_memory" collection
@@ -329,19 +349,26 @@ func (s *DeepMemoryService) DetectBodySymptom(ctx context.Context, idosoID int64
 			}
 
 			// NietzscheDB via db layer
-			rows, _ := s.db.QueryByLabel(ctx, "patient_body_memories",
+			rows, err := s.db.QueryByLabel(ctx, "patient_body_memories",
 				" AND n.idoso_id = $idoso AND n.physical_symptom = $symptom AND n.body_location = $loc",
 				map[string]interface{}{"idoso": idosoID, "symptom": symptom, "loc": location}, 1)
+			if err != nil {
+				log.Printf("[deep_memory] QueryByLabel failed: %v", err)
+				return err
+			}
 
 			if len(rows) > 0 {
 				m := rows[0]
-				s.db.Update(ctx, "patient_body_memories",
+				if err := s.db.Update(ctx, "patient_body_memories",
 					map[string]interface{}{"idoso_id": idosoID, "physical_symptom": symptom, "body_location": location},
 					map[string]interface{}{
 						"occurrence_count": int(database.GetInt64(m, "occurrence_count")) + 1,
 						"last_reported":    ts,
 						"updated_at":       ts,
-					})
+					}); err != nil {
+					log.Printf("[deep_memory] update body_memories failed: %v", err)
+					return err
+				}
 			} else {
 				if _, err := s.db.Insert(ctx, "patient_body_memories", map[string]interface{}{
 					"idoso_id":          idosoID,
@@ -360,13 +387,16 @@ func (s *DeepMemoryService) DetectBodySymptom(ctx context.Context, idosoID int64
 			}
 
 			// Record occurrence
-			s.db.Insert(ctx, "body_memory_occurrences", map[string]interface{}{
+			if _, err := s.db.Insert(ctx, "body_memory_occurrences", map[string]interface{}{
 				"idoso_id":         idosoID,
 				"verbatim":         text,
 				"occurred_at":      ts,
 				"preceding_topics": string(topicsJSON),
 				"physical_symptom": symptom,
-			})
+			}); err != nil {
+				log.Printf("[deep_memory] insert body_memory_occurrences failed: %v", err)
+				return err
+			}
 
 			log.Printf("[BODY] Symptom detected: '%s' at '%s'", symptom, location)
 		}
@@ -447,12 +477,20 @@ func (s *DeepMemoryService) DetectSharingDesire(ctx context.Context, idosoID int
 			// Classify memory type
 			memoryType := s.classifyMemoryType(text)
 			ts := timestamp.Format(time.RFC3339)
-			audienceJSON, _ := json.Marshal([]string{audience})
-			verbatimJSON, _ := json.Marshal([]string{text})
+			audienceJSON, err := json.Marshal([]string{audience})
+			if err != nil {
+				log.Printf("[deep_memory] json.Marshal audienceJSON failed: %v", err)
+				audienceJSON = []byte("[]")
+			}
+			verbatimJSON, errV := json.Marshal([]string{text})
+			if errV != nil {
+				log.Printf("[deep_memory] json.Marshal verbatimJSON failed: %v", errV)
+				verbatimJSON = []byte("[]")
+			}
 			summary := text[:minInt(200, len(text))]
 
 			// Try insert first
-			_, err := s.db.Insert(ctx, "patient_shared_memories", map[string]interface{}{
+			_, err = s.db.Insert(ctx, "patient_shared_memories", map[string]interface{}{
 				"idoso_id":          idosoID,
 				"memory_summary":    summary,
 				"intended_audience": string(audienceJSON),
@@ -467,9 +505,13 @@ func (s *DeepMemoryService) DetectSharingDesire(ctx context.Context, idosoID int
 			})
 			if err != nil {
 				// Try to update existing
-				rows, _ := s.db.QueryByLabel(ctx, "patient_shared_memories",
+				rows, errQ := s.db.QueryByLabel(ctx, "patient_shared_memories",
 					" AND n.idoso_id = $idoso",
 					map[string]interface{}{"idoso": idosoID}, 0)
+				if errQ != nil {
+					log.Printf("[deep_memory] QueryByLabel failed: %v", errQ)
+					return errQ
+				}
 
 				shortText := text[:minInt(50, len(text))]
 				for _, m := range rows {
@@ -479,14 +521,17 @@ func (s *DeepMemoryService) DetectSharingDesire(ctx context.Context, idosoID int
 						if urgency > 1.0 {
 							urgency = 1.0
 						}
-						s.db.Update(ctx, "patient_shared_memories",
+						if err := s.db.Update(ctx, "patient_shared_memories",
 							map[string]interface{}{"id": database.GetInt64(m, "id")},
 							map[string]interface{}{
 								"mention_count": int(database.GetInt64(m, "mention_count")) + 1,
 								"last_mentioned": ts,
 								"urgency_score":  urgency,
 								"updated_at":     ts,
-							})
+							}); err != nil {
+							log.Printf("[deep_memory] update shared_memories failed: %v", err)
+							return err
+						}
 						break
 					}
 				}

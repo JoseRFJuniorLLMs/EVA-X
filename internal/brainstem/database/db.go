@@ -31,7 +31,7 @@ type DB struct {
 }
 
 // NewNietzscheDB creates a DB backed by NietzscheDB gRPC.
-func NewNietzscheDB(nzClient *nietzsche.NietzscheClient, _ *sql.DB) *DB {
+func NewNietzscheDB(nzClient *nietzsche.NietzscheClient) *DB {
 	return &DB{
 		nz: nzClient,
 	}

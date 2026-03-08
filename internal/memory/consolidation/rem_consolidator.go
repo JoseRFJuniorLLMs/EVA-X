@@ -13,6 +13,7 @@ import (
 
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	krylovmem "eva/internal/memory/krylov"
+	"eva/internal/util"
 
 	nietzsche "nietzsche-sdk"
 
@@ -244,13 +245,13 @@ func (r *REMConsolidator) getHotEpisodicMemories(ctx context.Context, patientID 
 			continue
 		}
 
-		timestamp := toFloat64REM(node.Content["timestamp"])
+		timestamp := util.ToFloat64(node.Content["timestamp"])
 		if timestamp > 0 && timestamp < oneDayAgo {
 			continue
 		}
 
 		content, _ := node.Content["content"].(string)
-		activationScore := toFloat64REM(node.Content["activation_score"])
+		activationScore := util.ToFloat64(node.Content["activation_score"])
 		if activationScore == 0 {
 			activationScore = 1.0
 		}
@@ -487,7 +488,7 @@ func (r *REMConsolidator) getActivePatientIDs(ctx context.Context) ([]int64, err
 			if err != nil {
 				continue
 			}
-			timestamp := toFloat64REM(eventNode.Content["timestamp"])
+			timestamp := util.ToFloat64(eventNode.Content["timestamp"])
 			if timestamp > oneDayAgo {
 				hasRecent = true
 				break
@@ -541,21 +542,3 @@ func (r *REMConsolidator) GetStatistics() map[string]interface{} {
 	}
 }
 
-// Helper type conversions for this package
-func toFloat64REM(v interface{}) float64 {
-	if v == nil {
-		return 0
-	}
-	switch val := v.(type) {
-	case float64:
-		return val
-	case float32:
-		return float64(val)
-	case int:
-		return float64(val)
-	case int64:
-		return float64(val)
-	default:
-		return 0
-	}
-}

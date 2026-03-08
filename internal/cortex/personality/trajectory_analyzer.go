@@ -39,6 +39,13 @@ type AnomalyEvent struct {
 	Timestamp     time.Time
 }
 
+// LifeEvent represents a significant event in user's life
+type LifeEvent struct {
+	Type      string
+	Timestamp time.Time
+	Impact    float64
+}
+
 // ClinicalAlert represents an alert for caregivers
 type ClinicalAlert struct {
 	UserID      int64

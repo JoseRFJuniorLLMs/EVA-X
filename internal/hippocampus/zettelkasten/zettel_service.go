@@ -16,6 +16,7 @@ import (
 
 	"eva/internal/brainstem/database"
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
+	"eva/internal/util"
 )
 
 // ============================================================================
@@ -1286,7 +1287,7 @@ func (zs *ZettelService) getGraphFromNietzsche(ctx context.Context, idosoID int6
 			if node.NodeType != "Zettel" {
 				continue
 			}
-			nodeIdosoID := toFloat64Zettel(node.Content["idoso_id"])
+			nodeIdosoID := util.ToFloat64(node.Content["idoso_id"])
 			if int64(nodeIdosoID) != idosoID {
 				continue
 			}
@@ -1312,7 +1313,7 @@ func (zs *ZettelService) getGraphFromNietzsche(ctx context.Context, idosoID int6
 		}
 
 		for _, node := range result.Nodes {
-			nodeIdosoID := toFloat64Zettel(node.Content["idoso_id"])
+			nodeIdosoID := util.ToFloat64(node.Content["idoso_id"])
 			if int64(nodeIdosoID) != idosoID {
 				continue
 			}
@@ -1459,21 +1460,3 @@ func getStringSlice(m map[string]interface{}, key string) []string {
 	return nil
 }
 
-// Helper type conversion
-func toFloat64Zettel(v interface{}) float64 {
-	if v == nil {
-		return 0
-	}
-	switch val := v.(type) {
-	case float64:
-		return val
-	case float32:
-		return float64(val)
-	case int:
-		return float64(val)
-	case int64:
-		return float64(val)
-	default:
-		return 0
-	}
-}

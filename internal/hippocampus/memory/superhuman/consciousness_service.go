@@ -202,9 +202,21 @@ type CyclePattern struct {
 
 // DetectCyclePattern detects and records a pattern occurrence
 func (s *ConsciousnessService) DetectCyclePattern(ctx context.Context, idosoID int64, signature, description, patternType string, trigger, action, consequence string) (*CyclePattern, error) {
-	triggersJSON, _ := json.Marshal([]string{trigger})
-	actionsJSON, _ := json.Marshal([]string{action})
-	consequencesJSON, _ := json.Marshal([]string{consequence})
+	triggersJSON, err := json.Marshal([]string{trigger})
+	if err != nil {
+		log.Printf("[consciousness] failed to marshal trigger_events: %v", err)
+		triggersJSON = []byte("[]")
+	}
+	actionsJSON, err := json.Marshal([]string{action})
+	if err != nil {
+		log.Printf("[consciousness] failed to marshal typical_actions: %v", err)
+		actionsJSON = []byte("[]")
+	}
+	consequencesJSON, err := json.Marshal([]string{consequence})
+	if err != nil {
+		log.Printf("[consciousness] failed to marshal typical_consequences: %v", err)
+		consequencesJSON = []byte("[]")
+	}
 	now := time.Now().Format(time.RFC3339)
 
 	// Try to find existing pattern
@@ -238,14 +250,17 @@ func (s *ConsciousnessService) DetectCyclePattern(ctx context.Context, idosoID i
 		pattern.PatternConfidence = newConfidence
 		pattern.UserAware = database.GetBool(m, "user_aware")
 
-		s.db.Update(ctx, "patient_cycle_patterns",
+		if err := s.db.Update(ctx, "patient_cycle_patterns",
 			map[string]interface{}{"idoso_id": idosoID, "pattern_signature": signature},
 			map[string]interface{}{
 				"cycle_count":        pattern.CycleCount,
 				"last_occurrence":    now,
 				"pattern_confidence": newConfidence,
 				"updated_at":        now,
-			})
+			}); err != nil {
+			log.Printf("[consciousness] update cycle_patterns failed: %v", err)
+			return nil, fmt.Errorf("update cycle_patterns: %w", err)
+		}
 	} else {
 		// Insert new
 		id, err := s.db.Insert(ctx, "patient_cycle_patterns", map[string]interface{}{
@@ -274,14 +289,16 @@ func (s *ConsciousnessService) DetectCyclePattern(ctx context.Context, idosoID i
 	}
 
 	// Log occurrence
-	s.db.Insert(ctx, "cycle_pattern_occurrences", map[string]interface{}{
+	if _, err := s.db.Insert(ctx, "cycle_pattern_occurrences", map[string]interface{}{
 		"pattern_id":            pattern.ID,
 		"idoso_id":              idosoID,
 		"trigger_detected":      trigger,
 		"action_taken":          action,
 		"consequence_observed":  consequence,
 		"occurred_at":           now,
-	})
+	}); err != nil {
+		log.Printf("[consciousness] insert cycle_pattern_occurrences failed: %v", err)
+	}
 
 	// Check if threshold reached
 	if pattern.CycleCount >= pattern.CycleThreshold && !pattern.UserAware {
@@ -405,7 +422,7 @@ func (s *ConsciousnessService) initializeConsciousness(ctx context.Context, idos
 	now := time.Now().Format(time.RFC3339)
 
 	// Patient rapport
-	s.db.Insert(ctx, "patient_rapport", map[string]interface{}{
+	if _, err := s.db.Insert(ctx, "patient_rapport", map[string]interface{}{
 		"idoso_id":                     idosoID,
 		"rapport_score":                0.1,
 		"interaction_count":            0,
@@ -421,10 +438,12 @@ func (s *ConsciousnessService) initializeConsciousness(ctx context.Context, idos
 		"confrontation_threshold":      0.7,
 		"created_at":                   now,
 		"updated_at":                   now,
-	})
+	}); err != nil {
+		log.Printf("[consciousness] insert patient_rapport failed: %v", err)
+	}
 
 	// EVA mode
-	s.db.Insert(ctx, "patient_eva_mode", map[string]interface{}{
+	if _, err := s.db.Insert(ctx, "patient_eva_mode", map[string]interface{}{
 		"idoso_id":                 idosoID,
 		"current_mode":             "acolhimento",
 		"mode_locked":              false,
@@ -434,10 +453,12 @@ func (s *ConsciousnessService) initializeConsciousness(ctx context.Context, idos
 		"mentor_severo_enabled":    false,
 		"created_at":               now,
 		"updated_at":               now,
-	})
+	}); err != nil {
+		log.Printf("[consciousness] insert patient_eva_mode failed: %v", err)
+	}
 
 	// Relationship evolution
-	s.db.Insert(ctx, "patient_relationship_evolution", map[string]interface{}{
+	if _, err := s.db.Insert(ctx, "patient_relationship_evolution", map[string]interface{}{
 		"idoso_id":                   idosoID,
 		"current_phase":              "conhecendo",
 		"total_interactions":         0,
@@ -447,10 +468,12 @@ func (s *ConsciousnessService) initializeConsciousness(ctx context.Context, idos
 		"relationship_depth_score":   0.0,
 		"created_at":                 now,
 		"updated_at":                 now,
-	})
+	}); err != nil {
+		log.Printf("[consciousness] insert patient_relationship_evolution failed: %v", err)
+	}
 
 	// Empathic load
-	s.db.Insert(ctx, "patient_empathic_load", map[string]interface{}{
+	if _, err := s.db.Insert(ctx, "patient_empathic_load", map[string]interface{}{
 		"idoso_id":                  idosoID,
 		"current_load":              0.0,
 		"fatigue_level":             "none",
@@ -461,14 +484,18 @@ func (s *ConsciousnessService) initializeConsciousness(ctx context.Context, idos
 		"session_load_accumulated":  0.0,
 		"created_at":                now,
 		"updated_at":                now,
-	})
+	}); err != nil {
+		log.Printf("[consciousness] insert patient_empathic_load failed: %v", err)
+	}
 
 	// Intervention readiness
-	s.db.Insert(ctx, "patient_intervention_readiness", map[string]interface{}{
+	if _, err := s.db.Insert(ctx, "patient_intervention_readiness", map[string]interface{}{
 		"idoso_id":   idosoID,
 		"created_at": now,
 		"updated_at": now,
-	})
+	}); err != nil {
+		log.Printf("[consciousness] insert patient_intervention_readiness failed: %v", err)
+	}
 }
 
 // RecordRapportEvent records an event that affects rapport
@@ -476,13 +503,16 @@ func (s *ConsciousnessService) RecordRapportEvent(ctx context.Context, idosoID i
 	now := time.Now().Format(time.RFC3339)
 
 	// Log event
-	s.db.Insert(ctx, "rapport_events", map[string]interface{}{
+	if _, err := s.db.Insert(ctx, "rapport_events", map[string]interface{}{
 		"idoso_id":          idosoID,
 		"event_type":        eventType,
 		"event_description": description,
 		"rapport_delta":     delta,
 		"created_at":        now,
-	})
+	}); err != nil {
+		log.Printf("[consciousness] insert rapport_events failed: %v", err)
+		return fmt.Errorf("insert rapport_events: %w", err)
+	}
 
 	// Get current rapport
 	rows, err := s.db.QueryByLabel(ctx, "patient_rapport",
@@ -583,13 +613,21 @@ func (s *ConsciousnessService) RecordNarrativeVersion(ctx context.Context, idoso
 	now := time.Now().Format(time.RFC3339)
 
 	// Get current version count
-	versionRows, _ := s.db.QueryByLabel(ctx, "patient_narrative_versions",
+	versionRows, err := s.db.QueryByLabel(ctx, "patient_narrative_versions",
 		" AND n.idoso_id = $idoso AND n.narrative_topic = $topic",
 		map[string]interface{}{"idoso": idosoID, "topic": topic}, 0)
+	if err != nil {
+		log.Printf("[consciousness] QueryByLabel patient_narrative_versions failed: %v", err)
+		return nil, err
+	}
 	versionCount := len(versionRows)
 	newVersion := versionCount + 1
 
-	claimsJSON, _ := json.Marshal(claims)
+	claimsJSON, err := json.Marshal(claims)
+	if err != nil {
+		log.Printf("[consciousness] failed to marshal key_claims: %v", err)
+		claimsJSON = []byte("[]")
+	}
 
 	id, err := s.db.Insert(ctx, "patient_narrative_versions", map[string]interface{}{
 		"idoso_id":            idosoID,
@@ -608,27 +646,35 @@ func (s *ConsciousnessService) RecordNarrativeVersion(ctx context.Context, idoso
 	}
 
 	// Update summary
-	summaryRows, _ := s.db.QueryByLabel(ctx, "patient_contradiction_summary",
+	summaryRows, err := s.db.QueryByLabel(ctx, "patient_contradiction_summary",
 		" AND n.idoso_id = $idoso AND n.narrative_topic = $topic",
 		map[string]interface{}{"idoso": idosoID, "topic": topic}, 1)
+	if err != nil {
+		log.Printf("[consciousness] QueryByLabel patient_contradiction_summary failed: %v", err)
+		return nil, err
+	}
 
 	if len(summaryRows) > 0 {
 		m := summaryRows[0]
-		s.db.Update(ctx, "patient_contradiction_summary",
+		if err := s.db.Update(ctx, "patient_contradiction_summary",
 			map[string]interface{}{"idoso_id": idosoID, "narrative_topic": topic},
 			map[string]interface{}{
 				"total_versions":  int(database.GetInt64(m, "total_versions")) + 1,
 				"last_version_at": now,
 				"updated_at":      now,
-			})
+			}); err != nil {
+			log.Printf("[consciousness] update contradiction_summary failed: %v", err)
+		}
 	} else {
-		s.db.Insert(ctx, "patient_contradiction_summary", map[string]interface{}{
+		if _, err := s.db.Insert(ctx, "patient_contradiction_summary", map[string]interface{}{
 			"idoso_id":        idosoID,
 			"narrative_topic": topic,
 			"total_versions":  1,
 			"created_at":      now,
 			"updated_at":      now,
-		})
+		}); err != nil {
+			log.Printf("[consciousness] insert contradiction_summary failed: %v", err)
+		}
 	}
 
 	// Check for contradictions with previous versions
@@ -720,32 +766,45 @@ func (s *ConsciousnessService) claimsContradict(claim1, claim2 string) bool {
 func (s *ConsciousnessService) recordContradiction(ctx context.Context, newVersionID int64, prevVersionID int, contradictionType, details string) {
 	now := time.Now().Format(time.RFC3339)
 
-	s.db.Update(ctx, "patient_narrative_versions",
+	if err := s.db.Update(ctx, "patient_narrative_versions",
 		map[string]interface{}{"id": newVersionID},
 		map[string]interface{}{
 			"contradicts_version":   prevVersionID,
 			"contradiction_type":    contradictionType,
 			"contradiction_details": details,
-		})
+		}); err != nil {
+		log.Printf("[consciousness] update narrative_versions failed: %v", err)
+		return
+	}
 
 	// Update contradiction count - find the relevant summary by the version's topic
-	versionRows, _ := s.db.QueryByLabel(ctx, "patient_narrative_versions",
+	versionRows, err := s.db.QueryByLabel(ctx, "patient_narrative_versions",
 		" AND n.id = $vid",
 		map[string]interface{}{"vid": newVersionID}, 1)
+	if err != nil {
+		log.Printf("[consciousness] QueryByLabel patient_narrative_versions failed: %v", err)
+		return
+	}
 	if len(versionRows) > 0 {
 		vIdosoID := database.GetInt64(versionRows[0], "idoso_id")
 		vTopic := database.GetString(versionRows[0], "narrative_topic")
 
-		summaryRows, _ := s.db.QueryByLabel(ctx, "patient_contradiction_summary",
+		summaryRows, err := s.db.QueryByLabel(ctx, "patient_contradiction_summary",
 			" AND n.idoso_id = $idoso AND n.narrative_topic = $topic",
 			map[string]interface{}{"idoso": vIdosoID, "topic": vTopic}, 1)
+		if err != nil {
+			log.Printf("[consciousness] QueryByLabel patient_contradiction_summary failed: %v", err)
+			return
+		}
 		if len(summaryRows) > 0 {
-			s.db.Update(ctx, "patient_contradiction_summary",
+			if err := s.db.Update(ctx, "patient_contradiction_summary",
 				map[string]interface{}{"idoso_id": vIdosoID, "narrative_topic": vTopic},
 				map[string]interface{}{
 					"contradiction_count": int(database.GetInt64(summaryRows[0], "contradiction_count")) + 1,
 					"updated_at":          now,
-				})
+				}); err != nil {
+				log.Printf("[consciousness] update contradiction_summary count failed: %v", err)
+			}
 		}
 	}
 
@@ -823,25 +882,31 @@ func (s *ConsciousnessService) GetCurrentMode(ctx context.Context, idosoID int64
 func (s *ConsciousnessService) UpdateEmotionalState(ctx context.Context, idosoID int64, emotionalState string, crisisLevel, receptivity float64) (string, error) {
 	now := time.Now().Format(time.RFC3339)
 
-	s.db.Update(ctx, "patient_eva_mode",
+	if err := s.db.Update(ctx, "patient_eva_mode",
 		map[string]interface{}{"idoso_id": idosoID},
 		map[string]interface{}{
 			"detected_emotional_state": emotionalState,
 			"crisis_level":             crisisLevel,
 			"receptivity_level":        receptivity,
 			"updated_at":               now,
-		})
+		}); err != nil {
+		log.Printf("[consciousness] update eva_mode emotional state failed: %v", err)
+		return "", fmt.Errorf("update eva_mode: %w", err)
+	}
 
 	// Determine new mode based on state
 	newMode := s.determineMode(emotionalState, crisisLevel, receptivity)
 
 	// Update mode if changed
-	s.db.Update(ctx, "patient_eva_mode",
+	if err := s.db.Update(ctx, "patient_eva_mode",
 		map[string]interface{}{"idoso_id": idosoID},
 		map[string]interface{}{
 			"current_mode":     newMode,
 			"last_mode_change": now,
-		})
+		}); err != nil {
+		log.Printf("[consciousness] update eva_mode mode failed: %v", err)
+		return "", fmt.Errorf("update eva_mode mode: %w", err)
+	}
 
 	return newMode, nil
 }
@@ -877,13 +942,15 @@ func (s *ConsciousnessService) SetMode(ctx context.Context, idosoID int64, mode 
 		})
 
 	// Log transition
-	s.db.Insert(ctx, "mode_transitions", map[string]interface{}{
+	if _, insertErr := s.db.Insert(ctx, "mode_transitions", map[string]interface{}{
 		"idoso_id":        idosoID,
 		"to_mode":         mode,
 		"trigger_reason":  "user_request",
 		"auto_or_manual":  "manual",
 		"transitioned_at": now,
-	})
+	}); insertErr != nil {
+		log.Printf("[consciousness] insert mode_transitions failed: %v", insertErr)
+	}
 
 	return err
 }
@@ -979,13 +1046,16 @@ func (s *ConsciousnessService) RecordInteraction(ctx context.Context, idosoID in
 		newPhase = "conhecendo"
 	}
 
-	s.db.Update(ctx, "patient_relationship_evolution",
+	if err := s.db.Update(ctx, "patient_relationship_evolution",
 		map[string]interface{}{"idoso_id": idosoID},
 		map[string]interface{}{
 			"total_interactions": totalInteractions,
 			"current_phase":     newPhase,
 			"updated_at":        now,
-		})
+		}); err != nil {
+		log.Printf("[consciousness] update relationship_evolution failed: %v", err)
+		return "", fmt.Errorf("update relationship_evolution: %w", err)
+	}
 
 	return newPhase, nil
 }
@@ -993,7 +1063,11 @@ func (s *ConsciousnessService) RecordInteraction(ctx context.Context, idosoID in
 // AdaptCommunicationStyle records learned communication preferences
 func (s *ConsciousnessService) AdaptCommunicationStyle(ctx context.Context, idosoID int64, vocabulary []string, humorStyle string, formality float64) error {
 	now := time.Now().Format(time.RFC3339)
-	vocabJSON, _ := json.Marshal(vocabulary)
+	vocabJSON, err := json.Marshal(vocabulary)
+	if err != nil {
+		log.Printf("[consciousness] failed to marshal vocabulary: %v", err)
+		vocabJSON = []byte("[]")
+	}
 
 	return s.db.Update(ctx, "patient_relationship_evolution",
 		map[string]interface{}{"idoso_id": idosoID},
@@ -1054,14 +1128,17 @@ func (s *ConsciousnessService) RecordBehaviorChange(ctx context.Context, idosoID
 	}
 
 	for _, m := range rows {
-		s.db.Update(ctx, "patient_error_memory",
+		if err := s.db.Update(ctx, "patient_error_memory",
 			map[string]interface{}{"id": database.GetInt64(m, "id")},
 			map[string]interface{}{
 				"behavior_changed":       true,
 				"change_detected_at":     now,
 				"change_consistency_days": 0,
 				"updated_at":            now,
-			})
+			}); err != nil {
+			log.Printf("[consciousness] update error_memory failed: %v", err)
+			return fmt.Errorf("update error_memory: %w", err)
+		}
 	}
 
 	return nil
@@ -1194,7 +1271,7 @@ func (s *ConsciousnessService) AddEmpathicLoad(ctx context.Context, idosoID int6
 		lengthMod = 0.9
 	}
 
-	s.db.Update(ctx, "patient_empathic_load",
+	if err := s.db.Update(ctx, "patient_empathic_load",
 		map[string]interface{}{"idoso_id": idosoID},
 		map[string]interface{}{
 			"current_load":              currentLoad,
@@ -1205,7 +1282,10 @@ func (s *ConsciousnessService) AddEmpathicLoad(ctx context.Context, idosoID int6
 			"request_pause":             requestPause,
 			"session_load_accumulated":  sessionLoad,
 			"updated_at":               now,
-		})
+		}); err != nil {
+		log.Printf("[consciousness] update empathic_load failed: %v", err)
+		return nil, fmt.Errorf("update empathic_load: %w", err)
+	}
 
 	return s.GetEmpathicLoad(ctx, idosoID)
 }
@@ -1258,16 +1338,24 @@ func (s *ConsciousnessService) CheckInterventionReadiness(ctx context.Context, i
 	}
 
 	// Get mature cycles for pattern strength
-	cycles, _ := s.GetMatureCycles(ctx, idosoID)
+	cycles, err := s.GetMatureCycles(ctx, idosoID)
+	if err != nil {
+		log.Printf("[consciousness] GetMatureCycles failed: %v", err)
+		return nil, err
+	}
 	patternStrength := 0.0
 	if len(cycles) > 0 {
 		patternStrength = cycles[0].PatternConfidence
 	}
 
 	// Check cooldown
-	irRows, _ := s.db.QueryByLabel(ctx, "patient_intervention_readiness",
+	irRows, err := s.db.QueryByLabel(ctx, "patient_intervention_readiness",
 		" AND n.idoso_id = $idoso",
 		map[string]interface{}{"idoso": idosoID}, 1)
+	if err != nil {
+		log.Printf("[consciousness] QueryByLabel patient_intervention_readiness failed: %v", err)
+		return nil, err
+	}
 	inCooldown := false
 	if len(irRows) > 0 {
 		cooldownUntil := database.GetTimePtr(irRows[0], "intervention_cooldown_until")
@@ -1330,7 +1418,11 @@ func (s *ConsciousnessService) GenerateConsciousnessMirror(ctx context.Context, 
 	var outputs []*MirrorOutput
 
 	// 1. Heavy memories affecting responses
-	heavyMemories, _ := s.GetHeavyMemories(ctx, idosoID, 0.8)
+	heavyMemories, err := s.GetHeavyMemories(ctx, idosoID, 0.8)
+	if err != nil {
+		log.Printf("[consciousness] GetHeavyMemories failed: %v", err)
+		return nil, err
+	}
 	for _, m := range heavyMemories[:minInt(2, len(heavyMemories))] {
 		outputs = append(outputs, &MirrorOutput{
 			Type: "gravitational_influence",
@@ -1349,7 +1441,11 @@ func (s *ConsciousnessService) GenerateConsciousnessMirror(ctx context.Context, 
 	}
 
 	// 2. Mature cycle patterns
-	cycles, _ := s.GetMatureCycles(ctx, idosoID)
+	cycles, err := s.GetMatureCycles(ctx, idosoID)
+	if err != nil {
+		log.Printf("[consciousness] GetMatureCycles failed: %v", err)
+		return nil, err
+	}
 	for _, c := range cycles[:minInt(2, len(cycles))] {
 		outputs = append(outputs, &MirrorOutput{
 			Type: "cycle_pattern",
@@ -1370,7 +1466,11 @@ func (s *ConsciousnessService) GenerateConsciousnessMirror(ctx context.Context, 
 	}
 
 	// 3. Contradictions in narratives
-	contradictions, _ := s.GetNarrativeContradictions(ctx, idosoID)
+	contradictions, err := s.GetNarrativeContradictions(ctx, idosoID)
+	if err != nil {
+		log.Printf("[consciousness] GetNarrativeContradictions failed: %v", err)
+		return nil, err
+	}
 	for _, c := range contradictions[:minInt(1, len(contradictions))] {
 		totalVersions := c["total_versions"].(int)
 		contradictionCount := c["contradiction_count"].(int)
@@ -1389,7 +1489,11 @@ func (s *ConsciousnessService) GenerateConsciousnessMirror(ctx context.Context, 
 	}
 
 	// 4. Empathic load status
-	load, _ := s.GetEmpathicLoad(ctx, idosoID)
+	load, err := s.GetEmpathicLoad(ctx, idosoID)
+	if err != nil {
+		log.Printf("[consciousness] GetEmpathicLoad failed: %v", err)
+		return nil, err
+	}
 	if load != nil && load.IsFatigued {
 		outputs = append(outputs, &MirrorOutput{
 			Type: "empathic_load",

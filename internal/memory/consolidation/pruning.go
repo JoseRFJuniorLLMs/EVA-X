@@ -11,6 +11,7 @@ import (
 	"time"
 
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
+	"eva/internal/util"
 )
 
 // SynapticPruning implementa poda sinaptica baseada em reforco
@@ -151,9 +152,9 @@ func (s *SynapticPruning) ageUnactivatedEdges(ctx context.Context, patientID int
 					continue
 				}
 
-				lastActivation := toFloat64Pruning(node.Content["last_activation"])
+				lastActivation := util.ToFloat64(node.Content["last_activation"])
 				if lastActivation == 0 || lastActivation < oneDayAgo {
-					currentAge := toIntPruning(node.Content["age"])
+					currentAge := util.ToInt(node.Content["age"])
 					_, err := s.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
 						NodeType: node.NodeType,
 						MatchKeys: map[string]interface{}{
@@ -228,8 +229,8 @@ func (s *SynapticPruning) countEdges(ctx context.Context, patientID int64) (tota
 				if err != nil {
 					continue
 				}
-				age := toIntPruning(node.Content["age"])
-				actCount := toIntPruning(node.Content["activation_count"])
+				age := util.ToInt(node.Content["age"])
+				actCount := util.ToInt(node.Content["activation_count"])
 
 				if age > s.maxAgeDays || actCount < s.activationThreshold {
 					weak++
@@ -294,8 +295,8 @@ func (s *SynapticPruning) pruneWeakEdges(ctx context.Context, patientID int64) (
 				continue
 			}
 
-			age := toIntPruning(node.Content["age"])
-			actCount := toIntPruning(node.Content["activation_count"])
+			age := util.ToInt(node.Content["age"])
+			actCount := util.ToInt(node.Content["activation_count"])
 
 			if age > s.maxAgeDays && actCount < s.activationThreshold {
 				// Delete the edge (using edge ID if available, or the node-based approach)
@@ -344,39 +345,3 @@ func (s *SynapticPruning) GetStatistics() map[string]any {
 	}
 }
 
-// Helper type conversions for this package
-func toFloat64Pruning(v interface{}) float64 {
-	if v == nil {
-		return 0
-	}
-	switch val := v.(type) {
-	case float64:
-		return val
-	case float32:
-		return float64(val)
-	case int:
-		return float64(val)
-	case int64:
-		return float64(val)
-	default:
-		return 0
-	}
-}
-
-func toIntPruning(v interface{}) int {
-	if v == nil {
-		return 0
-	}
-	switch val := v.(type) {
-	case int:
-		return val
-	case int64:
-		return int(val)
-	case float64:
-		return int(val)
-	case float32:
-		return int(val)
-	default:
-		return 0
-	}
-}
