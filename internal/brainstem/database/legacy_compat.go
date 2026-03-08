@@ -5,276 +5,266 @@ package database
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
-	"errors"
 	"eva/pkg/models"
+	"fmt"
+	"sync"
+	"time"
 )
 
-// ErrNoPostgres is returned when a legacy PostgreSQL method is called but db.Conn is nil.
-// This happens when DATABASE_URL is not configured (NietzscheDB-only mode).
-var ErrNoPostgres = errors.New("legacy PostgreSQL not configured (DATABASE_URL empty)")
-
-// requireConn returns ErrNoPostgres if the legacy PostgreSQL connection is nil.
-func (db *DB) requireConn() error {
-	if db.Conn == nil {
-		return ErrNoPostgres
-	}
-	return nil
-}
+// advisoryMu replaces PostgreSQL pg_advisory_lock for in-process mutual exclusion.
+// NietzscheDB does not need advisory locks for our scheduler use case.
+var advisoryMu sync.Mutex
 
 // GetIdosoByID recupera os dados do idoso e do familiar principal
 func (db *DB) GetIdosoByID(ctx context.Context, id int) (*models.CallContext, error) {
-	if err := db.requireConn(); err != nil {
-		return nil, err
-	}
-	query := `
-		SELECT 
-			id,
-			nome,
-			telefone,
-			nivel_cognitivo,
-			limitacoes_auditivas,
-			familiar_principal->>'nome' as familiar_nome,
-			familiar_principal->>'telefone' as familiar_telefone
-		FROM idosos
-		WHERE id = $1
-	`
-
-	var callCtx models.CallContext
-	err := db.Conn.QueryRowContext(ctx, query, id).Scan(
-		&callCtx.IdosoID,
-		&callCtx.IdosoNome,
-		&callCtx.Telefone,
-		&callCtx.NivelCognitivo,
-		&callCtx.LimitacoesAuditivas,
-		&callCtx.FamiliarNome,
-		&callCtx.FamiliarTelefone,
-	)
-
+	m, err := db.getNode(ctx, "idosos", id)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get idoso %d: %w", id, err)
+	}
+	if m == nil {
+		return nil, fmt.Errorf("idoso %d not found", id)
 	}
 
-	return &callCtx, nil
+	callCtx := &models.CallContext{
+		IdosoID:             int(getInt64(m, "id")),
+		IdosoNome:           getString(m, "nome"),
+		Telefone:            getString(m, "telefone"),
+		NivelCognitivo:      getString(m, "nivel_cognitivo"),
+		LimitacoesAuditivas: getBool(m, "limitacoes_auditivas"),
+	}
+
+	// Extract familiar_principal JSONB (stored as map or JSON string)
+	if fp, ok := m["familiar_principal"]; ok && fp != nil {
+		switch v := fp.(type) {
+		case map[string]interface{}:
+			callCtx.FamiliarNome = getString(v, "nome")
+			callCtx.FamiliarTelefone = getString(v, "telefone")
+		case string:
+			var fpMap map[string]interface{}
+			if json.Unmarshal([]byte(v), &fpMap) == nil {
+				callCtx.FamiliarNome = getString(fpMap, "nome")
+				callCtx.FamiliarTelefone = getString(fpMap, "telefone")
+			}
+		}
+	}
+
+	return callCtx, nil
 }
 
-// GetCallContext recupera o contexto completo para uma chamada (Join Agendamentos + Idosos)
+// GetCallContext recupera o contexto completo para uma chamada (agendamento + idoso)
 func (db *DB) GetCallContext(ctx context.Context, agendamentoID int) (*models.CallContext, error) {
-	if err := db.requireConn(); err != nil {
-		return nil, err
-	}
-	query := `
-        SELECT 
-            a.id,
-            a.idoso_id,
-            i.nome as idoso_nome,
-            i.telefone,
-            a.dados_tarefa,
-            i.nivel_cognitivo,
-            i.limitacoes_auditivas,
-            i.tom_voz,
-            i.familiar_principal->>'nome' as familiar_nome,
-            i.familiar_principal->>'telefone' as familiar_telefone,
-            a.gemini_session_handle,
-            a.retry_interval_minutes,
-            EXTRACT(YEAR FROM AGE(i.data_nascimento))::int as idade,
-            i.timezone
-        FROM agendamentos a
-        JOIN idosos i ON a.idoso_id = i.id
-        WHERE a.id = $1
-    `
-
-	var callCtx models.CallContext
-	var dadosTarefaRaw []byte
-	var sessionHandle sql.NullString
-
-	err := db.Conn.QueryRowContext(ctx, query, agendamentoID).Scan(
-		&callCtx.AgendamentoID,
-		&callCtx.IdosoID,
-		&callCtx.IdosoNome,
-		&callCtx.Telefone,
-		&dadosTarefaRaw,
-		&callCtx.NivelCognitivo,
-		&callCtx.LimitacoesAuditivas,
-		&callCtx.TomVoz,
-		&callCtx.FamiliarNome,
-		&callCtx.FamiliarTelefone,
-		&sessionHandle,
-		&callCtx.RetryInterval,
-		&callCtx.Idade,
-		&callCtx.Timezone,
-	)
-
+	// Step 1: fetch the agendamento
+	ag, err := db.getNode(ctx, "agendamentos", agendamentoID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get agendamento %d: %w", agendamentoID, err)
+	}
+	if ag == nil {
+		return nil, fmt.Errorf("agendamento %d not found", agendamentoID)
 	}
 
-	// Parse JSON dados_tarefa
-	var dadosTarefa map[string]interface{}
-	if err := json.Unmarshal(dadosTarefaRaw, &dadosTarefa); err == nil {
-		if med, ok := dadosTarefa["medicamento"].(string); ok {
-			callCtx.Medicamento = med
+	// Step 2: fetch the related idoso
+	idosoID := getInt64(ag, "idoso_id")
+	idoso, err := db.getNode(ctx, "idosos", idosoID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get idoso %d for agendamento %d: %w", idosoID, agendamentoID, err)
+	}
+	if idoso == nil {
+		return nil, fmt.Errorf("idoso %d not found for agendamento %d", idosoID, agendamentoID)
+	}
+
+	// Step 3: combine fields
+	callCtx := &models.CallContext{
+		AgendamentoID:       int(getInt64(ag, "id")),
+		IdosoID:             int(idosoID),
+		IdosoNome:           getString(idoso, "nome"),
+		Telefone:            getString(idoso, "telefone"),
+		NivelCognitivo:      getString(idoso, "nivel_cognitivo"),
+		LimitacoesAuditivas: getBool(idoso, "limitacoes_auditivas"),
+		TomVoz:              getString(idoso, "tom_voz"),
+		SessionHandle:       getString(ag, "gemini_session_handle"),
+		RetryInterval:       int(getInt64(ag, "retry_interval_minutes")),
+		Timezone:            getString(idoso, "timezone"),
+	}
+
+	// Calculate idade from data_nascimento
+	dob := getTime(idoso, "data_nascimento")
+	if !dob.IsZero() {
+		callCtx.Idade = int(time.Since(dob).Hours() / 24 / 365.25)
+	}
+
+	// Extract familiar_principal JSONB
+	if fp, ok := idoso["familiar_principal"]; ok && fp != nil {
+		switch v := fp.(type) {
+		case map[string]interface{}:
+			callCtx.FamiliarNome = getString(v, "nome")
+			callCtx.FamiliarTelefone = getString(v, "telefone")
+		case string:
+			var fpMap map[string]interface{}
+			if json.Unmarshal([]byte(v), &fpMap) == nil {
+				callCtx.FamiliarNome = getString(fpMap, "nome")
+				callCtx.FamiliarTelefone = getString(fpMap, "telefone")
+			}
 		}
-		if persona, ok := dadosTarefa["persona"].(string); ok {
-			callCtx.Persona = persona
+	}
+
+	// Parse dados_tarefa for medicamento and persona
+	if dt, ok := ag["dados_tarefa"]; ok && dt != nil {
+		var dadosTarefa map[string]interface{}
+		switch v := dt.(type) {
+		case map[string]interface{}:
+			dadosTarefa = v
+		case string:
+			json.Unmarshal([]byte(v), &dadosTarefa)
+		}
+		if dadosTarefa != nil {
+			if med, ok := dadosTarefa["medicamento"].(string); ok {
+				callCtx.Medicamento = med
+			}
+			if persona, ok := dadosTarefa["persona"].(string); ok {
+				callCtx.Persona = persona
+			}
 		}
 	}
 
-	if sessionHandle.Valid {
-		callCtx.SessionHandle = sessionHandle.String
-	}
-
-	return &callCtx, nil
+	return callCtx, nil
 }
 
-// AcquireLock tenta obter um lock consultivo do Postgres para evitar processamento duplicado
+// AcquireLock obtains an in-process mutex lock (replaces pg_advisory_lock).
+// Always returns true since it blocks until the lock is acquired.
 func (db *DB) AcquireLock(ctx context.Context, lockID int) (bool, error) {
-	if err := db.requireConn(); err != nil {
-		return false, err
-	}
-	var acquired bool
-	query := "SELECT pg_try_advisory_lock($1)"
-	err := db.Conn.QueryRowContext(ctx, query, lockID).Scan(&acquired)
-	return acquired, err
+	advisoryMu.Lock()
+	return true, nil
 }
 
-// ReleaseLock libera o lock consultivo
+// ReleaseLock releases the in-process mutex lock (replaces pg_advisory_unlock).
 func (db *DB) ReleaseLock(ctx context.Context, lockID int) (bool, error) {
-	if err := db.requireConn(); err != nil {
-		return false, err
-	}
-	var released bool
-	query := "SELECT pg_advisory_unlock($1)"
-	err := db.Conn.QueryRowContext(ctx, query, lockID).Scan(&released)
-	return released, err
+	advisoryMu.Unlock()
+	return true, nil
 }
 
-// GetSystemSetting busca uma configuração pela chave na tabela configuracoes_sistema
+// GetSystemSetting busca uma configuracao pela chave na tabela configuracoes_sistema
 func (db *DB) GetSystemSetting(ctx context.Context, key string) (string, error) {
-	if err := db.requireConn(); err != nil {
-		return "", err
-	}
-	var value string
-	query := `SELECT valor FROM configuracoes_sistema WHERE chave = $1 AND ativa = true`
-	err := db.Conn.QueryRowContext(ctx, query, key).Scan(&value)
+	rows, err := db.queryNodesByLabel(ctx, "configuracoes_sistema",
+		" AND n.chave = $chave AND n.ativa = $ativa",
+		map[string]interface{}{
+			"chave": key,
+			"ativa": true,
+		}, 1)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to query setting %q: %w", key, err)
 	}
-	return value, nil
+	if len(rows) == 0 {
+		return "", fmt.Errorf("setting %q not found", key)
+	}
+	return getString(rows[0], "valor"), nil
 }
 
-// GetPendingCalls busca agendamentos prontos para execução
+// GetPendingCalls busca agendamentos prontos para execucao.
+// Delegates to GetPendingAgendamentos and enriches with idoso data.
 func (db *DB) GetPendingCalls(ctx context.Context) ([]models.Agendamento, error) {
-	if err := db.requireConn(); err != nil {
-		return nil, err
-	}
-	query := `
-        SELECT 
-            a.id,
-            a.idoso_id,
-            i.telefone,
-            i.nome as nome_idoso,
-            a.data_hora_agendada,
-            a.dados_tarefa,
-            a.status,
-            a.tentativas_realizadas,
-            a.max_retries,
-            a.retry_interval_minutes,
-            a.prioridade
-        FROM agendamentos a
-        JOIN idosos i ON a.idoso_id = i.id
-        WHERE (a.data_hora_agendada <= (NOW() + INTERVAL '1 minute') OR (a.proxima_tentativa IS NOT NULL AND a.proxima_tentativa <= NOW()))
-          AND a.status IN ('agendado', 'pendente', 'aguardando_retry')
-          AND a.tentativas_realizadas < a.max_retries
-        ORDER BY 
-            CASE a.prioridade 
-                WHEN 'alta' THEN 1 
-                WHEN 'normal' THEN 2 
-                WHEN 'baixa' THEN 3 
-            END ASC, 
-            a.data_hora_agendada ASC
-        LIMIT 50
-    `
-
-	rows, err := db.Conn.QueryContext(ctx, query)
+	dbAgendamentos, err := db.GetPendingAgendamentos(50)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get pending agendamentos: %w", err)
 	}
-	defer rows.Close()
 
-	var agendamentos []models.Agendamento
-	for rows.Next() {
-		var ag models.Agendamento
-		var dadosTarefaRaw []byte
-		err := rows.Scan(
-			&ag.ID,
-			&ag.IdosoID,
-			&ag.Telefone,
-			&ag.NomeIdoso,
-			&ag.Horario,
-			&dadosTarefaRaw,
-			&ag.Status,
-			&ag.TentativasRealizadas,
-			&ag.MaxRetries,
-			&ag.RetryIntervalMinutes,
-			&ag.Prioridade,
-		)
-		if err != nil {
+	var result []models.Agendamento
+	for _, a := range dbAgendamentos {
+		// Fetch idoso data for telefone and nome
+		idoso, err := db.getNode(ctx, "idosos", a.IdosoID)
+		if err != nil || idoso == nil {
 			continue
 		}
 
-		// Unmarshal dadosTarefa
-		json.Unmarshal(dadosTarefaRaw, &ag.DadosTarefa)
-
-		if med, ok := ag.DadosTarefa["medicamento"].(string); ok {
-			ag.Remedios = med
+		ag := models.Agendamento{
+			ID:                   int(a.ID),
+			IdosoID:              int(a.IdosoID),
+			Telefone:             getString(idoso, "telefone"),
+			NomeIdoso:            getString(idoso, "nome"),
+			Horario:              a.DataHoraAgendada,
+			Status:               a.Status,
+			TentativasRealizadas: a.TentativasRealizadas,
+			MaxRetries:           a.MaxRetries,
+			Prioridade:           a.Prioridade,
 		}
 
-		agendamentos = append(agendamentos, ag)
+		// Parse dados_tarefa
+		if a.DadosTarefa != "" {
+			var dt map[string]interface{}
+			if json.Unmarshal([]byte(a.DadosTarefa), &dt) == nil {
+				ag.DadosTarefa = dt
+				if med, ok := dt["medicamento"].(string); ok {
+					ag.Remedios = med
+				}
+			}
+		}
+
+		// Fetch retry_interval_minutes from the raw node
+		agNode, _ := db.getNode(ctx, "agendamentos", a.ID)
+		if agNode != nil {
+			ag.RetryIntervalMinutes = int(getInt64(agNode, "retry_interval_minutes"))
+		}
+
+		result = append(result, ag)
 	}
 
-	return agendamentos, nil
+	return result, nil
 }
 
+// UpdateCallStatus updates the status of an agendamento and related timestamps.
 func (db *DB) UpdateCallStatus(ctx context.Context, agendamentoID int, status string, retryInMinutes int) error {
-	if err := db.requireConn(); err != nil {
-		return err
+	matchKeys := map[string]interface{}{
+		"id": float64(agendamentoID),
 	}
-	var query string
-	var err error
+	now := time.Now().Format(time.RFC3339)
+
+	updates := map[string]interface{}{
+		"status":        status,
+		"atualizado_em": now,
+	}
 
 	if status == "concluido" {
-		query = `UPDATE agendamentos SET status = $1, data_hora_realizada = NOW(), atualizado_em = NOW() WHERE id = $2`
-		_, err = db.Conn.ExecContext(ctx, query, status, agendamentoID)
+		updates["data_hora_realizada"] = now
 	} else if status == "aguardando_retry" {
-		query = `UPDATE agendamentos SET status = $1, proxima_tentativa = NOW() + ($2 || ' minutes')::interval, atualizado_em = NOW() WHERE id = $3`
-		_, err = db.Conn.ExecContext(ctx, query, status, retryInMinutes, agendamentoID)
-	} else {
-		query = `UPDATE agendamentos SET status = $1, atualizado_em = NOW() WHERE id = $2`
-		_, err = db.Conn.ExecContext(ctx, query, status, agendamentoID)
+		proxima := time.Now().Add(time.Duration(retryInMinutes) * time.Minute)
+		updates["proxima_tentativa"] = proxima.Format(time.RFC3339)
 	}
 
-	return err
+	return db.updateFields(ctx, "agendamentos", matchKeys, updates)
 }
 
+// IncrementAttempts increments tentativas_realizadas for an agendamento.
 func (db *DB) IncrementAttempts(ctx context.Context, agendamentoID int) error {
-	if err := db.requireConn(); err != nil {
-		return err
+	// First read current value
+	m, err := db.getNode(ctx, "agendamentos", agendamentoID)
+	if err != nil {
+		return fmt.Errorf("failed to get agendamento %d: %w", agendamentoID, err)
 	}
-	query := `UPDATE agendamentos SET tentativas_realizadas = tentativas_realizadas + 1, atualizado_em = NOW() WHERE id = $1`
-	_, err := db.Conn.ExecContext(ctx, query, agendamentoID)
-	return err
+	if m == nil {
+		return fmt.Errorf("agendamento %d not found", agendamentoID)
+	}
+
+	current := getInt64(m, "tentativas_realizadas")
+
+	return db.updateFields(ctx, "agendamentos",
+		map[string]interface{}{"id": float64(agendamentoID)},
+		map[string]interface{}{
+			"tentativas_realizadas": current + 1,
+			"atualizado_em":         time.Now().Format(time.RFC3339),
+		})
 }
 
+// SaveSessionHandle saves the Gemini session handle and checkpoint for an agendamento.
 func (db *DB) SaveSessionHandle(ctx context.Context, agendamentoID int, handle string, checkpoint map[string]interface{}) error {
-	if err := db.requireConn(); err != nil {
-		return err
-	}
 	cpRaw, _ := json.Marshal(checkpoint)
-	query := `UPDATE agendamentos SET gemini_session_handle = $1, ultima_interacao_estado = $2, session_expires_at = NOW() + INTERVAL '2 hours', atualizado_em = NOW() WHERE id = $3`
-	_, err := db.Conn.ExecContext(ctx, query, handle, cpRaw, agendamentoID)
-	return err
-}
+	expiresAt := time.Now().Add(2 * time.Hour).Format(time.RFC3339)
 
-// Reimplementação de métodos adicionais necessários para o scheduler
+	return db.updateFields(ctx, "agendamentos",
+		map[string]interface{}{"id": float64(agendamentoID)},
+		map[string]interface{}{
+			"gemini_session_handle":   handle,
+			"ultima_interacao_estado": string(cpRaw),
+			"session_expires_at":      expiresAt,
+			"atualizado_em":           time.Now().Format(time.RFC3339),
+		})
+}

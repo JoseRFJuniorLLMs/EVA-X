@@ -4,11 +4,15 @@
 package ab
 
 import (
+	"context"
 	"crypto/md5"
-	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
+	"time"
+
+	"eva/internal/brainstem/database"
 )
 
 // TestConfig representa configuração de teste A/B
@@ -21,26 +25,41 @@ type TestConfig struct {
 
 // ABTestService gerencia testes A/B
 type ABTestService struct {
-	db *sql.DB
+	db *database.DB
 }
 
 // NewABTestService cria novo serviço de A/B testing
-func NewABTestService(db *sql.DB) *ABTestService {
+func NewABTestService(db *database.DB) *ABTestService {
 	return &ABTestService{db: db}
 }
 
 // AssignGroup atribui usuário a um grupo de teste
 func (s *ABTestService) AssignGroup(testName string, idosoID int64) (string, error) {
-	var group string
+	ctx := context.Background()
 
-	query := `SELECT assign_ab_test_group($1, $2)`
-	err := s.db.QueryRow(query, testName, idosoID).Scan(&group)
+	// Check if assignment already exists
+	rows, err := s.db.QueryByLabel(ctx, "ab_test_assignments",
+		" AND n.test_name = $test AND n.idoso_id = $idoso",
+		map[string]interface{}{"test": testName, "idoso": idosoID}, 1)
+	if err == nil && len(rows) > 0 {
+		return database.GetString(rows[0], "group_name"), nil
+	}
 
+	// Assign using hash-based method
+	group := HashBasedAssignment(idosoID, testName, 50)
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err = s.db.Insert(ctx, "ab_test_assignments", map[string]interface{}{
+		"test_name":  testName,
+		"idoso_id":   idosoID,
+		"group_name": group,
+		"created_at": now,
+	})
 	if err != nil {
 		return "", fmt.Errorf("erro ao atribuir grupo: %w", err)
 	}
 
-	log.Printf("🧪 [A/B TEST] Usuário %d atribuído ao grupo: %s (teste: %s)", idosoID, group, testName)
+	log.Printf("[A/B TEST] Usuario %d atribuido ao grupo: %s (teste: %s)", idosoID, group, testName)
 	return group, nil
 }
 
@@ -48,7 +67,7 @@ func (s *ABTestService) AssignGroup(testName string, idosoID int64) (string, err
 func (s *ABTestService) ShouldUseThinkingMode(idosoID int64) bool {
 	group, err := s.AssignGroup("health_triage_mode", idosoID)
 	if err != nil {
-		log.Printf("⚠️ Erro no A/B test, usando modo padrão: %v", err)
+		log.Printf("Erro no A/B test, usando modo padrao: %v", err)
 		return true // Fallback para Thinking Mode
 	}
 
@@ -57,16 +76,25 @@ func (s *ABTestService) ShouldUseThinkingMode(idosoID int64) bool {
 
 // LogMetric registra métrica de teste A/B
 func (s *ABTestService) LogMetric(testName string, idosoID int64, metricType string, value float64, metadata map[string]interface{}) error {
-	query := `SELECT log_ab_test_metric($1, $2, $3, $4, $5)`
+	ctx := context.Background()
+	now := time.Now().UTC().Format(time.RFC3339)
 
-	var metadataJSON interface{}
-	if metadata != nil {
-		metadataJSON = metadata
+	content := map[string]interface{}{
+		"test_name":   testName,
+		"idoso_id":    idosoID,
+		"metric_type": metricType,
+		"value":       value,
+		"created_at":  now,
 	}
 
-	_, err := s.db.Exec(query, testName, idosoID, metricType, value, metadataJSON)
+	if metadata != nil {
+		metadataJSON, _ := json.Marshal(metadata)
+		content["metadata"] = string(metadataJSON)
+	}
+
+	_, err := s.db.Insert(ctx, "ab_test_metrics", content)
 	if err != nil {
-		return fmt.Errorf("erro ao registrar métrica: %w", err)
+		return fmt.Errorf("erro ao registrar metrica: %w", err)
 	}
 
 	return nil
@@ -107,44 +135,84 @@ func (s *ABTestService) LogFalsePositiveRate(idosoID int64, wasFalsePositive boo
 
 // GetTestResults retorna resultados do teste A/B
 func (s *ABTestService) GetTestResults(testName string) ([]TestResult, error) {
-	query := `
-		SELECT 
-			metrica,
-			grupo_a,
-			media_a,
-			amostras_a,
-			grupo_b,
-			media_b,
-			amostras_b,
-			diferenca_percentual,
-			vencedor
-		FROM v_ab_test_comparison
-		WHERE test_name = $1
-		ORDER BY metrica
-	`
+	ctx := context.Background()
 
-	rows, err := s.db.Query(query, testName)
+	// Get all metrics for this test
+	metrics, err := s.db.QueryByLabel(ctx, "ab_test_metrics",
+		" AND n.test_name = $test",
+		map[string]interface{}{"test": testName}, 0)
 	if err != nil {
 		return nil, fmt.Errorf("erro ao buscar resultados: %w", err)
 	}
-	defer rows.Close()
+
+	// Get all assignments for this test
+	assignments, err := s.db.QueryByLabel(ctx, "ab_test_assignments",
+		" AND n.test_name = $test",
+		map[string]interface{}{"test": testName}, 0)
+	if err != nil {
+		return nil, fmt.Errorf("erro ao buscar atribuicoes: %w", err)
+	}
+
+	// Map idoso_id -> group
+	idosoGroup := make(map[int64]string)
+	for _, a := range assignments {
+		idosoGroup[database.GetInt64(a, "idoso_id")] = database.GetString(a, "group_name")
+	}
+
+	// Aggregate metrics by metric_type and group
+	type groupStats struct {
+		sum     float64
+		count   int
+	}
+	// metricType -> groupName -> stats
+	aggregated := make(map[string]map[string]*groupStats)
+
+	for _, m := range metrics {
+		metricType := database.GetString(m, "metric_type")
+		idosoID := database.GetInt64(m, "idoso_id")
+		value := database.GetFloat64(m, "value")
+		group := idosoGroup[idosoID]
+		if group == "" {
+			continue
+		}
+
+		if aggregated[metricType] == nil {
+			aggregated[metricType] = make(map[string]*groupStats)
+		}
+		if aggregated[metricType][group] == nil {
+			aggregated[metricType][group] = &groupStats{}
+		}
+		aggregated[metricType][group].sum += value
+		aggregated[metricType][group].count++
+	}
 
 	var results []TestResult
-	for rows.Next() {
-		var r TestResult
-		err := rows.Scan(
-			&r.Metric,
-			&r.GroupA,
-			&r.MeanA,
-			&r.SamplesA,
-			&r.GroupB,
-			&r.MeanB,
-			&r.SamplesB,
-			&r.DifferencePercent,
-			&r.Winner,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("erro ao escanear resultado: %w", err)
+	for metricType, groups := range aggregated {
+		r := TestResult{Metric: metricType}
+		for groupName, stats := range groups {
+			mean := 0.0
+			if stats.count > 0 {
+				mean = stats.sum / float64(stats.count)
+			}
+			if r.GroupA == "" {
+				r.GroupA = groupName
+				r.MeanA = mean
+				r.SamplesA = stats.count
+			} else {
+				r.GroupB = groupName
+				r.MeanB = mean
+				r.SamplesB = stats.count
+			}
+		}
+		if r.MeanA != 0 {
+			r.DifferencePercent = ((r.MeanB - r.MeanA) / r.MeanA) * 100
+		}
+		if r.MeanA > r.MeanB {
+			r.Winner = r.GroupA
+		} else if r.MeanB > r.MeanA {
+			r.Winner = r.GroupB
+		} else {
+			r.Winner = "tie"
 		}
 		results = append(results, r)
 	}
@@ -167,26 +235,34 @@ type TestResult struct {
 
 // GetUserDistribution retorna distribuição de usuários por grupo
 func (s *ABTestService) GetUserDistribution(testName string) ([]GroupDistribution, error) {
-	query := `
-		SELECT grupo, total_usuarios, percentual
-		FROM v_ab_test_distribution
-		WHERE test_name = $1
-	`
+	ctx := context.Background()
 
-	rows, err := s.db.Query(query, testName)
+	assignments, err := s.db.QueryByLabel(ctx, "ab_test_assignments",
+		" AND n.test_name = $test",
+		map[string]interface{}{"test": testName}, 0)
 	if err != nil {
-		return nil, fmt.Errorf("erro ao buscar distribuição: %w", err)
+		return nil, fmt.Errorf("erro ao buscar distribuicao: %w", err)
 	}
-	defer rows.Close()
+
+	groupCounts := make(map[string]int)
+	total := 0
+	for _, a := range assignments {
+		group := database.GetString(a, "group_name")
+		groupCounts[group]++
+		total++
+	}
 
 	var distribution []GroupDistribution
-	for rows.Next() {
-		var d GroupDistribution
-		err := rows.Scan(&d.Group, &d.TotalUsers, &d.Percentage)
-		if err != nil {
-			return nil, fmt.Errorf("erro ao escanear distribuição: %w", err)
+	for group, count := range groupCounts {
+		pct := 0.0
+		if total > 0 {
+			pct = float64(count) / float64(total) * 100
 		}
-		distribution = append(distribution, d)
+		distribution = append(distribution, GroupDistribution{
+			Group:      group,
+			TotalUsers: count,
+			Percentage: pct,
+		})
 	}
 
 	return distribution, nil

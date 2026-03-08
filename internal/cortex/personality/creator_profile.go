@@ -2,9 +2,10 @@ package personality
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
+	"eva/internal/brainstem/database"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -59,11 +60,11 @@ const CreatorCPF = "64525430249"
 
 // CreatorProfileService gerencia o perfil do Criador
 type CreatorProfileService struct {
-	db *sql.DB
+	db *database.DB
 }
 
 // NewCreatorProfileService cria um novo serviço
-func NewCreatorProfileService(db *sql.DB) *CreatorProfileService {
+func NewCreatorProfileService(db *database.DB) *CreatorProfileService {
 	return &CreatorProfileService{db: db}
 }
 
@@ -116,86 +117,88 @@ func (s *CreatorProfileService) LoadCreatorProfile(ctx context.Context) (*Creato
 
 // loadPersonality carrega os traits de personalidade do NietzscheDB
 func (s *CreatorProfileService) loadPersonality(ctx context.Context, profile *CreatorProfile) error {
-	query := `
-		SELECT aspecto, valor, contexto, prioridade
-		FROM eva_personalidade_criador
-		WHERE ativo = true
-		ORDER BY prioridade DESC
-	`
-
-	rows, err := s.db.QueryContext(ctx, query)
+	rows, err := s.db.QueryByLabel(ctx, "eva_personalidade_criador", " AND n.ativo = $ativo", map[string]interface{}{"ativo": true}, 0)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var trait PersonalityTrait
-		var contexto sql.NullString
+	// Sort by prioridade DESC in Go
+	sort.Slice(rows, func(i, j int) bool {
+		return database.GetInt64(rows[i], "prioridade") > database.GetInt64(rows[j], "prioridade")
+	})
 
-		if err := rows.Scan(&trait.Aspecto, &trait.Valor, &contexto, &trait.Prioridade); err != nil {
-			continue
+	for _, row := range rows {
+		trait := PersonalityTrait{
+			Aspecto:    database.GetString(row, "aspecto"),
+			Valor:      database.GetString(row, "valor"),
+			Contexto:   database.GetString(row, "contexto"),
+			Prioridade: int(database.GetInt64(row, "prioridade")),
 		}
-
-		if contexto.Valid {
-			trait.Contexto = contexto.String
-		}
-
 		profile.Personality[trait.Aspecto] = trait
 	}
 
-	return rows.Err()
+	return nil
 }
 
 // loadProjectKnowledge carrega conhecimento do projeto
 func (s *CreatorProfileService) loadProjectKnowledge(ctx context.Context, profile *CreatorProfile) error {
-	query := `
-		SELECT categoria, item, descricao, COALESCE(localizacao, ''), importancia
-		FROM eva_conhecimento_projeto
-		ORDER BY importancia DESC
-	`
-
-	rows, err := s.db.QueryContext(ctx, query)
+	rows, err := s.db.QueryByLabel(ctx, "eva_conhecimento_projeto", "", nil, 0)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var item ProjectItem
-		if err := rows.Scan(&item.Categoria, &item.Item, &item.Descricao, &item.Localizacao, &item.Importancia); err != nil {
-			continue
+	// Sort by importancia DESC in Go
+	sort.Slice(rows, func(i, j int) bool {
+		return database.GetInt64(rows[i], "importancia") > database.GetInt64(rows[j], "importancia")
+	})
+
+	for _, row := range rows {
+		item := ProjectItem{
+			Categoria:   database.GetString(row, "categoria"),
+			Item:        database.GetString(row, "item"),
+			Descricao:   database.GetString(row, "descricao"),
+			Localizacao: database.GetString(row, "localizacao"),
+			Importancia: int(database.GetInt64(row, "importancia")),
 		}
 		profile.ProjectKnowledge = append(profile.ProjectKnowledge, item)
 	}
 
-	return rows.Err()
+	return nil
 }
 
 // loadMemories carrega memórias do Criador
 func (s *CreatorProfileService) loadMemories(ctx context.Context, profile *CreatorProfile) error {
-	query := `
-		SELECT tipo, conteudo, data_evento, importancia
-		FROM eva_memorias_criador
-		ORDER BY importancia DESC, data_evento DESC
-		LIMIT 50
-	`
-
-	rows, err := s.db.QueryContext(ctx, query)
+	rows, err := s.db.QueryByLabel(ctx, "eva_memorias_criador", "", nil, 0)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var mem CreatorMemory
-		if err := rows.Scan(&mem.Tipo, &mem.Conteudo, &mem.DataEvento, &mem.Importancia); err != nil {
-			continue
+	// Sort by importancia DESC, data_evento DESC in Go
+	sort.Slice(rows, func(i, j int) bool {
+		impI := database.GetInt64(rows[i], "importancia")
+		impJ := database.GetInt64(rows[j], "importancia")
+		if impI != impJ {
+			return impI > impJ
+		}
+		return database.GetTime(rows[i], "data_evento").After(database.GetTime(rows[j], "data_evento"))
+	})
+
+	// Limit to 50
+	if len(rows) > 50 {
+		rows = rows[:50]
+	}
+
+	for _, row := range rows {
+		mem := CreatorMemory{
+			Tipo:        database.GetString(row, "tipo"),
+			Conteudo:    database.GetString(row, "conteudo"),
+			DataEvento:  database.GetTime(row, "data_evento"),
+			Importancia: int(database.GetInt64(row, "importancia")),
 		}
 		profile.Memories = append(profile.Memories, mem)
 	}
 
-	return rows.Err()
+	return nil
 }
 
 // GenerateSystemPrompt gera o prompt de sistema para o Criador
@@ -244,11 +247,12 @@ func (s *CreatorProfileService) GenerateSystemPrompt(profile *CreatorProfile) st
 func (s *CreatorProfileService) SaveMemory(ctx context.Context, tipo, conteudo string, importancia int, tags []string) error {
 	tagsJSON, _ := json.Marshal(tags)
 
-	query := `
-		INSERT INTO eva_memorias_criador (tipo, conteudo, importancia, tags)
-		VALUES ($1, $2, $3, $4)
-	`
-
-	_, err := s.db.ExecContext(ctx, query, tipo, conteudo, importancia, tagsJSON)
+	_, err := s.db.Insert(ctx, "eva_memorias_criador", map[string]interface{}{
+		"tipo":        tipo,
+		"conteudo":    conteudo,
+		"importancia": importancia,
+		"tags":        string(tagsJSON),
+		"created_at":  time.Now().Format(time.RFC3339),
+	})
 	return err
 }

@@ -4,48 +4,42 @@
 package signaling
 
 import (
-	"database/sql"
+	"context"
 	"fmt"
 	"strings"
 	"time"
+
+	"eva/internal/brainstem/database"
 )
 
 // getPersonalityContext busca estado de personalidade e monta contexto para o prompt
-func getPersonalityContext(idosoID int64, db *sql.DB) string {
-	// Buscar estado de personalidade
-	var (
-		relationshipLevel int
-		conversationCount int
-		lastInteraction   time.Time
-		dominantEmotion   string
-		favoriteTopics    string
-		firstMeetingDate  time.Time
-	)
+func getPersonalityContext(idosoID int64, db *database.DB) string {
+	ctx := context.Background()
 
-	query := `
-		SELECT 
-			relationship_level,
-			conversation_count,
-			last_interaction,
-			dominant_emotion,
-			favorite_topics,
-			first_meeting_date
-		FROM eva_personality_state
-		WHERE idoso_id = $1
-	`
-
-	err := db.QueryRow(query, idosoID).Scan(
-		&relationshipLevel,
-		&conversationCount,
-		&lastInteraction,
-		&dominantEmotion,
-		&favoriteTopics,
-		&firstMeetingDate,
-	)
-
-	if err != nil {
+	// Buscar estado de personalidade via NietzscheDB
+	params := map[string]interface{}{
+		"idoso_id": idosoID,
+	}
+	results, err := db.QueryByLabel(ctx, "eva_personality_state",
+		" AND n.idoso_id = $idoso_id", params, 1)
+	if err != nil || len(results) == 0 {
 		// Se não existir registro, retornar vazio (primeira conversa)
 		return ""
+	}
+
+	r := results[0]
+	relationshipLevel := int(database.GetInt64(r, "relationship_level"))
+	conversationCount := int(database.GetInt64(r, "conversation_count"))
+	dominantEmotion := database.GetString(r, "dominant_emotion")
+	favoriteTopics := database.GetString(r, "favorite_topics")
+
+	// Parse timestamps
+	var lastInteraction, firstMeetingDate time.Time
+	if liStr := database.GetString(r, "last_interaction"); liStr != "" {
+		lastInteraction, _ = time.Parse(time.RFC3339, liStr)
+	}
+	if fmStr := database.GetString(r, "first_meeting_date"); fmStr != "" {
+		firstMeetingDate, _ = time.Parse(time.RFC3339, fmStr)
 	}
 
 	// Calcular dias desde primeira conversa

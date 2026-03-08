@@ -5,18 +5,19 @@ package superhuman
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"log"
 	"regexp"
 	"strings"
 	"time"
+
+	"eva/internal/brainstem/database"
 )
 
 // SelfCoreService manages the patient's identity memory
 // PRINCIPLE: This records WHO THE PATIENT SAYS THEY ARE, not who EVA thinks they are
 type SelfCoreService struct {
-	db *sql.DB
+	db *database.DB
 
 	// Patterns to detect self-descriptions
 	selfDescriptionPatterns []*regexp.Regexp
@@ -24,7 +25,7 @@ type SelfCoreService struct {
 }
 
 // NewSelfCoreService creates a new identity memory service
-func NewSelfCoreService(db *sql.DB) *SelfCoreService {
+func NewSelfCoreService(db *database.DB) *SelfCoreService {
 	svc := &SelfCoreService{db: db}
 	svc.compilePatterns()
 	return svc
@@ -111,52 +112,104 @@ func (s *SelfCoreService) ProcessText(ctx context.Context, idosoID int64, text s
 }
 
 // addSelfDescription adds a self-description to the patient's record
-func (s *SelfCoreService) addSelfDescription(ctx context.Context, idosoID int64, text string, timestamp time.Time, context string) error {
-	// Get or create self_core record
-	query := `
-		INSERT INTO patient_self_core (idoso_id, self_descriptions)
-		VALUES ($1, $2::jsonb)
-		ON CONFLICT (idoso_id) DO UPDATE SET
-			self_descriptions = patient_self_core.self_descriptions || $2::jsonb,
-			updated_at = NOW()
-	`
+func (s *SelfCoreService) addSelfDescription(ctx context.Context, idosoID int64, text string, timestamp time.Time, descContext string) error {
+	now := time.Now().Format(time.RFC3339)
 
 	description := SelfDescription{
 		Text:      text,
 		Timestamp: timestamp,
-		Context:   context,
+		Context:   descContext,
 	}
-
 	descJSON, err := json.Marshal([]SelfDescription{description})
 	if err != nil {
 		return err
 	}
 
-	_, err = s.db.ExecContext(ctx, query, idosoID, string(descJSON))
+	// Get or create self_core record
+	rows, _ := s.db.QueryByLabel(ctx, "patient_self_core",
+		" AND n.idoso_id = $idoso",
+		map[string]interface{}{"idoso": idosoID}, 1)
+
+	if len(rows) > 0 {
+		m := rows[0]
+		// Append to existing descriptions
+		var existing []SelfDescription
+		if raw, ok := m["self_descriptions"]; ok && raw != nil {
+			switch v := raw.(type) {
+			case string:
+				json.Unmarshal([]byte(v), &existing)
+			case []interface{}:
+				b, _ := json.Marshal(v)
+				json.Unmarshal(b, &existing)
+			}
+		}
+		existing = append(existing, description)
+		allDescsJSON, _ := json.Marshal(existing)
+
+		return s.db.Update(ctx, "patient_self_core",
+			map[string]interface{}{"idoso_id": idosoID},
+			map[string]interface{}{
+				"self_descriptions": string(allDescsJSON),
+				"updated_at":        now,
+			})
+	}
+
+	// Create new record
+	_, err = s.db.Insert(ctx, "patient_self_core", map[string]interface{}{
+		"idoso_id":          idosoID,
+		"self_descriptions": string(descJSON),
+		"created_at":        now,
+		"updated_at":        now,
+	})
 	return err
 }
 
 // addRole adds a self-attributed role
 func (s *SelfCoreService) addRole(ctx context.Context, idosoID int64, role string) error {
 	role = strings.ToLower(strings.TrimSpace(role))
+	now := time.Now().Format(time.RFC3339)
 
-	query := `
-		INSERT INTO patient_self_core (idoso_id, self_attributed_roles)
-		VALUES ($1, $2::jsonb)
-		ON CONFLICT (idoso_id) DO UPDATE SET
-			self_attributed_roles = (
-				SELECT jsonb_agg(DISTINCT value)
-				FROM (
-					SELECT jsonb_array_elements_text(
-						COALESCE(patient_self_core.self_attributed_roles, '[]'::jsonb) || $2::jsonb
-					) as value
-				) sub
-			),
-			updated_at = NOW()
-	`
+	rows, _ := s.db.QueryByLabel(ctx, "patient_self_core",
+		" AND n.idoso_id = $idoso",
+		map[string]interface{}{"idoso": idosoID}, 1)
 
+	if len(rows) > 0 {
+		m := rows[0]
+		// Get existing roles
+		var existingRoles []string
+		if raw, ok := m["self_attributed_roles"]; ok && raw != nil {
+			parseJSONStringSlice(raw, &existingRoles)
+		}
+
+		// Add role if not already present
+		found := false
+		for _, r := range existingRoles {
+			if r == role {
+				found = true
+				break
+			}
+		}
+		if !found {
+			existingRoles = append(existingRoles, role)
+		}
+
+		rolesJSON, _ := json.Marshal(existingRoles)
+		return s.db.Update(ctx, "patient_self_core",
+			map[string]interface{}{"idoso_id": idosoID},
+			map[string]interface{}{
+				"self_attributed_roles": string(rolesJSON),
+				"updated_at":            now,
+			})
+	}
+
+	// Create new record
 	rolesJSON, _ := json.Marshal([]string{role})
-	_, err := s.db.ExecContext(ctx, query, idosoID, string(rolesJSON))
+	_, err := s.db.Insert(ctx, "patient_self_core", map[string]interface{}{
+		"idoso_id":             idosoID,
+		"self_attributed_roles": string(rolesJSON),
+		"created_at":           now,
+		"updated_at":           now,
+	})
 	return err
 }
 
@@ -188,63 +241,95 @@ func (s *SelfCoreService) trackSignifiers(ctx context.Context, idosoID int64, te
 // upsertSignifier updates or inserts a master signifier
 func (s *SelfCoreService) upsertSignifier(ctx context.Context, idosoID int64, signifier, contextType string, timestamp time.Time) error {
 	period := timestamp.Format("2006-01") // Year-Month
+	now := timestamp.Format(time.RFC3339)
 
-	query := `
-		INSERT INTO patient_master_signifiers
-		(idoso_id, signifier, context_type, total_count, first_seen, last_seen, frequency_by_period)
-		VALUES ($1, $2, $3, 1, $4, $4, jsonb_build_object($5, 1))
-		ON CONFLICT (idoso_id, signifier) DO UPDATE SET
-			total_count = patient_master_signifiers.total_count + 1,
-			last_seen = $4,
-			frequency_by_period = patient_master_signifiers.frequency_by_period ||
-				jsonb_build_object($5,
-					COALESCE((patient_master_signifiers.frequency_by_period->>$5)::int, 0) + 1
-				),
-			updated_at = NOW()
-	`
+	rows, _ := s.db.QueryByLabel(ctx, "patient_master_signifiers",
+		" AND n.idoso_id = $idoso AND n.signifier = $sig",
+		map[string]interface{}{"idoso": idosoID, "sig": signifier}, 1)
 
-	_, err := s.db.ExecContext(ctx, query, idosoID, signifier, contextType, timestamp, period)
+	if len(rows) > 0 {
+		m := rows[0]
+		totalCount := int(database.GetInt64(m, "total_count")) + 1
+
+		// Update frequency_by_period
+		freqByPeriod := make(map[string]int)
+		if raw, ok := m["frequency_by_period"]; ok && raw != nil {
+			switch v := raw.(type) {
+			case string:
+				json.Unmarshal([]byte(v), &freqByPeriod)
+			case map[string]interface{}:
+				for k, val := range v {
+					if f, ok := val.(float64); ok {
+						freqByPeriod[k] = int(f)
+					}
+				}
+			}
+		}
+		freqByPeriod[period]++
+		freqJSON, _ := json.Marshal(freqByPeriod)
+
+		return s.db.Update(ctx, "patient_master_signifiers",
+			map[string]interface{}{"idoso_id": idosoID, "signifier": signifier},
+			map[string]interface{}{
+				"total_count":         totalCount,
+				"last_seen":           now,
+				"frequency_by_period": string(freqJSON),
+				"updated_at":          now,
+			})
+	}
+
+	// Insert new
+	freqByPeriod := map[string]int{period: 1}
+	freqJSON, _ := json.Marshal(freqByPeriod)
+
+	_, err := s.db.Insert(ctx, "patient_master_signifiers", map[string]interface{}{
+		"idoso_id":            idosoID,
+		"signifier":           signifier,
+		"context_type":        contextType,
+		"total_count":         1,
+		"first_seen":          now,
+		"last_seen":           now,
+		"frequency_by_period": string(freqJSON),
+		"created_at":          now,
+		"updated_at":          now,
+	})
 	return err
 }
 
 // GetSelfCore retrieves the patient's identity memory
 func (s *SelfCoreService) GetSelfCore(ctx context.Context, idosoID int64) (*PatientSelfCore, error) {
-	query := `
-		SELECT idoso_id, self_descriptions, self_attributed_roles,
-			   narrative_summary, narrative_last_updated
-		FROM patient_self_core
-		WHERE idoso_id = $1
-	`
-
-	psc := &PatientSelfCore{IdosoID: idosoID}
-	var descriptionsJSON, rolesJSON []byte
-	var narrativeSummary sql.NullString
-	var narrativeUpdated sql.NullTime
-
-	err := s.db.QueryRowContext(ctx, query, idosoID).Scan(
-		&psc.IdosoID, &descriptionsJSON, &rolesJSON,
-		&narrativeSummary, &narrativeUpdated,
-	)
-
-	if err == sql.ErrNoRows {
-		return &PatientSelfCore{IdosoID: idosoID}, nil
-	}
+	rows, err := s.db.QueryByLabel(ctx, "patient_self_core",
+		" AND n.idoso_id = $idoso",
+		map[string]interface{}{"idoso": idosoID}, 1)
 	if err != nil {
 		return nil, err
 	}
 
-	// Parse JSON fields
-	if len(descriptionsJSON) > 0 {
-		json.Unmarshal(descriptionsJSON, &psc.SelfDescriptions)
+	if len(rows) == 0 {
+		return &PatientSelfCore{IdosoID: idosoID}, nil
 	}
-	if len(rolesJSON) > 0 {
-		json.Unmarshal(rolesJSON, &psc.SelfAttributedRoles)
+
+	m := rows[0]
+	psc := &PatientSelfCore{
+		IdosoID:          idosoID,
+		NarrativeSummary: database.GetString(m, "narrative_summary"),
+		NarrativeLastUpdated: database.GetTime(m, "narrative_last_updated"),
 	}
-	if narrativeSummary.Valid {
-		psc.NarrativeSummary = narrativeSummary.String
+
+	// Parse self_descriptions
+	if raw, ok := m["self_descriptions"]; ok && raw != nil {
+		switch v := raw.(type) {
+		case string:
+			json.Unmarshal([]byte(v), &psc.SelfDescriptions)
+		case []interface{}:
+			b, _ := json.Marshal(v)
+			json.Unmarshal(b, &psc.SelfDescriptions)
+		}
 	}
-	if narrativeUpdated.Valid {
-		psc.NarrativeLastUpdated = narrativeUpdated.Time
+
+	// Parse self_attributed_roles
+	if raw, ok := m["self_attributed_roles"]; ok && raw != nil {
+		parseJSONStringSlice(raw, &psc.SelfAttributedRoles)
 	}
 
 	return psc, nil
@@ -252,47 +337,59 @@ func (s *SelfCoreService) GetSelfCore(ctx context.Context, idosoID int64) (*Pati
 
 // GetTopSignifiers returns the most frequent signifiers
 func (s *SelfCoreService) GetTopSignifiers(ctx context.Context, idosoID int64, limit int) ([]*MasterSignifier, error) {
-	query := `
-		SELECT signifier, context_type, total_count, first_seen, last_seen,
-			   frequency_by_period, avg_emotional_valence, co_occurring_signifiers
-		FROM patient_master_signifiers
-		WHERE idoso_id = $1
-		ORDER BY total_count DESC
-		LIMIT $2
-	`
-
-	rows, err := s.db.QueryContext(ctx, query, idosoID, limit)
+	rows, err := s.db.QueryByLabel(ctx, "patient_master_signifiers",
+		" AND n.idoso_id = $idoso",
+		map[string]interface{}{"idoso": idosoID}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	var signifiers []*MasterSignifier
-	for rows.Next() {
-		ms := &MasterSignifier{IdosoID: idosoID}
-		var freqJSON, coOccurJSON []byte
-		var avgValence sql.NullFloat64
-
-		err := rows.Scan(
-			&ms.Signifier, &ms.ContextType, &ms.TotalCount,
-			&ms.FirstSeen, &ms.LastSeen, &freqJSON,
-			&avgValence, &coOccurJSON,
-		)
-		if err != nil {
-			continue
+	for _, m := range rows {
+		ms := &MasterSignifier{
+			IdosoID:             idosoID,
+			Signifier:           database.GetString(m, "signifier"),
+			ContextType:         database.GetString(m, "context_type"),
+			TotalCount:          int(database.GetInt64(m, "total_count")),
+			FirstSeen:           database.GetTime(m, "first_seen"),
+			LastSeen:            database.GetTime(m, "last_seen"),
+			AvgEmotionalValence: database.GetFloat64(m, "avg_emotional_valence"),
 		}
 
-		if avgValence.Valid {
-			ms.AvgEmotionalValence = avgValence.Float64
+		// Parse frequency_by_period
+		if raw, ok := m["frequency_by_period"]; ok && raw != nil {
+			ms.FrequencyByPeriod = make(map[string]int)
+			switch v := raw.(type) {
+			case string:
+				json.Unmarshal([]byte(v), &ms.FrequencyByPeriod)
+			case map[string]interface{}:
+				for k, val := range v {
+					if f, ok := val.(float64); ok {
+						ms.FrequencyByPeriod[k] = int(f)
+					}
+				}
+			}
 		}
-		if len(freqJSON) > 0 {
-			json.Unmarshal(freqJSON, &ms.FrequencyByPeriod)
-		}
-		if len(coOccurJSON) > 0 {
-			json.Unmarshal(coOccurJSON, &ms.CoOccurringSignifiers)
+
+		// Parse co_occurring_signifiers
+		if raw, ok := m["co_occurring_signifiers"]; ok && raw != nil {
+			parseJSONStringSlice(raw, &ms.CoOccurringSignifiers)
 		}
 
 		signifiers = append(signifiers, ms)
+	}
+
+	// Sort by total count descending and limit
+	// (NietzscheDB doesn't have ORDER BY in WHERE)
+	for i := 0; i < len(signifiers); i++ {
+		for j := i + 1; j < len(signifiers); j++ {
+			if signifiers[j].TotalCount > signifiers[i].TotalCount {
+				signifiers[i], signifiers[j] = signifiers[j], signifiers[i]
+			}
+		}
+	}
+	if len(signifiers) > limit {
+		signifiers = signifiers[:limit]
 	}
 
 	return signifiers, nil

@@ -2,18 +2,20 @@ package lacan
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
+
+	"eva/internal/brainstem/database"
 )
 
 // DebugMode gerencia funcionalidades exclusivas para o Arquiteto da Matrix (José R F Junior)
 type DebugMode struct {
-	db                 *sql.DB
+	db                 *database.DB
 	startTime          time.Time
 	metrics            *DebugMetrics
 	memoryInvestigator *MemoryInvestigator // Investigador de memórias
@@ -63,7 +65,7 @@ type DebugResponse struct {
 }
 
 // NewDebugMode cria uma nova instância do modo debug
-func NewDebugMode(db *sql.DB) *DebugMode {
+func NewDebugMode(db *database.DB) *DebugMode {
 	memInvestigator := NewMemoryInvestigator(db)
 	return &DebugMode{
 		db:                 db,
@@ -219,41 +221,59 @@ func (d *DebugMode) GetSystemMetrics(ctx context.Context) (*DebugMetrics, error)
 		GoVersion:     runtime.Version(),
 	}
 
-	// Buscar estatísticas do banco
+	// Buscar estatísticas do banco via NietzscheDB
 	if d.db != nil {
-		// Total de conversas
-		d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM analise_gemini`).Scan(&metrics.TotalConversas)
+		today := time.Now().Format("2006-01-02")
 
-		// Conversas hoje
-		d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM analise_gemini WHERE created_at >= CURRENT_DATE`).Scan(&metrics.ConversasHoje)
+		// Total de conversas
+		if c, err := d.db.Count(ctx, "analise_gemini", "", nil); err == nil {
+			metrics.TotalConversas = int64(c)
+		}
+
+		// Conversas hoje - query all and filter in Go
+		if rows, err := d.db.QueryByLabel(ctx, "analise_gemini", "", nil, 0); err == nil {
+			var hojeCnt int64
+			for _, m := range rows {
+				t := database.GetTime(m, "created_at")
+				if !t.IsZero() && t.Format("2006-01-02") == today {
+					hojeCnt++
+				}
+			}
+			metrics.ConversasHoje = hojeCnt
+			metrics.AnalisesHoje = hojeCnt
+		}
 
 		// Total de idosos
-		d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM idosos`).Scan(&metrics.TotalIdosos)
+		if c, err := d.db.Count(ctx, "idosos", "", nil); err == nil {
+			metrics.TotalIdosos = int64(c)
+		}
 
 		// Idosos ativos
-		d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM idosos WHERE ativo = true`).Scan(&metrics.IdososAtivos)
+		if c, err := d.db.Count(ctx, "idosos", " AND n.ativo = $ativo", map[string]interface{}{"ativo": true}); err == nil {
+			metrics.IdososAtivos = int64(c)
+		}
 
 		// Total medicamentos
-		d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM agendamentos WHERE tipo = 'medicamento'`).Scan(&metrics.TotalMedicamentos)
+		if c, err := d.db.Count(ctx, "agendamentos", " AND n.tipo = $tipo", map[string]interface{}{"tipo": "medicamento"}); err == nil {
+			metrics.TotalMedicamentos = int64(c)
+		}
 
-		// Medicamentos agendados para hoje
-		d.db.QueryRowContext(ctx, `
-			SELECT COUNT(*) FROM agendamentos
-			WHERE tipo = 'medicamento'
-			AND DATE(data_hora_agendada) = CURRENT_DATE
-		`).Scan(&metrics.MedicamentosHoje)
+		// Medicamentos agendados para hoje - query all medicamentos and filter by date
+		if rows, err := d.db.QueryByLabel(ctx, "agendamentos", " AND n.tipo = $tipo", map[string]interface{}{"tipo": "medicamento"}, 0); err == nil {
+			var hojeCnt int64
+			for _, m := range rows {
+				t := database.GetTime(m, "data_hora_agendada")
+				if !t.IsZero() && t.Format("2006-01-02") == today {
+					hojeCnt++
+				}
+			}
+			metrics.MedicamentosHoje = hojeCnt
+		}
 
 		// Análises pendentes
-		d.db.QueryRowContext(ctx, `
-			SELECT COUNT(*) FROM agendamentos
-			WHERE status = 'agendado'
-		`).Scan(&metrics.AnalisesPendentes)
-
-		// Análises hoje
-		d.db.QueryRowContext(ctx, `
-			SELECT COUNT(*) FROM analise_gemini
-			WHERE created_at >= CURRENT_DATE
-		`).Scan(&metrics.AnalisesHoje)
+		if c, err := d.db.Count(ctx, "agendamentos", " AND n.status = $status", map[string]interface{}{"status": "agendado"}); err == nil {
+			metrics.AnalisesPendentes = int64(c)
+		}
 	}
 
 	return metrics, nil
@@ -265,40 +285,37 @@ func (d *DebugMode) GetRecentLogs(ctx context.Context, limit int) ([]map[string]
 		return nil, fmt.Errorf("banco de dados não disponível")
 	}
 
-	query := `
-		SELECT
-			id,
-			idoso_id,
-			tipo,
-			conteudo,
-			created_at
-		FROM analise_gemini
-		ORDER BY created_at DESC
-		LIMIT $1
-	`
-
-	rows, err := d.db.QueryContext(ctx, query, limit)
+	rows, err := d.db.QueryByLabel(ctx, "analise_gemini", "", nil, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+
+	// Sort by created_at DESC in Go
+	sort.Slice(rows, func(i, j int) bool {
+		ti := database.GetTime(rows[i], "created_at")
+		tj := database.GetTime(rows[j], "created_at")
+		return ti.After(tj)
+	})
+
+	// Apply limit
+	if limit > 0 && len(rows) > limit {
+		rows = rows[:limit]
+	}
 
 	var logs []map[string]interface{}
-	for rows.Next() {
-		var id, idosoID int64
-		var tipo, conteudo string
-		var createdAt time.Time
-
-		if err := rows.Scan(&id, &idosoID, &tipo, &conteudo, &createdAt); err != nil {
-			continue
+	for _, m := range rows {
+		createdAt := database.GetTime(m, "created_at")
+		createdAtStr := ""
+		if !createdAt.IsZero() {
+			createdAtStr = createdAt.Format("02/01/2006 15:04:05")
 		}
 
 		logs = append(logs, map[string]interface{}{
-			"id":         id,
-			"idoso_id":   idosoID,
-			"tipo":       tipo,
-			"conteudo":   truncateString(conteudo, 200),
-			"created_at": createdAt.Format("02/01/2006 15:04:05"),
+			"id":         database.GetInt64(m, "id"),
+			"idoso_id":   database.GetInt64(m, "idoso_id"),
+			"tipo":       database.GetString(m, "tipo"),
+			"conteudo":   truncateString(database.GetString(m, "conteudo"), 200),
+			"created_at": createdAtStr,
 		})
 	}
 
@@ -311,42 +328,46 @@ func (d *DebugMode) GetRecentErrors(ctx context.Context) ([]map[string]interface
 		return nil, fmt.Errorf("banco de dados não disponível")
 	}
 
-	// Buscar análises com erros (conteúdo contém "error" ou "erro")
-	query := `
-		SELECT
-			id,
-			idoso_id,
-			tipo,
-			conteudo,
-			created_at
-		FROM analise_gemini
-		WHERE conteudo::text ILIKE '%error%' OR conteudo::text ILIKE '%erro%'
-		ORDER BY created_at DESC
-		LIMIT 10
-	`
-
-	rows, err := d.db.QueryContext(ctx, query)
+	rows, err := d.db.QueryByLabel(ctx, "analise_gemini", "", nil, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+
+	// Filter for entries containing "error" or "erro" (case-insensitive)
+	var filtered []map[string]interface{}
+	for _, m := range rows {
+		conteudo := strings.ToLower(database.GetString(m, "conteudo"))
+		if strings.Contains(conteudo, "error") || strings.Contains(conteudo, "erro") {
+			filtered = append(filtered, m)
+		}
+	}
+
+	// Sort by created_at DESC
+	sort.Slice(filtered, func(i, j int) bool {
+		ti := database.GetTime(filtered[i], "created_at")
+		tj := database.GetTime(filtered[j], "created_at")
+		return ti.After(tj)
+	})
+
+	// Limit to 10
+	if len(filtered) > 10 {
+		filtered = filtered[:10]
+	}
 
 	var errors []map[string]interface{}
-	for rows.Next() {
-		var id, idosoID int64
-		var tipo, conteudo string
-		var createdAt time.Time
-
-		if err := rows.Scan(&id, &idosoID, &tipo, &conteudo, &createdAt); err != nil {
-			continue
+	for _, m := range filtered {
+		createdAt := database.GetTime(m, "created_at")
+		createdAtStr := ""
+		if !createdAt.IsZero() {
+			createdAtStr = createdAt.Format("02/01/2006 15:04:05")
 		}
 
 		errors = append(errors, map[string]interface{}{
-			"id":         id,
-			"idoso_id":   idosoID,
-			"tipo":       tipo,
-			"erro":       extractError(conteudo),
-			"created_at": createdAt.Format("02/01/2006 15:04:05"),
+			"id":         database.GetInt64(m, "id"),
+			"idoso_id":   database.GetInt64(m, "idoso_id"),
+			"tipo":       database.GetString(m, "tipo"),
+			"erro":       extractError(database.GetString(m, "conteudo")),
+			"created_at": createdAtStr,
 		})
 	}
 
@@ -359,51 +380,72 @@ func (d *DebugMode) GetPatientsStatus(ctx context.Context) ([]map[string]interfa
 		return nil, fmt.Errorf("banco de dados não disponível")
 	}
 
-	query := `
-		SELECT
-			i.id,
-			i.nome,
-			i.ativo,
-			i.nivel_cognitivo,
-			(SELECT COUNT(*) FROM agendamentos WHERE idoso_id = i.id AND tipo = 'medicamento' AND status IN ('agendado', 'ativo')) as medicamentos_ativos,
-			(SELECT MAX(created_at) FROM analise_gemini WHERE idoso_id = i.id) as ultima_conversa
-		FROM idosos i
-		WHERE i.ativo = true
-		ORDER BY i.nome
-		LIMIT 20
-	`
-
-	rows, err := d.db.QueryContext(ctx, query)
+	// Query active patients
+	idososRows, err := d.db.QueryByLabel(ctx, "idosos", " AND n.ativo = $ativo", map[string]interface{}{"ativo": true}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+
+	// Query agendamentos for medication counts
+	agendRows, err := d.db.QueryByLabel(ctx, "agendamentos", " AND n.tipo = $tipo", map[string]interface{}{"tipo": "medicamento"}, 0)
+	if err != nil {
+		agendRows = nil // non-fatal
+	}
+
+	// Query analise_gemini for last conversation dates
+	conversaRows, err := d.db.QueryByLabel(ctx, "analise_gemini", "", nil, 0)
+	if err != nil {
+		conversaRows = nil // non-fatal
+	}
+
+	// Build medication count map: idoso_id -> count of active meds
+	medCountByIdoso := make(map[int64]int64)
+	for _, m := range agendRows {
+		status := database.GetString(m, "status")
+		if status == "agendado" || status == "ativo" {
+			idosoID := database.GetInt64(m, "idoso_id")
+			medCountByIdoso[idosoID]++
+		}
+	}
+
+	// Build last conversation map: idoso_id -> latest created_at
+	lastConversaByIdoso := make(map[int64]time.Time)
+	for _, m := range conversaRows {
+		idosoID := database.GetInt64(m, "idoso_id")
+		t := database.GetTime(m, "created_at")
+		if !t.IsZero() {
+			if existing, ok := lastConversaByIdoso[idosoID]; !ok || t.After(existing) {
+				lastConversaByIdoso[idosoID] = t
+			}
+		}
+	}
+
+	// Sort patients by nome
+	sort.Slice(idososRows, func(i, j int) bool {
+		return database.GetString(idososRows[i], "nome") < database.GetString(idososRows[j], "nome")
+	})
+
+	// Limit to 20
+	if len(idososRows) > 20 {
+		idososRows = idososRows[:20]
+	}
 
 	var patients []map[string]interface{}
-	for rows.Next() {
-		var id int64
-		var nome string
-		var ativo bool
-		var nivelCognitivo sql.NullString
-		var medAtivos int64
-		var ultimaConversa sql.NullTime
-
-		if err := rows.Scan(&id, &nome, &ativo, &nivelCognitivo, &medAtivos, &ultimaConversa); err != nil {
-			continue
-		}
+	for _, m := range idososRows {
+		id := database.GetInt64(m, "id")
 
 		ultimaConversaStr := "Nunca"
-		if ultimaConversa.Valid {
-			ultimaConversaStr = ultimaConversa.Time.Format("02/01/2006 15:04")
+		if t, ok := lastConversaByIdoso[id]; ok {
+			ultimaConversaStr = t.Format("02/01/2006 15:04")
 		}
 
 		patients = append(patients, map[string]interface{}{
-			"id":               id,
-			"nome":             nome,
-			"ativo":            ativo,
-			"nivel_cognitivo":  nivelCognitivo.String,
-			"medicamentos":     medAtivos,
-			"ultima_conversa":  ultimaConversaStr,
+			"id":              id,
+			"nome":            database.GetString(m, "nome"),
+			"ativo":           true,
+			"nivel_cognitivo": database.GetString(m, "nivel_cognitivo"),
+			"medicamentos":    medCountByIdoso[id],
+			"ultima_conversa": ultimaConversaStr,
 		})
 	}
 
@@ -416,35 +458,52 @@ func (d *DebugMode) GetMedicationsStatus(ctx context.Context) ([]map[string]inte
 		return nil, fmt.Errorf("banco de dados não disponível")
 	}
 
-	query := `
-		SELECT
-			a.id,
-			i.nome as paciente,
-			a.dados_tarefa,
-			a.status,
-			a.data_hora_agendada
-		FROM agendamentos a
-		JOIN idosos i ON a.idoso_id = i.id
-		WHERE a.tipo = 'medicamento'
-		AND a.status IN ('agendado', 'ativo', 'pendente')
-		ORDER BY a.data_hora_agendada
-		LIMIT 30
-	`
-
-	rows, err := d.db.QueryContext(ctx, query)
+	// Query agendamentos for medicamentos with active statuses
+	agendRows, err := d.db.QueryByLabel(ctx, "agendamentos", " AND n.tipo = $tipo", map[string]interface{}{"tipo": "medicamento"}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+
+	// Filter by status in Go
+	var filtered []map[string]interface{}
+	for _, m := range agendRows {
+		status := database.GetString(m, "status")
+		if status == "agendado" || status == "ativo" || status == "pendente" {
+			filtered = append(filtered, m)
+		}
+	}
+
+	// Sort by data_hora_agendada ASC
+	sort.Slice(filtered, func(i, j int) bool {
+		ti := database.GetTime(filtered[i], "data_hora_agendada")
+		tj := database.GetTime(filtered[j], "data_hora_agendada")
+		return ti.Before(tj)
+	})
+
+	// Limit to 30
+	if len(filtered) > 30 {
+		filtered = filtered[:30]
+	}
+
+	// Build idoso name lookup: query idosos to map id -> nome
+	idososRows, err := d.db.QueryByLabel(ctx, "idosos", "", nil, 0)
+	if err != nil {
+		idososRows = nil // non-fatal, will show "Desconhecido"
+	}
+	idosoNames := make(map[int64]string)
+	for _, m := range idososRows {
+		idosoNames[database.GetInt64(m, "id")] = database.GetString(m, "nome")
+	}
 
 	var meds []map[string]interface{}
-	for rows.Next() {
-		var id int64
-		var paciente, dadosTarefa, status string
-		var dataHora time.Time
+	for _, m := range filtered {
+		dataHora := database.GetTime(m, "data_hora_agendada")
+		dadosTarefa := database.GetString(m, "dados_tarefa")
+		idosoID := database.GetInt64(m, "idoso_id")
 
-		if err := rows.Scan(&id, &paciente, &dadosTarefa, &status, &dataHora); err != nil {
-			continue
+		paciente := idosoNames[idosoID]
+		if paciente == "" {
+			paciente = "Desconhecido"
 		}
 
 		// Parse dados_tarefa JSON
@@ -453,21 +512,23 @@ func (d *DebugMode) GetMedicationsStatus(ctx context.Context) ([]map[string]inte
 
 		nomeMed := "Desconhecido"
 		dosagem := ""
-		if n, ok := medData["nome"].(string); ok {
-			nomeMed = n
-		}
-		if d, ok := medData["dosagem"].(string); ok {
-			dosagem = d
+		if medData != nil {
+			if n, ok := medData["nome"].(string); ok {
+				nomeMed = n
+			}
+			if dsg, ok := medData["dosagem"].(string); ok {
+				dosagem = dsg
+			}
 		}
 
 		meds = append(meds, map[string]interface{}{
-			"id":           id,
-			"paciente":     paciente,
-			"medicamento":  nomeMed,
-			"dosagem":      dosagem,
-			"status":       status,
-			"horario":      dataHora.Format("15:04"),
-			"data":         dataHora.Format("02/01/2006"),
+			"id":          database.GetInt64(m, "id"),
+			"paciente":    paciente,
+			"medicamento": nomeMed,
+			"dosagem":     dosagem,
+			"status":      database.GetString(m, "status"),
+			"horario":     dataHora.Format("15:04"),
+			"data":        dataHora.Format("02/01/2006"),
 		})
 	}
 
@@ -480,59 +541,61 @@ func (d *DebugMode) GetConversationStats(ctx context.Context) (map[string]interf
 		return nil, fmt.Errorf("banco de dados não disponível")
 	}
 
-	stats := make(map[string]interface{})
-
-	// Total geral
-	var total int64
-	d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM analise_gemini`).Scan(&total)
-	stats["total"] = total
-
-	// Hoje
-	var hoje int64
-	d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM analise_gemini WHERE created_at >= CURRENT_DATE`).Scan(&hoje)
-	stats["hoje"] = hoje
-
-	// Esta semana
-	var semana int64
-	d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM analise_gemini WHERE created_at >= CURRENT_DATE - INTERVAL '7 days'`).Scan(&semana)
-	stats["semana"] = semana
-
-	// Este mês
-	var mes int64
-	d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM analise_gemini WHERE created_at >= CURRENT_DATE - INTERVAL '30 days'`).Scan(&mes)
-	stats["mes"] = mes
-
-	// Por tipo
-	tipoQuery := `
-		SELECT tipo, COUNT(*) as total
-		FROM analise_gemini
-		GROUP BY tipo
-		ORDER BY total DESC
-	`
-	rows, err := d.db.QueryContext(ctx, tipoQuery)
-	if err == nil {
-		defer rows.Close()
-		porTipo := make(map[string]int64)
-		for rows.Next() {
-			var tipo string
-			var count int64
-			if rows.Scan(&tipo, &count) == nil {
-				porTipo[tipo] = count
-			}
-		}
-		stats["por_tipo"] = porTipo
+	rows, err := d.db.QueryByLabel(ctx, "analise_gemini", "", nil, 0)
+	if err != nil {
+		return nil, err
 	}
 
-	// Média por dia (últimos 30 dias)
+	stats := make(map[string]interface{})
+
+	now := time.Now()
+	today := now.Format("2006-01-02")
+	sevenDaysAgo := now.AddDate(0, 0, -7)
+	thirtyDaysAgo := now.AddDate(0, 0, -30)
+
+	var total, hoje, semana, mes int64
+	porTipo := make(map[string]int64)
+	dailyCounts := make(map[string]int64) // date -> count for avg calculation
+
+	for _, m := range rows {
+		total++
+		t := database.GetTime(m, "created_at")
+		tipo := database.GetString(m, "tipo")
+
+		if tipo != "" {
+			porTipo[tipo]++
+		}
+
+		if !t.IsZero() {
+			dateStr := t.Format("2006-01-02")
+			if dateStr == today {
+				hoje++
+			}
+			if !t.Before(sevenDaysAgo) {
+				semana++
+			}
+			if !t.Before(thirtyDaysAgo) {
+				mes++
+				dailyCounts[dateStr]++
+			}
+		}
+	}
+
+	stats["total"] = total
+	stats["hoje"] = hoje
+	stats["semana"] = semana
+	stats["mes"] = mes
+	stats["por_tipo"] = porTipo
+
+	// Average per day (last 30 days)
 	var mediaDia float64
-	d.db.QueryRowContext(ctx, `
-		SELECT COALESCE(AVG(daily_count), 0) FROM (
-			SELECT DATE(created_at), COUNT(*) as daily_count
-			FROM analise_gemini
-			WHERE created_at >= CURRENT_DATE - INTERVAL '30 days'
-			GROUP BY DATE(created_at)
-		) subq
-	`).Scan(&mediaDia)
+	if len(dailyCounts) > 0 {
+		var sum int64
+		for _, c := range dailyCounts {
+			sum += c
+		}
+		mediaDia = float64(sum) / float64(len(dailyCounts))
+	}
 	stats["media_por_dia"] = fmt.Sprintf("%.1f", mediaDia)
 
 	return stats, nil
@@ -542,10 +605,10 @@ func (d *DebugMode) GetConversationStats(ctx context.Context) (map[string]interf
 func (d *DebugMode) RunSystemTest(ctx context.Context) (map[string]interface{}, error) {
 	results := make(map[string]interface{})
 
-	// Teste 1: Conexão com banco
+	// Teste 1: Conexão com banco (NietzscheDB) - try a simple Count query
 	dbOk := false
 	if d.db != nil {
-		if err := d.db.PingContext(ctx); err == nil {
+		if _, err := d.db.Count(ctx, "idosos", "", nil); err == nil {
 			dbOk = true
 		}
 	}
@@ -554,26 +617,20 @@ func (d *DebugMode) RunSystemTest(ctx context.Context) (map[string]interface{}, 
 		"ok":     dbOk,
 	}
 
-	// Teste 2: Verificar tabelas principais
+	// Teste 2: Verificar "tabelas" (labels) - NietzscheDB always has collections, just check queryability
 	tablesOk := true
 	tables := []string{"idosos", "agendamentos", "analise_gemini"}
 	tableResults := make(map[string]bool)
 	for _, table := range tables {
-		var exists bool
-		err := d.db.QueryRowContext(ctx, `
-			SELECT EXISTS (
-				SELECT FROM information_schema.tables
-				WHERE table_name = $1
-			)
-		`, table).Scan(&exists)
-		tableResults[table] = err == nil && exists
+		_, err := d.db.Count(ctx, table, "", nil)
+		tableResults[table] = err == nil
 		if !tableResults[table] {
 			tablesOk = false
 		}
 	}
 	results["tabelas"] = map[string]interface{}{
-		"status":  boolToStatus(tablesOk),
-		"ok":      tablesOk,
+		"status":   boolToStatus(tablesOk),
+		"ok":       tablesOk,
 		"detalhes": tableResults,
 	}
 

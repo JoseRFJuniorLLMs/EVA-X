@@ -367,42 +367,36 @@ func (p *ProsodyAnalyzer) assessHydration(features *ProsodyFeatures) string {
 
 // saveToDatabase saves analysis to NietzscheDB
 func (p *ProsodyAnalyzer) saveToDatabase(idosoID int64, result *AnalysisResult) error {
-	query := `
-		INSERT INTO voice_prosody (
-			patient_id, pitch_mean, pitch_std, jitter, shimmer, hnr,
-			speech_rate, pause_duration, intensity_mean,
-			monotonicity_score, tremor_indicator, analyzed_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
-	`
+	ctx := context.Background()
 
-	_, err := p.db.Conn.Exec(
-		query,
-		idosoID,
-		result.Features.PitchMean,
-		result.Features.PitchStd,
-		result.Features.Jitter,
-		result.Features.Shimmer,
-		result.Features.HNR,
-		result.Features.SpeechRate,
-		result.Features.PauseDuration,
-		result.Features.IntensityMean,
-		result.Features.MonotonicityScore,
-		result.Features.TremorIndicator,
-	)
-
+	_, err := p.db.Insert(ctx, "voice_prosody", map[string]interface{}{
+		"patient_id":        idosoID,
+		"pitch_mean":        result.Features.PitchMean,
+		"pitch_std":         result.Features.PitchStd,
+		"jitter":            result.Features.Jitter,
+		"shimmer":           result.Features.Shimmer,
+		"hnr":               result.Features.HNR,
+		"speech_rate":       result.Features.SpeechRate,
+		"pause_duration":    result.Features.PauseDuration,
+		"intensity_mean":    result.Features.IntensityMean,
+		"monotonicity_score": result.Features.MonotonicityScore,
+		"tremor_indicator":  result.Features.TremorIndicator,
+		"analyzed_at":       time.Now(),
+	})
 	if err != nil {
 		return err
 	}
 
 	// Save alerts
 	for _, alert := range result.Alerts {
-		queryAlert := `
-			INSERT INTO voice_alerts (
-				patient_id, alert_type, severity, message, score, created_at
-			) VALUES ($1, $2, $3, $4, $5, NOW())
-		`
-
-		_, err = p.db.Conn.Exec(queryAlert, idosoID, alert.Type, alert.Severity, alert.Message, alert.Score)
+		_, err = p.db.Insert(ctx, "voice_alerts", map[string]interface{}{
+			"patient_id": idosoID,
+			"alert_type": alert.Type,
+			"severity":   alert.Severity,
+			"message":    alert.Message,
+			"score":      alert.Score,
+			"created_at": time.Now(),
+		})
 		if err != nil {
 			log.Printf("⚠️ [PROSODY] Erro ao salvar alerta: %v", err)
 		}

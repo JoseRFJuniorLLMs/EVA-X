@@ -10,8 +10,10 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
+	"eva/internal/brainstem/database"
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 )
 
@@ -25,18 +27,21 @@ func (h *ToolsHandler) handleMCPRemember(idosoID int64, args map[string]interfac
 		return map[string]interface{}{"error": "Informe o conteudo da memoria"}, nil
 	}
 
-	var memoryID int64
-	err := h.db.Conn.QueryRow(`
-		INSERT INTO memories (patient_id, content, event_time, ingestion_time, created_at)
-		VALUES ($1, $2, NOW(), NOW(), NOW())
-		RETURNING id
-	`, idosoID, content).Scan(&memoryID)
+	ctx := context.Background()
+	now := time.Now().Format(time.RFC3339)
+	memoryID, err := h.db.Insert(ctx, "memories", map[string]interface{}{
+		"patient_id":     idosoID,
+		"content":        content,
+		"event_time":     now,
+		"ingestion_time": now,
+		"created_at":     now,
+	})
 
 	if err != nil {
 		return map[string]interface{}{"error": fmt.Sprintf("Erro ao salvar memoria: %v", err)}, nil
 	}
 
-	log.Printf("🧠 [MCP] Memoria %d salva para idoso %d", memoryID, idosoID)
+	log.Printf("[MCP] Memoria %d salva para idoso %d", memoryID, idosoID)
 	return map[string]interface{}{
 		"status":    "sucesso",
 		"memory_id": memoryID,
@@ -63,37 +68,33 @@ func (h *ToolsHandler) handleMCPRecall(idosoID int64, args map[string]interface{
 		limit = 10
 	}
 
-	rows, err := h.db.Conn.Query(`
-		SELECT id, content, event_time, importance_score
-		FROM memories
-		WHERE patient_id = $1
-		  AND content ILIKE '%' || $2 || '%'
-		ORDER BY importance_score DESC, event_time DESC
-		LIMIT $3
-	`, idosoID, query, limit)
+	ctx := context.Background()
+	// NietzscheDB NQL does not support ILIKE; we fetch all patient memories and filter in Go.
+	// Using QueryByLabel with patient_id filter and a reasonable limit to avoid pulling too much.
+	dbRows, err := h.db.QueryByLabel(ctx, "memories",
+		" AND n.patient_id = $pid ORDER BY n.importance_score DESC",
+		map[string]interface{}{"pid": idosoID}, 200)
 
 	if err != nil {
 		return map[string]interface{}{"error": fmt.Sprintf("Erro na busca: %v", err)}, nil
 	}
-	defer rows.Close()
 
 	var memories []map[string]interface{}
-	for rows.Next() {
-		var id int64
-		var content string
-		var eventTime time.Time
-		var importance float64
-
-		if err := rows.Scan(&id, &content, &eventTime, &importance); err != nil {
+	lowerQuery := strings.ToLower(query)
+	for _, row := range dbRows {
+		content := database.GetString(row, "content")
+		if !strings.Contains(strings.ToLower(content), lowerQuery) {
 			continue
 		}
-
 		memories = append(memories, map[string]interface{}{
-			"id":         id,
+			"id":         database.GetInt64(row, "id"),
 			"content":    content,
-			"event_time": eventTime.Format(time.RFC3339),
-			"importance": importance,
+			"event_time": database.GetString(row, "event_time"),
+			"importance": database.GetFloat64(row, "importance_score"),
 		})
+		if len(memories) >= limit {
+			break
+		}
 	}
 
 	if memories == nil {
@@ -126,12 +127,16 @@ func (h *ToolsHandler) handleMCPTeachEva(idosoID int64, args map[string]interfac
 
 	if h.evaCoreAdapter == nil {
 		// Fallback: salvar como memoria no NietzscheDB com tag [TEACHING]
-		var memoryID int64
-		err := h.db.Conn.QueryRow(`
-			INSERT INTO memories (patient_id, content, event_time, ingestion_time, importance_score, created_at)
-			VALUES ($1, $2, NOW(), NOW(), $3, NOW())
-			RETURNING id
-		`, idosoID, "[TEACHING] "+teaching, importance).Scan(&memoryID)
+		ctx := context.Background()
+		now := time.Now().Format(time.RFC3339)
+		memoryID, err := h.db.Insert(ctx, "memories", map[string]interface{}{
+			"patient_id":       idosoID,
+			"content":          "[TEACHING] " + teaching,
+			"event_time":       now,
+			"ingestion_time":   now,
+			"importance_score": importance,
+			"created_at":       now,
+		})
 
 		if err != nil {
 			return map[string]interface{}{"error": fmt.Sprintf("Erro ao salvar: %v", err)}, nil

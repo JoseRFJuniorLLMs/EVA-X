@@ -4,9 +4,13 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
+
+	"eva/internal/brainstem/database"
 
 	"github.com/gorilla/mux"
 )
@@ -21,34 +25,44 @@ func (s *SignalingServer) handleGetIdosoByCpf(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if s.db == nil || s.db.Conn == nil {
+	if s.db == nil {
 		http.Error(w, `{"error":"Database unavailable"}`, http.StatusServiceUnavailable)
 		return
 	}
 
-	row := s.db.Conn.QueryRow(`
-		SELECT id, nome, cpf, telefone, data_nascimento, endereco, device_token, ativo
-		FROM idosos WHERE cpf = $1 AND ativo = true
-	`, cpf)
-
-	var idoso struct {
-		ID             int     `json:"id"`
-		Nome           string  `json:"nome"`
-		CPF            *string `json:"cpf"`
-		Telefone       *string `json:"telefone"`
-		DataNascimento *string `json:"data_nascimento"`
-		Endereco       *string `json:"endereco"`
-		DeviceToken    *string `json:"device_token"`
-		Ativo          bool    `json:"ativo"`
-	}
-
-	err := row.Scan(&idoso.ID, &idoso.Nome, &idoso.CPF, &idoso.Telefone,
-		&idoso.DataNascimento, &idoso.Endereco, &idoso.DeviceToken, &idoso.Ativo)
-	if err != nil {
+	ctx := r.Context()
+	rows, err := s.db.QueryByLabel(ctx, "idosos",
+		" AND n.cpf = $cpf AND n.ativo = $ativo",
+		map[string]interface{}{
+			"cpf":  cpf,
+			"ativo": true,
+		}, 1)
+	if err != nil || len(rows) == 0 {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 		w.Write([]byte(`{"error":"CPF not found"}`))
 		return
+	}
+
+	m := rows[0]
+	idoso := struct {
+		ID             int64  `json:"id"`
+		Nome           string `json:"nome"`
+		CPF            string `json:"cpf,omitempty"`
+		Telefone       string `json:"telefone,omitempty"`
+		DataNascimento string `json:"data_nascimento,omitempty"`
+		Endereco       string `json:"endereco,omitempty"`
+		DeviceToken    string `json:"device_token,omitempty"`
+		Ativo          bool   `json:"ativo"`
+	}{
+		ID:             database.GetInt64(m, "id"),
+		Nome:           database.GetString(m, "nome"),
+		CPF:            database.GetString(m, "cpf"),
+		Telefone:       database.GetString(m, "telefone"),
+		DataNascimento: database.GetString(m, "data_nascimento"),
+		Endereco:       database.GetString(m, "endereco"),
+		DeviceToken:    database.GetString(m, "device_token"),
+		Ativo:          database.GetBool(m, "ativo"),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -60,39 +74,43 @@ func (s *SignalingServer) handleGetIdoso(w http.ResponseWriter, r *http.Request)
 	vars := mux.Vars(r)
 	idStr := vars["id"]
 
-	id, err := strconv.Atoi(idStr)
+	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		http.Error(w, `{"error":"Invalid ID"}`, http.StatusBadRequest)
 		return
 	}
 
-	if s.db == nil || s.db.Conn == nil {
+	if s.db == nil {
 		http.Error(w, `{"error":"Database unavailable"}`, http.StatusServiceUnavailable)
 		return
 	}
 
-	row := s.db.Conn.QueryRow(`
-		SELECT id, nome, cpf, telefone, data_nascimento, endereco, device_token, ativo
-		FROM idosos WHERE id = $1
-	`, id)
-
-	var idoso struct {
-		ID             int     `json:"id"`
-		Nome           string  `json:"nome"`
-		CPF            *string `json:"cpf"`
-		Telefone       *string `json:"telefone"`
-		DataNascimento *string `json:"data_nascimento"`
-		Endereco       *string `json:"endereco"`
-		DeviceToken    *string `json:"device_token"`
-		Ativo          bool    `json:"ativo"`
-	}
-
-	err = row.Scan(&idoso.ID, &idoso.Nome, &idoso.CPF, &idoso.Telefone,
-		&idoso.DataNascimento, &idoso.Endereco, &idoso.DeviceToken, &idoso.Ativo)
-	if err != nil {
+	ctx := r.Context()
+	m, err := s.db.GetNodeByID(ctx, "idosos", id)
+	if err != nil || m == nil {
 		w.WriteHeader(http.StatusNotFound)
 		w.Write([]byte(`{"error":"Idoso not found"}`))
 		return
+	}
+
+	idoso := struct {
+		ID             int64  `json:"id"`
+		Nome           string `json:"nome"`
+		CPF            string `json:"cpf,omitempty"`
+		Telefone       string `json:"telefone,omitempty"`
+		DataNascimento string `json:"data_nascimento,omitempty"`
+		Endereco       string `json:"endereco,omitempty"`
+		DeviceToken    string `json:"device_token,omitempty"`
+		Ativo          bool   `json:"ativo"`
+	}{
+		ID:             database.GetInt64(m, "id"),
+		Nome:           database.GetString(m, "nome"),
+		CPF:            database.GetString(m, "cpf"),
+		Telefone:       database.GetString(m, "telefone"),
+		DataNascimento: database.GetString(m, "data_nascimento"),
+		Endereco:       database.GetString(m, "endereco"),
+		DeviceToken:    database.GetString(m, "device_token"),
+		Ativo:          database.GetBool(m, "ativo"),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -109,23 +127,35 @@ func (s *SignalingServer) handleSyncTokenByCpf(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	if s.db == nil || s.db.Conn == nil {
+	if s.db == nil {
 		http.Error(w, `{"error":"Database unavailable"}`, http.StatusServiceUnavailable)
 		return
 	}
 
-	result, err := s.db.Conn.Exec(`
-		UPDATE idosos SET device_token = $1, device_token_valido = true,
-		device_token_atualizado_em = NOW() WHERE cpf = $2 AND ativo = true
-	`, token, cpf)
-	if err != nil {
-		http.Error(w, `{"error":"Database error"}`, http.StatusInternalServerError)
+	ctx := context.Background()
+
+	// Find the idoso by CPF first
+	rows, err := s.db.QueryByLabel(ctx, "idosos",
+		" AND n.cpf = $cpf AND n.ativo = $ativo",
+		map[string]interface{}{
+			"cpf":  cpf,
+			"ativo": true,
+		}, 1)
+	if err != nil || len(rows) == 0 {
+		http.Error(w, `{"error":"CPF not found"}`, http.StatusNotFound)
 		return
 	}
 
-	rows, _ := result.RowsAffected()
-	if rows == 0 {
-		http.Error(w, `{"error":"CPF not found"}`, http.StatusNotFound)
+	// Update token via NietzscheDB
+	err = s.db.Update(ctx, "idosos",
+		map[string]interface{}{"cpf": cpf},
+		map[string]interface{}{
+			"device_token":               token,
+			"device_token_valido":        true,
+			"device_token_atualizado_em": time.Now().Format(time.RFC3339),
+		})
+	if err != nil {
+		http.Error(w, `{"error":"Database error"}`, http.StatusInternalServerError)
 		return
 	}
 

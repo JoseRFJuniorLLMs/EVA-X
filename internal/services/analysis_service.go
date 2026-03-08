@@ -4,30 +4,33 @@
 package services
 
 import (
-	"database/sql"
+	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
+	"time"
 
-	"eva/internal/motor/actions" // ✅ NEW IMPORT
 	"eva/internal/brainstem/config"
-	"eva/internal/cortex/gemini"
+	"eva/internal/brainstem/database"
 	"eva/internal/brainstem/logger"
 	"eva/internal/brainstem/push"
+	"eva/internal/cortex/gemini"
+	"eva/internal/motor/actions"
 
 	"github.com/rs/zerolog"
 )
 
-// AnalysisService encapsula lógica de análise de conversas
+// AnalysisService encapsula logica de analise de conversas
 type AnalysisService struct {
 	cfg         *config.Config
-	db          *sql.DB
+	db          *database.DB
 	pushService *push.FirebaseService
 	log         zerolog.Logger
 }
 
-// NewAnalysisService cria nova instância do serviço
-func NewAnalysisService(cfg *config.Config, db *sql.DB, pushService *push.FirebaseService) *AnalysisService {
+// NewAnalysisService cria nova instancia do servico
+func NewAnalysisService(cfg *config.Config, db *database.DB, pushService *push.FirebaseService) *AnalysisService {
 	return &AnalysisService{
 		cfg:         cfg,
 		db:          db,
@@ -38,19 +41,19 @@ func NewAnalysisService(cfg *config.Config, db *sql.DB, pushService *push.Fireba
 
 // AnalyzeAndSaveConversation analisa conversa e salva no banco
 func (s *AnalysisService) AnalyzeAndSaveConversation(idosoID int64) error {
-	s.log.Info().Int64("idoso_id", idosoID).Msg("Iniciando análise de conversa")
+	s.log.Info().Int64("idoso_id", idosoID).Msg("Iniciando analise de conversa")
 
-	// 1. Buscar última transcrição
+	// 1. Buscar ultima transcricao
 	transcript, historyID, err := s.getLastTranscript(idosoID)
 	if err != nil {
-		s.log.Warn().Err(err).Msg("Nenhuma transcrição encontrada")
+		s.log.Warn().Err(err).Msg("Nenhuma transcricao encontrada")
 		return err
 	}
 
 	s.log.Debug().
 		Int64("history_id", historyID).
 		Int("transcript_length", len(transcript)).
-		Msg("Transcrição encontrada")
+		Msg("Transcricao encontrada")
 
 	// 2. Analisar com Gemini
 	analysis, err := gemini.AnalyzeConversation(s.cfg, transcript)
@@ -63,15 +66,15 @@ func (s *AnalysisService) AnalyzeAndSaveConversation(idosoID int64) error {
 		Str("urgency", analysis.UrgencyLevel).
 		Str("mood", analysis.MoodState).
 		Bool("emergency", analysis.EmergencySymptoms).
-		Msg("Análise concluída")
+		Msg("Analise concluida")
 
 	// 3. Salvar no banco
 	if err := s.saveAnalysis(historyID, analysis); err != nil {
-		s.log.Error().Err(err).Msg("Erro ao salvar análise")
+		s.log.Error().Err(err).Msg("Erro ao salvar analise")
 		return err
 	}
 
-	// 4. Processar alertas se necessário
+	// 4. Processar alertas se necessario
 	if analysis.UrgencyLevel == "CRITICO" || analysis.UrgencyLevel == "ALTO" {
 		s.handleUrgentAlert(idosoID, analysis)
 	}
@@ -79,67 +82,79 @@ func (s *AnalysisService) AnalyzeAndSaveConversation(idosoID int64) error {
 	return nil
 }
 
-// getLastTranscript busca última transcrição não analisada
+// getLastTranscript busca ultima transcricao nao analisada
 func (s *AnalysisService) getLastTranscript(idosoID int64) (string, int64, error) {
-	query := `
-		SELECT id, transcricao_completa
-		FROM historico_ligacoes
-		WHERE idoso_id = $1 
-		  AND fim_chamada IS NULL
-		  AND transcricao_completa IS NOT NULL
-		  AND LENGTH(transcricao_completa) > 50
-		ORDER BY inicio_chamada DESC
-		LIMIT 1
-	`
+	ctx := context.Background()
 
-	var historyID int64
-	var transcript string
-
-	err := s.db.QueryRow(query, idosoID).Scan(&historyID, &transcript)
-	if err == sql.ErrNoRows {
-		return "", 0, fmt.Errorf("nenhuma transcrição encontrada")
-	}
+	rows, err := s.db.QueryByLabel(ctx, "historico_ligacoes",
+		" AND n.idoso_id = $idoso_id", map[string]interface{}{
+			"idoso_id": idosoID,
+		}, 0)
 	if err != nil {
-		return "", 0, fmt.Errorf("erro ao buscar transcrição: %w", err)
+		return "", 0, fmt.Errorf("erro ao buscar transcricao: %w", err)
 	}
 
-	return transcript, historyID, nil
+	// Filter: fim_chamada must be empty and transcricao_completa length > 50
+	type candidate struct {
+		id             int64
+		transcript     string
+		inicioChamada  time.Time
+	}
+	var candidates []candidate
+	for _, m := range rows {
+		fimChamada := database.GetString(m, "fim_chamada")
+		if fimChamada != "" {
+			continue
+		}
+		transcricao := database.GetString(m, "transcricao_completa")
+		if len(transcricao) <= 50 {
+			continue
+		}
+		candidates = append(candidates, candidate{
+			id:            database.GetInt64(m, "id"),
+			transcript:    transcricao,
+			inicioChamada: database.GetTime(m, "inicio_chamada"),
+		})
+	}
+
+	if len(candidates) == 0 {
+		return "", 0, fmt.Errorf("nenhuma transcricao encontrada")
+	}
+
+	// Sort by inicio_chamada DESC (most recent first)
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].inicioChamada.After(candidates[j].inicioChamada)
+	})
+
+	return candidates[0].transcript, candidates[0].id, nil
 }
 
-// saveAnalysis salva análise no banco
+// saveAnalysis salva analise no banco
 func (s *AnalysisService) saveAnalysis(historyID int64, analysis *gemini.ConversationAnalysis) error {
+	ctx := context.Background()
+
 	analysisJSON, err := json.Marshal(analysis)
 	if err != nil {
-		return fmt.Errorf("erro ao serializar análise: %w", err)
+		return fmt.Errorf("erro ao serializar analise: %w", err)
 	}
 
-	query := `
-		UPDATE historico_ligacoes 
-		SET 
-			fim_chamada = CURRENT_TIMESTAMP,
-			analise_gemini = $2::jsonb,
-			urgencia = $3,
-			sentimento = $4,
-			transcricao_resumo = $5
-		WHERE id = $1
-	`
-
-	result, err := s.db.Exec(
-		query,
-		historyID,
-		string(analysisJSON),
-		analysis.UrgencyLevel,
-		analysis.MoodState,
-		analysis.Summary,
-	)
-
-	if err != nil {
-		return fmt.Errorf("erro ao salvar análise: %w", err)
+	matchKeys := map[string]interface{}{
+		"id": historyID,
 	}
 
-	rows, _ := result.RowsAffected()
-	s.log.Info().Int64("rows", rows).Msg("Análise salva com sucesso")
+	updates := map[string]interface{}{
+		"fim_chamada":       time.Now().Format(time.RFC3339),
+		"analise_gemini":    string(analysisJSON),
+		"urgencia":          analysis.UrgencyLevel,
+		"sentimento":        analysis.MoodState,
+		"transcricao_resumo": analysis.Summary,
+	}
 
+	if err := s.db.Update(ctx, "historico_ligacoes", matchKeys, updates); err != nil {
+		return fmt.Errorf("erro ao salvar analise: %w", err)
+	}
+
+	s.log.Info().Int64("history_id", historyID).Msg("Analise salva com sucesso")
 	return nil
 }
 
@@ -148,10 +163,10 @@ func (s *AnalysisService) handleUrgentAlert(idosoID int64, analysis *gemini.Conv
 	s.log.Warn().
 		Int64("idoso_id", idosoID).
 		Str("urgency", analysis.UrgencyLevel).
-		Msg("Alerta de urgência detectado")
+		Msg("Alerta de urgencia detectado")
 
 	alertMsg := fmt.Sprintf(
-		"URGÊNCIA %s: %s. %s",
+		"URGENCIA %s: %s. %s",
 		analysis.UrgencyLevel,
 		strings.Join(analysis.KeyConcerns, ", "),
 		analysis.RecommendedAction,
@@ -159,9 +174,9 @@ func (s *AnalysisService) handleUrgentAlert(idosoID int64, analysis *gemini.Conv
 
 	err := actions.AlertFamily(s.db, s.pushService, nil, idosoID, alertMsg)
 	if err != nil {
-		s.log.Error().Err(err).Msg("Erro ao alertar família")
+		s.log.Error().Err(err).Msg("Erro ao alertar familia")
 	} else {
-		s.log.Info().Msg("Família alertada com sucesso")
+		s.log.Info().Msg("Familia alertada com sucesso")
 	}
 
 	// Registrar alerta no sistema
@@ -170,6 +185,8 @@ func (s *AnalysisService) handleUrgentAlert(idosoID int64, analysis *gemini.Conv
 
 // createSystemAlert cria registro de alerta no banco
 func (s *AnalysisService) createSystemAlert(idosoID int64, analysis *gemini.ConversationAnalysis) {
+	ctx := context.Background()
+
 	severity := "aviso"
 	if analysis.UrgencyLevel == "CRITICO" {
 		severity = "critica"
@@ -179,52 +196,42 @@ func (s *AnalysisService) createSystemAlert(idosoID int64, analysis *gemini.Conv
 
 	concernsJSON, _ := json.Marshal(analysis.KeyConcerns)
 
-	query := `
-		INSERT INTO alertas (
-			idoso_id,
-			tipo,
-			severidade,
-			mensagem,
-			dados_adicionais,
-			criado_em
-		) VALUES ($1, 'analise_urgente', $2, $3, $4, NOW())
-	`
+	content := map[string]interface{}{
+		"idoso_id":         idosoID,
+		"tipo":             "analise_urgente",
+		"severidade":       severity,
+		"mensagem":         analysis.RecommendedAction,
+		"dados_adicionais": string(concernsJSON),
+		"criado_em":        time.Now().Format(time.RFC3339),
+	}
 
-	_, err := s.db.Exec(
-		query,
-		idosoID,
-		severity,
-		analysis.RecommendedAction,
-		string(concernsJSON),
-	)
-
+	_, err := s.db.Insert(ctx, "alertas", content)
 	if err != nil {
 		s.log.Error().Err(err).Msg("Erro ao criar alerta no sistema")
 	}
 }
 
-// GetAnalysisHistory retorna histórico de análises
+// GetAnalysisHistory retorna historico de analises
 func (s *AnalysisService) GetAnalysisHistory(idosoID int64, limit int) ([]gemini.ConversationAnalysis, error) {
-	query := `
-		SELECT analise_gemini
-		FROM historico_ligacoes
-		WHERE idoso_id = $1 
-		  AND analise_gemini IS NOT NULL
-		ORDER BY inicio_chamada DESC
-		LIMIT $2
-	`
+	ctx := context.Background()
 
-	rows, err := s.db.Query(query, idosoID, limit)
+	rows, err := s.db.QueryByLabel(ctx, "historico_ligacoes",
+		" AND n.idoso_id = $idoso_id", map[string]interface{}{
+			"idoso_id": idosoID,
+		}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	var analyses []gemini.ConversationAnalysis
-
-	for rows.Next() {
-		var analysisJSON string
-		if err := rows.Scan(&analysisJSON); err != nil {
+	// Filter rows that have analise_gemini and collect with inicio_chamada for sorting
+	type entry struct {
+		analysis      gemini.ConversationAnalysis
+		inicioChamada time.Time
+	}
+	var entries []entry
+	for _, m := range rows {
+		analysisJSON := database.GetString(m, "analise_gemini")
+		if analysisJSON == "" {
 			continue
 		}
 
@@ -233,38 +240,74 @@ func (s *AnalysisService) GetAnalysisHistory(idosoID int64, limit int) ([]gemini
 			continue
 		}
 
-		analyses = append(analyses, analysis)
+		entries = append(entries, entry{
+			analysis:      analysis,
+			inicioChamada: database.GetTime(m, "inicio_chamada"),
+		})
+	}
+
+	// Sort by inicio_chamada DESC
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].inicioChamada.After(entries[j].inicioChamada)
+	})
+
+	// Apply limit
+	if limit > 0 && len(entries) > limit {
+		entries = entries[:limit]
+	}
+
+	analyses := make([]gemini.ConversationAnalysis, len(entries))
+	for i, e := range entries {
+		analyses[i] = e.analysis
 	}
 
 	return analyses, nil
 }
 
-// GetAnalysisStats retorna estatísticas de análises
+// GetAnalysisStats retorna estatisticas de analises
 func (s *AnalysisService) GetAnalysisStats(idosoID int64, days int) (*AnalysisStats, error) {
-	query := `
-		SELECT 
-			COUNT(*) as total,
-			COUNT(CASE WHEN urgencia = 'CRITICO' THEN 1 END) as criticos,
-			COUNT(CASE WHEN urgencia = 'ALTO' THEN 1 END) as altos,
-			COUNT(CASE WHEN sentimento = 'triste' THEN 1 END) as tristes,
-			COUNT(CASE WHEN sentimento = 'feliz' THEN 1 END) as felizes
-		FROM historico_ligacoes
-		WHERE idoso_id = $1
-		  AND inicio_chamada > NOW() - INTERVAL '$2 days'
-		  AND analise_gemini IS NOT NULL
-	`
+	ctx := context.Background()
 
-	var stats AnalysisStats
-	err := s.db.QueryRow(query, idosoID, days).Scan(
-		&stats.Total,
-		&stats.Criticos,
-		&stats.Altos,
-		&stats.Tristes,
-		&stats.Felizes,
-	)
-
+	rows, err := s.db.QueryByLabel(ctx, "historico_ligacoes",
+		" AND n.idoso_id = $idoso_id", map[string]interface{}{
+			"idoso_id": idosoID,
+		}, 0)
 	if err != nil {
 		return nil, err
+	}
+
+	cutoff := time.Now().AddDate(0, 0, -days)
+	var stats AnalysisStats
+
+	for _, m := range rows {
+		// Only count rows with analise_gemini
+		if database.GetString(m, "analise_gemini") == "" {
+			continue
+		}
+
+		// Only count rows within the time window
+		inicioChamada := database.GetTime(m, "inicio_chamada")
+		if inicioChamada.Before(cutoff) {
+			continue
+		}
+
+		stats.Total++
+
+		urgencia := database.GetString(m, "urgencia")
+		sentimento := database.GetString(m, "sentimento")
+
+		if urgencia == "CRITICO" {
+			stats.Criticos++
+		}
+		if urgencia == "ALTO" {
+			stats.Altos++
+		}
+		if sentimento == "triste" {
+			stats.Tristes++
+		}
+		if sentimento == "feliz" {
+			stats.Felizes++
+		}
 	}
 
 	return &stats, nil

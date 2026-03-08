@@ -5,20 +5,20 @@ package learning
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"math"
 	"time"
 
+	"eva/internal/brainstem/database"
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 )
 
 // ContinuousLearningService implements EVA's self-improvement capabilities
 // Based on eva-memoria2.md - EVA learns and adapts from every interaction
 type ContinuousLearningService struct {
-	db            *sql.DB
+	db            *database.DB
 	vectorAdapter *nietzscheInfra.VectorAdapter
 }
 
@@ -28,7 +28,7 @@ func (s *ContinuousLearningService) SetVectorAdapter(va *nietzscheInfra.VectorAd
 }
 
 // NewContinuousLearningService creates the learning service
-func NewContinuousLearningService(db *sql.DB) *ContinuousLearningService {
+func NewContinuousLearningService(db *database.DB) *ContinuousLearningService {
 	return &ContinuousLearningService{db: db}
 }
 
@@ -55,25 +55,32 @@ type InteractionFeedback struct {
 // RecordInteractionFeedback records feedback from an interaction
 func (s *ContinuousLearningService) RecordInteractionFeedback(ctx context.Context, feedback *InteractionFeedback) error {
 	if s.db == nil {
-		log.Printf("📚 [LEARNING] Feedback recorded (mock): %s signal=%.2f", feedback.FeedbackType, feedback.FeedbackSignal)
+		log.Printf("[LEARNING] Feedback recorded (mock): %s signal=%.2f", feedback.FeedbackType, feedback.FeedbackSignal)
 		return nil
 	}
 
 	featuresJSON, _ := json.Marshal(feedback.Features)
 
-	query := `
-		INSERT INTO learning_interaction_feedback
-		(idoso_id, conversation_id, response_id, feedback_type, feedback_signal,
-		 response_strategy, emotional_context, topic_context, user_engagement, features)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		RETURNING id
-	`
-	return s.db.QueryRowContext(ctx, query,
-		feedback.IdosoID, feedback.ConversationID, feedback.ResponseID,
-		feedback.FeedbackType, feedback.FeedbackSignal, feedback.ResponseStrategy,
-		feedback.EmotionalContext, feedback.TopicContext, feedback.UserEngagement,
-		string(featuresJSON),
-	).Scan(&feedback.ID)
+	content := map[string]interface{}{
+		"idoso_id":          feedback.IdosoID,
+		"conversation_id":   feedback.ConversationID,
+		"response_id":       feedback.ResponseID,
+		"feedback_type":     feedback.FeedbackType,
+		"feedback_signal":   feedback.FeedbackSignal,
+		"response_strategy": feedback.ResponseStrategy,
+		"emotional_context": feedback.EmotionalContext,
+		"topic_context":     feedback.TopicContext,
+		"user_engagement":   feedback.UserEngagement,
+		"features":          string(featuresJSON),
+		"recorded_at":       time.Now().Format(time.RFC3339),
+	}
+
+	id, err := s.db.Insert(ctx, "learning_interaction_feedback", content)
+	if err != nil {
+		return err
+	}
+	feedback.ID = id
+	return nil
 }
 
 // CalculateImplicitFeedback calculates feedback from user behavior
@@ -141,26 +148,19 @@ func (s *ContinuousLearningService) GetBestStrategy(ctx context.Context, emotion
 		}, nil
 	}
 
-	query := `
-		SELECT id, strategy_name, strategy_description, success_rate,
-		       usage_count, average_engagement
-		FROM learning_response_strategies
-		WHERE emotional_context = $1 OR emotional_context = 'universal'
-		  AND (topic_category = $2 OR topic_category = 'general')
-		ORDER BY success_rate DESC, usage_count DESC
-		LIMIT 1
-	`
-
-	strategy := &ResponseStrategy{
-		EmotionalContext: emotionalContext,
-		TopicCategory:    topicCategory,
+	rows, err := s.db.QueryByLabel(ctx, "learning_response_strategies",
+		" AND (n.emotional_context = $emo_ctx OR n.emotional_context = $universal) AND (n.topic_category = $topic OR n.topic_category = $general)",
+		map[string]interface{}{
+			"emo_ctx":   emotionalContext,
+			"universal": "universal",
+			"topic":     topicCategory,
+			"general":   "general",
+		}, 0)
+	if err != nil {
+		return nil, err
 	}
 
-	err := s.db.QueryRowContext(ctx, query, emotionalContext, topicCategory).Scan(
-		&strategy.ID, &strategy.StrategyName, &strategy.StrategyDescription,
-		&strategy.SuccessRate, &strategy.UsageCount, &strategy.AverageEngagement,
-	)
-	if err == sql.ErrNoRows {
+	if len(rows) == 0 {
 		return &ResponseStrategy{
 			StrategyName:     "empathetic_listening",
 			SuccessRate:      0.5,
@@ -168,26 +168,64 @@ func (s *ContinuousLearningService) GetBestStrategy(ctx context.Context, emotion
 		}, nil
 	}
 
-	return strategy, err
+	// Find best by success_rate
+	bestIdx := 0
+	bestRate := 0.0
+	for i, m := range rows {
+		rate := database.GetFloat64(m, "success_rate")
+		if rate > bestRate {
+			bestRate = rate
+			bestIdx = i
+		}
+	}
+
+	m := rows[bestIdx]
+	strategy := &ResponseStrategy{
+		ID:                database.GetInt64(m, "id"),
+		StrategyName:      database.GetString(m, "strategy_name"),
+		StrategyDescription: database.GetString(m, "strategy_description"),
+		EmotionalContext:  emotionalContext,
+		TopicCategory:     topicCategory,
+		SuccessRate:       database.GetFloat64(m, "success_rate"),
+		UsageCount:        int(database.GetInt64(m, "usage_count")),
+		AverageEngagement: database.GetFloat64(m, "average_engagement"),
+	}
+
+	return strategy, nil
 }
 
 // UpdateStrategyEffectiveness updates strategy metrics after use
 func (s *ContinuousLearningService) UpdateStrategyEffectiveness(ctx context.Context, strategyName string, feedbackSignal float64) error {
 	if s.db == nil {
-		log.Printf("📊 [LEARNING] Strategy '%s' feedback: %.2f", strategyName, feedbackSignal)
+		log.Printf("[LEARNING] Strategy '%s' feedback: %.2f", strategyName, feedbackSignal)
 		return nil
 	}
 
-	query := `
-		UPDATE learning_response_strategies
-		SET usage_count = usage_count + 1,
-		    success_rate = (success_rate * usage_count + $2) / (usage_count + 1),
-		    average_engagement = (average_engagement * usage_count + $2) / (usage_count + 1),
-		    last_updated = NOW()
-		WHERE strategy_name = $1
-	`
-	_, err := s.db.ExecContext(ctx, query, strategyName, feedbackSignal)
-	return err
+	// Get current values first
+	rows, err := s.db.QueryByLabel(ctx, "learning_response_strategies",
+		" AND n.strategy_name = $name",
+		map[string]interface{}{"name": strategyName}, 1)
+	if err != nil || len(rows) == 0 {
+		return err
+	}
+
+	m := rows[0]
+	usageCount := database.GetFloat64(m, "usage_count")
+	oldRate := database.GetFloat64(m, "success_rate")
+	oldEngagement := database.GetFloat64(m, "average_engagement")
+
+	newCount := usageCount + 1
+	newRate := (oldRate*usageCount + feedbackSignal) / newCount
+	newEngagement := (oldEngagement*usageCount + feedbackSignal) / newCount
+
+	return s.db.Update(ctx, "learning_response_strategies",
+		map[string]interface{}{"strategy_name": strategyName},
+		map[string]interface{}{
+			"usage_count":        newCount,
+			"success_rate":       newRate,
+			"average_engagement": newEngagement,
+			"last_updated":       time.Now().Format(time.RFC3339),
+		})
 }
 
 // =====================================================
@@ -208,29 +246,53 @@ type VocabularyPreference struct {
 // LearnVocabularyPreference learns vocabulary from user messages
 func (s *ContinuousLearningService) LearnVocabularyPreference(ctx context.Context, idosoID int64, userMessage string, evaResponse string, feedback float64) error {
 	if s.db == nil {
-		log.Printf("📝 [LEARNING] Vocabulary learning for patient %d", idosoID)
+		log.Printf("[LEARNING] Vocabulary learning for patient %d", idosoID)
 		return nil
 	}
 
-	// Extract terms from positive/negative feedback
+	keyTerms := extractKeyTerms(evaResponse)
+
 	if feedback > 0.5 {
 		// User liked the response - learn from EVA's vocabulary
-		query := `
-			UPDATE learning_vocabulary_preferences
-			SET positive_terms = array_append(positive_terms, $2),
-			    updated_at = NOW()
-			WHERE idoso_id = $1
-		`
-		s.db.ExecContext(ctx, query, idosoID, extractKeyTerms(evaResponse))
+		// Get current positive terms and append
+		rows, _ := s.db.QueryByLabel(ctx, "learning_vocabulary_preferences",
+			" AND n.idoso_id = $idoso_id",
+			map[string]interface{}{"idoso_id": idosoID}, 1)
+		if len(rows) > 0 {
+			currentTerms := database.GetString(rows[0], "positive_terms")
+			newTerms := currentTerms
+			if newTerms != "" {
+				newTerms += "," + keyTerms
+			} else {
+				newTerms = keyTerms
+			}
+			s.db.Update(ctx, "learning_vocabulary_preferences",
+				map[string]interface{}{"idoso_id": idosoID},
+				map[string]interface{}{
+					"positive_terms": newTerms,
+					"updated_at":    time.Now().Format(time.RFC3339),
+				})
+		}
 	} else if feedback < -0.5 {
 		// User didn't like - avoid these terms
-		query := `
-			UPDATE learning_vocabulary_preferences
-			SET avoided_terms = array_append(avoided_terms, $2),
-			    updated_at = NOW()
-			WHERE idoso_id = $1
-		`
-		s.db.ExecContext(ctx, query, idosoID, extractKeyTerms(evaResponse))
+		rows, _ := s.db.QueryByLabel(ctx, "learning_vocabulary_preferences",
+			" AND n.idoso_id = $idoso_id",
+			map[string]interface{}{"idoso_id": idosoID}, 1)
+		if len(rows) > 0 {
+			currentTerms := database.GetString(rows[0], "avoided_terms")
+			newTerms := currentTerms
+			if newTerms != "" {
+				newTerms += "," + keyTerms
+			} else {
+				newTerms = keyTerms
+			}
+			s.db.Update(ctx, "learning_vocabulary_preferences",
+				map[string]interface{}{"idoso_id": idosoID},
+				map[string]interface{}{
+					"avoided_terms": newTerms,
+					"updated_at":    time.Now().Format(time.RFC3339),
+				})
+		}
 	}
 
 	return nil
@@ -249,22 +311,10 @@ func (s *ContinuousLearningService) GetVocabularyPreferences(ctx context.Context
 		}, nil
 	}
 
-	query := `
-		SELECT preferred_terms, avoided_terms, communication_style,
-		       complexity_level, use_colloquialisms, regional_dialect
-		FROM learning_vocabulary_preferences
-		WHERE idoso_id = $1
-	`
-
-	pref := &VocabularyPreference{IdosoID: idosoID}
-	var prefTermsJSON, avoidTermsJSON []byte
-	var dialect sql.NullString
-
-	err := s.db.QueryRowContext(ctx, query, idosoID).Scan(
-		&prefTermsJSON, &avoidTermsJSON, &pref.CommunicationStyle,
-		&pref.ComplexityLevel, &pref.UseColloquialisms, &dialect,
-	)
-	if err == sql.ErrNoRows {
+	rows, err := s.db.QueryByLabel(ctx, "learning_vocabulary_preferences",
+		" AND n.idoso_id = $idoso_id",
+		map[string]interface{}{"idoso_id": idosoID}, 1)
+	if err != nil || len(rows) == 0 {
 		return &VocabularyPreference{
 			IdosoID:            idosoID,
 			CommunicationStyle: "warm",
@@ -272,13 +322,26 @@ func (s *ContinuousLearningService) GetVocabularyPreferences(ctx context.Context
 		}, nil
 	}
 
-	json.Unmarshal(prefTermsJSON, &pref.PreferredTerms)
-	json.Unmarshal(avoidTermsJSON, &pref.AvoidedTerms)
-	if dialect.Valid {
-		pref.RegionalDialect = dialect.String
+	m := rows[0]
+	pref := &VocabularyPreference{
+		IdosoID:            idosoID,
+		CommunicationStyle: database.GetString(m, "communication_style"),
+		ComplexityLevel:    database.GetFloat64(m, "complexity_level"),
+		UseColloquialisms:  database.GetBool(m, "use_colloquialisms"),
+		RegionalDialect:    database.GetString(m, "regional_dialect"),
 	}
 
-	return pref, err
+	// Parse preferred/avoided terms from JSON strings
+	prefTermsStr := database.GetString(m, "preferred_terms")
+	avoidTermsStr := database.GetString(m, "avoided_terms")
+	if prefTermsStr != "" {
+		json.Unmarshal([]byte(prefTermsStr), &pref.PreferredTerms)
+	}
+	if avoidTermsStr != "" {
+		json.Unmarshal([]byte(avoidTermsStr), &pref.AvoidedTerms)
+	}
+
+	return pref, nil
 }
 
 // =====================================================
@@ -298,7 +361,7 @@ type TopicInterest struct {
 // LearnTopicInterest updates topic interest based on interaction
 func (s *ContinuousLearningService) LearnTopicInterest(ctx context.Context, idosoID int64, topic string, engagement float64) error {
 	if s.db == nil && s.vectorAdapter == nil {
-		log.Printf("🎯 [LEARNING] Topic interest: patient %d, topic '%s', engagement %.2f", idosoID, topic, engagement)
+		log.Printf("[LEARNING] Topic interest: patient %d, topic '%s', engagement %.2f", idosoID, topic, engagement)
 		return nil
 	}
 
@@ -321,23 +384,46 @@ func (s *ContinuousLearningService) LearnTopicInterest(ctx context.Context, idos
 				"updated_at":     now,
 			})
 		if err != nil {
-			log.Printf("⚠️ [LEARNING] NietzscheDB merge topic interest failed: %v", err)
+			log.Printf("[LEARNING] NietzscheDB merge topic interest failed: %v", err)
 		}
 	}
 
-	// PG dual-write (has weighted average logic in SQL)
+	// NietzscheDB via database.DB: upsert logic
 	if s.db != nil {
-		query := `
-			INSERT INTO learning_topic_interests (idoso_id, topic, interest_level, engagement_avg, mention_count)
-			VALUES ($1, $2, $3, $3, 1)
-			ON CONFLICT (idoso_id, topic) DO UPDATE SET
-				interest_level = (learning_topic_interests.interest_level * 0.8) + ($3 * 0.2),
-				engagement_avg = (learning_topic_interests.engagement_avg * learning_topic_interests.mention_count + $3) / (learning_topic_interests.mention_count + 1),
-				mention_count = learning_topic_interests.mention_count + 1,
-				last_mentioned = NOW(),
-				updated_at = NOW()
-		`
-		_, err := s.db.ExecContext(ctx, query, idosoID, topic, engagement)
+		rows, _ := s.db.QueryByLabel(ctx, "learning_topic_interests",
+			" AND n.idoso_id = $idoso_id AND n.topic = $topic",
+			map[string]interface{}{"idoso_id": idosoID, "topic": topic}, 1)
+
+		if len(rows) > 0 {
+			m := rows[0]
+			oldLevel := database.GetFloat64(m, "interest_level")
+			oldAvg := database.GetFloat64(m, "engagement_avg")
+			oldCount := database.GetFloat64(m, "mention_count")
+
+			newLevel := oldLevel*0.8 + engagement*0.2
+			newAvg := (oldAvg*oldCount + engagement) / (oldCount + 1)
+
+			return s.db.Update(ctx, "learning_topic_interests",
+				map[string]interface{}{"idoso_id": idosoID, "topic": topic},
+				map[string]interface{}{
+					"interest_level": newLevel,
+					"engagement_avg": newAvg,
+					"mention_count":  oldCount + 1,
+					"last_mentioned": now,
+					"updated_at":     now,
+				})
+		}
+
+		// Insert new
+		_, err := s.db.Insert(ctx, "learning_topic_interests", map[string]interface{}{
+			"idoso_id":       idosoID,
+			"topic":          topic,
+			"interest_level": engagement,
+			"engagement_avg": engagement,
+			"mention_count":  1,
+			"last_mentioned": now,
+			"updated_at":     now,
+		})
 		return err
 	}
 
@@ -354,29 +440,38 @@ func (s *ContinuousLearningService) GetTopInterests(ctx context.Context, idosoID
 		}, nil
 	}
 
-	query := `
-		SELECT topic, interest_level, engagement_avg, mention_count, last_mentioned
-		FROM learning_topic_interests
-		WHERE idoso_id = $1
-		ORDER BY interest_level DESC, mention_count DESC
-		LIMIT $2
-	`
-
-	rows, err := s.db.QueryContext(ctx, query, idosoID, limit)
+	rows, err := s.db.QueryByLabel(ctx, "learning_topic_interests",
+		" AND n.idoso_id = $idoso_id",
+		map[string]interface{}{"idoso_id": idosoID}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	var interests []*TopicInterest
-	for rows.Next() {
-		ti := &TopicInterest{IdosoID: idosoID}
-		err := rows.Scan(&ti.Topic, &ti.InterestLevel, &ti.EngagementAvg,
-			&ti.MentionCount, &ti.LastMentioned)
-		if err != nil {
-			continue
+	for _, m := range rows {
+		ti := &TopicInterest{
+			IdosoID:       idosoID,
+			Topic:         database.GetString(m, "topic"),
+			InterestLevel: database.GetFloat64(m, "interest_level"),
+			EngagementAvg: database.GetFloat64(m, "engagement_avg"),
+			MentionCount:  int(database.GetInt64(m, "mention_count")),
+			LastMentioned: database.GetTime(m, "last_mentioned"),
 		}
 		interests = append(interests, ti)
+	}
+
+	// Sort by interest_level desc, mention_count desc
+	for i := 0; i < len(interests); i++ {
+		for j := i + 1; j < len(interests); j++ {
+			if interests[j].InterestLevel > interests[i].InterestLevel ||
+				(interests[j].InterestLevel == interests[i].InterestLevel && interests[j].MentionCount > interests[i].MentionCount) {
+				interests[i], interests[j] = interests[j], interests[i]
+			}
+		}
+	}
+
+	if limit > 0 && len(interests) > limit {
+		interests = interests[:limit]
 	}
 
 	return interests, nil
@@ -399,16 +494,18 @@ type TimingPreference struct {
 // LearnTimingPreference updates timing preferences based on engagement
 func (s *ContinuousLearningService) LearnTimingPreference(ctx context.Context, idosoID int64, timeOfDay string, dayOfWeek int, sessionLength int, engagement float64) error {
 	if s.db == nil {
-		log.Printf("⏰ [LEARNING] Timing: patient %d, %s, day %d, engagement %.2f", idosoID, timeOfDay, dayOfWeek, engagement)
+		log.Printf("[LEARNING] Timing: patient %d, %s, day %d, engagement %.2f", idosoID, timeOfDay, dayOfWeek, engagement)
 		return nil
 	}
 
-	query := `
-		INSERT INTO learning_timing_preferences
-		(idoso_id, time_of_day, day_of_week, session_length_minutes, engagement_score)
-		VALUES ($1, $2, $3, $4, $5)
-	`
-	_, err := s.db.ExecContext(ctx, query, idosoID, timeOfDay, dayOfWeek, sessionLength, engagement)
+	_, err := s.db.Insert(ctx, "learning_timing_preferences", map[string]interface{}{
+		"idoso_id":               idosoID,
+		"time_of_day":            timeOfDay,
+		"day_of_week":            dayOfWeek,
+		"session_length_minutes": sessionLength,
+		"engagement_score":       engagement,
+		"recorded_at":            time.Now().Format(time.RFC3339),
+	})
 	return err
 }
 
@@ -424,24 +521,51 @@ func (s *ContinuousLearningService) GetTimingPreferences(ctx context.Context, id
 		}, nil
 	}
 
-	// Analyze best time of day
-	var bestTime string
-	s.db.QueryRowContext(ctx, `
-		SELECT time_of_day
-		FROM learning_timing_preferences
-		WHERE idoso_id = $1
-		GROUP BY time_of_day
-		ORDER BY AVG(engagement_score) DESC
-		LIMIT 1
-	`, idosoID).Scan(&bestTime)
+	// Analyze best time of day: get all timing prefs, group by time_of_day in Go
+	rows, err := s.db.QueryByLabel(ctx, "learning_timing_preferences",
+		" AND n.idoso_id = $idoso_id",
+		map[string]interface{}{"idoso_id": idosoID}, 0)
+	if err != nil || len(rows) == 0 {
+		return &TimingPreference{
+			IdosoID:            idosoID,
+			ResponsePacePrefer: 0.5,
+		}, nil
+	}
 
-	// Analyze optimal session length
-	var avgLength float64
-	s.db.QueryRowContext(ctx, `
-		SELECT AVG(session_length_minutes)
-		FROM learning_timing_preferences
-		WHERE idoso_id = $1 AND engagement_score > 0.6
-	`, idosoID).Scan(&avgLength)
+	// Aggregate: best time of day by avg engagement
+	timeEngagement := map[string]struct{ sum, count float64 }{}
+	var totalLength, goodCount float64
+
+	for _, m := range rows {
+		tod := database.GetString(m, "time_of_day")
+		eng := database.GetFloat64(m, "engagement_score")
+		length := database.GetFloat64(m, "session_length_minutes")
+
+		te := timeEngagement[tod]
+		te.sum += eng
+		te.count++
+		timeEngagement[tod] = te
+
+		if eng > 0.6 {
+			totalLength += length
+			goodCount++
+		}
+	}
+
+	bestTime := ""
+	bestAvg := 0.0
+	for tod, te := range timeEngagement {
+		avg := te.sum / te.count
+		if avg > bestAvg {
+			bestAvg = avg
+			bestTime = tod
+		}
+	}
+
+	avgLength := 0.0
+	if goodCount > 0 {
+		avgLength = totalLength / goodCount
+	}
 
 	return &TimingPreference{
 		IdosoID:              idosoID,
@@ -467,7 +591,7 @@ type PersonaEffectiveness struct {
 // RecordPersonaUsage records persona usage and effectiveness
 func (s *ContinuousLearningService) RecordPersonaUsage(ctx context.Context, idosoID int64, personaID, contextMatch string, feedback float64) error {
 	if s.db == nil && s.vectorAdapter == nil {
-		log.Printf("🎭 [LEARNING] Persona '%s' for patient %d: feedback %.2f", personaID, idosoID, feedback)
+		log.Printf("[LEARNING] Persona '%s' for patient %d: feedback %.2f", personaID, idosoID, feedback)
 		return nil
 	}
 
@@ -490,22 +614,39 @@ func (s *ContinuousLearningService) RecordPersonaUsage(ctx context.Context, idos
 				"updated_at":          now,
 			})
 		if err != nil {
-			log.Printf("⚠️ [LEARNING] NietzscheDB merge persona effectiveness failed: %v", err)
+			log.Printf("[LEARNING] NietzscheDB merge persona effectiveness failed: %v", err)
 		}
 	}
 
-	// PG dual-write (has weighted average logic in SQL)
+	// NietzscheDB via database.DB: upsert logic
 	if s.db != nil {
-		query := `
-			INSERT INTO learning_persona_effectiveness
-			(idoso_id, persona_id, context_match, effectiveness_score, usage_count)
-			VALUES ($1, $2, $3, $4, 1)
-			ON CONFLICT (idoso_id, persona_id, context_match) DO UPDATE SET
-				effectiveness_score = (learning_persona_effectiveness.effectiveness_score * learning_persona_effectiveness.usage_count + $4) / (learning_persona_effectiveness.usage_count + 1),
-				usage_count = learning_persona_effectiveness.usage_count + 1,
-				updated_at = NOW()
-		`
-		_, err := s.db.ExecContext(ctx, query, idosoID, personaID, contextMatch, feedback)
+		rows, _ := s.db.QueryByLabel(ctx, "learning_persona_effectiveness",
+			" AND n.idoso_id = $idoso_id AND n.persona_id = $persona_id AND n.context_match = $ctx",
+			map[string]interface{}{"idoso_id": idosoID, "persona_id": personaID, "ctx": contextMatch}, 1)
+
+		if len(rows) > 0 {
+			m := rows[0]
+			oldScore := database.GetFloat64(m, "effectiveness_score")
+			oldCount := database.GetFloat64(m, "usage_count")
+			newScore := (oldScore*oldCount + feedback) / (oldCount + 1)
+
+			return s.db.Update(ctx, "learning_persona_effectiveness",
+				map[string]interface{}{"idoso_id": idosoID, "persona_id": personaID, "context_match": contextMatch},
+				map[string]interface{}{
+					"effectiveness_score": newScore,
+					"usage_count":         oldCount + 1,
+					"updated_at":          now,
+				})
+		}
+
+		_, err := s.db.Insert(ctx, "learning_persona_effectiveness", map[string]interface{}{
+			"idoso_id":            idosoID,
+			"persona_id":          personaID,
+			"context_match":       contextMatch,
+			"effectiveness_score": feedback,
+			"usage_count":         1,
+			"updated_at":          now,
+		})
 		return err
 	}
 
@@ -513,28 +654,34 @@ func (s *ContinuousLearningService) RecordPersonaUsage(ctx context.Context, idos
 }
 
 // GetBestPersona returns the most effective persona for a context
-func (s *ContinuousLearningService) GetBestPersona(ctx context.Context, idosoID int64, context string) (string, float64, error) {
+func (s *ContinuousLearningService) GetBestPersona(ctx context.Context, idosoID int64, ctxMatch string) (string, float64, error) {
 	if s.db == nil {
 		return "companion", 0.7, nil
 	}
 
-	var personaID string
-	var effectiveness float64
-
-	query := `
-		SELECT persona_id, effectiveness_score
-		FROM learning_persona_effectiveness
-		WHERE idoso_id = $1 AND context_match = $2
-		ORDER BY effectiveness_score DESC
-		LIMIT 1
-	`
-
-	err := s.db.QueryRowContext(ctx, query, idosoID, context).Scan(&personaID, &effectiveness)
-	if err == sql.ErrNoRows {
+	rows, err := s.db.QueryByLabel(ctx, "learning_persona_effectiveness",
+		" AND n.idoso_id = $idoso_id AND n.context_match = $ctx",
+		map[string]interface{}{"idoso_id": idosoID, "ctx": ctxMatch}, 0)
+	if err != nil || len(rows) == 0 {
 		return "companion", 0.5, nil
 	}
 
-	return personaID, effectiveness, err
+	// Find best by effectiveness_score
+	bestPersona := ""
+	bestScore := 0.0
+	for _, m := range rows {
+		score := database.GetFloat64(m, "effectiveness_score")
+		if score > bestScore {
+			bestScore = score
+			bestPersona = database.GetString(m, "persona_id")
+		}
+	}
+
+	if bestPersona == "" {
+		return "companion", 0.5, nil
+	}
+
+	return bestPersona, bestScore, nil
 }
 
 // =====================================================
@@ -573,11 +720,19 @@ func (s *ContinuousLearningService) GetLearningSummary(ctx context.Context, idos
 	}
 
 	// Get total interactions and average feedback
-	s.db.QueryRowContext(ctx, `
-		SELECT COUNT(*), COALESCE(AVG(feedback_signal), 0)
-		FROM learning_interaction_feedback
-		WHERE idoso_id = $1
-	`, idosoID).Scan(&summary.TotalInteractions, &summary.AverageFeedback)
+	rows, err := s.db.QueryByLabel(ctx, "learning_interaction_feedback",
+		" AND n.idoso_id = $idoso_id",
+		map[string]interface{}{"idoso_id": idosoID}, 0)
+	if err == nil {
+		summary.TotalInteractions = len(rows)
+		totalSignal := 0.0
+		for _, m := range rows {
+			totalSignal += database.GetFloat64(m, "feedback_signal")
+		}
+		if len(rows) > 0 {
+			summary.AverageFeedback = totalSignal / float64(len(rows))
+		}
+	}
 
 	// Get top interests
 	interests, _ := s.GetTopInterests(ctx, idosoID, 3)
@@ -641,9 +796,9 @@ func (s *ContinuousLearningService) GenerateLearningInsight(ctx context.Context,
 	}
 
 	insight := fmt.Sprintf(
-		"Após %d interações, aprendi que este paciente prefere conversas no período da %s, "+
-		"se interessa principalmente por %s, e responde melhor a um estilo de comunicação %s. "+
-		"Minha confiança nesse aprendizado é de %.0f%%.",
+		"Apos %d interacoes, aprendi que este paciente prefere conversas no periodo da %s, "+
+		"se interessa principalmente por %s, e responde melhor a um estilo de comunicacao %s. "+
+		"Minha confianca nesse aprendizado e de %.0f%%.",
 		summary.TotalInteractions,
 		summary.OptimalTiming,
 		joinTopics(summary.TopInterests),

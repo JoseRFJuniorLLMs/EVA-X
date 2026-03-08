@@ -5,7 +5,7 @@ package brain
 
 import (
 	"context"
-	"database/sql"
+	"eva/internal/brainstem/database"
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	"eva/internal/brainstem/push"
 	"eva/internal/cortex/lacan"
@@ -19,7 +19,7 @@ import (
 // Service encapsulates the cognitive functions of EVA
 // AUDIT FIX 2026-01-27: Adicionado graphAdapter e graphStore para salvar no NietzscheDB graph
 type Service struct {
-	db                 *sql.DB
+	db                 *database.DB
 	vectorAdapter      *nietzscheInfra.VectorAdapter
 	graphAdapter       *nietzscheInfra.GraphAdapter // AUDIT FIX: Adicionado para salvar no NietzscheDB graph
 	graphStore         *memory.GraphStore           // AUDIT FIX: Store para NietzscheDB graph
@@ -38,7 +38,7 @@ type Service struct {
 // NewService creates a new Brain service
 // AUDIT FIX 2026-01-27: Adicionado graphAdapter para salvar no grafo
 func NewService(
-	db *sql.DB,
+	db *database.DB,
 	vectorAdapter *nietzscheInfra.VectorAdapter,
 	graphAdapter *nietzscheInfra.GraphAdapter, // AUDIT FIX: Adicionado
 	unified *lacan.UnifiedRetrieval,

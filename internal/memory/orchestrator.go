@@ -5,10 +5,10 @@ package memory
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"time"
 
+	"eva/internal/brainstem/database"
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	"eva/internal/hippocampus/memory"
 	"eva/internal/memory/consolidation"
@@ -21,7 +21,7 @@ import (
 // MemoryOrchestrator integrates the full memory pipeline
 // Voice → FDPN → Krylov → Spectral → REM
 type MemoryOrchestrator struct {
-	db            *sql.DB
+	db            *database.DB
 	graphAdapter  *nietzscheInfra.GraphAdapter  // NietzscheDB GraphAdapter
 	vectorAdapter *nietzscheInfra.VectorAdapter // NietzscheDB VectorAdapter (busca vetorial)
 
@@ -33,7 +33,7 @@ type MemoryOrchestrator struct {
 
 // NewMemoryOrchestrator creates a new memory orchestrator
 func NewMemoryOrchestrator(
-	db *sql.DB,
+	db *database.DB,
 	graphAdapter *nietzscheInfra.GraphAdapter,
 	vectorAdapter *nietzscheInfra.VectorAdapter,
 	fdpn *memory.FDPNEngine,

@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"net/http"
 	"os"
 	"os/signal"
@@ -78,7 +77,6 @@ import (
 	nietzsche "nietzsche-sdk"
 
 	"github.com/gorilla/mux"
-	_ "github.com/lib/pq"
 	"github.com/rs/zerolog/log"
 )
 
@@ -195,11 +193,8 @@ func main() {
 	}
 
 	// Legacy PostgreSQL connection REMOVED — all data lives in NietzscheDB.
-	// Modules that still reference db.Conn receive nil and must handle it gracefully.
-	var legacyConn *sql.DB
-
-	// Primary DB: NietzscheDB with optional NietzscheDB fallback
-	db := database.NewNietzscheDB(nzClient.SDK(), legacyConn)
+	// Primary DB: NietzscheDB (no SQL fallback)
+	db := database.NewNietzscheDB(nzClient.SDK(), nil)
 	defer db.Close()
 
 	// Ensure indexes for eva_mind collection
@@ -261,7 +256,7 @@ func main() {
 	// 6. Memory & Personality Stores
 	graphStore := memory.NewGraphStore(graphAdapter, cfg)
 	log.Info().Msg("GraphStore conectado ao NietzscheDB (patient_graph)")
-	memoryStore := memory.NewMemoryStore(db.Conn, graphStore, vectorAdapter)
+	memoryStore := memory.NewMemoryStore(db, graphStore, vectorAdapter)
 	personalitySvc := personality.NewPersonalityService(evaGraphAdapter)
 
 	// 6.2 Wisdom Service (busca semantica em colecoes de sabedoria)
@@ -276,9 +271,9 @@ func main() {
 		log.Info().Msg("Wisdom Service inicializado")
 	}
 
-	// 6.1 EVA Meta-Cognitive Memory (NietzscheDB patient_graph)
-	evaMemSvc := eva_memory.New(graphAdapter)
-	log.Info().Msg("EVA Meta-Cognitive Memory inicializada (NietzscheDB)")
+	// 6.1 EVA Meta-Cognitive Memory (NietzscheDB eva_core)
+	evaMemSvc := eva_memory.New(evaGraphAdapter)
+	log.Info().Msg("EVA Meta-Cognitive Memory inicializada (NietzscheDB eva_core)")
 
 	// 6.3 Core Memory Engine — memoria pessoal da EVA (NietzscheDB eva_core)
 	var coreMemoryEngine *evaSelf.CoreMemoryEngine
@@ -299,7 +294,7 @@ func main() {
 				GraphAdapter:        evaGraphAdapter,
 				SimilarityThreshold: 0.88,
 				MinOccurrences:      3,
-			}, reflectionSvc, anonSvc, nil)
+			}, reflectionSvc, anonSvc, embedSvc)
 			if err != nil {
 				log.Warn().Err(err).Msg("CoreMemoryEngine indisponivel - identidade EVA sem persistencia")
 				coreMemoryEngine = nil
@@ -320,12 +315,12 @@ func main() {
 	log.Info().Msg("FDPN Engine inicializado")
 
 	// 7.2 Habit Tracker + Spaced Repetition
-	habitTracker := habits.NewHabitTracker(db.Conn)
-	spacedSvc := spaced.NewSpacedRepetitionService(db.Conn)
+	habitTracker := habits.NewHabitTracker(db)
+	spacedSvc := spaced.NewSpacedRepetitionService(db)
 	log.Info().Msg("📊 Habit Tracker + Spaced Repetition inicializados")
 
 	// 7.3 Superhuman Memory Service (12 subsistemas de memoria)
-	superhumanSvc := superhuman.NewSuperhumanMemoryService(db.Conn)
+	superhumanSvc := superhuman.NewSuperhumanMemoryService(db)
 	log.Info().Msg("🌟 Superhuman Memory Service inicializado")
 
 	// 7.4 Email Service (SMTP para alertas)
@@ -356,7 +351,7 @@ func main() {
 	escalationSvc := alert.NewEscalationService(alert.EscalationConfig{
 		Firebase: pushService,
 		Email:    emailSvc,
-		DB:       db.Conn,
+		DB:       db,
 	})
 	toolsHandler.SetEscalationService(escalationSvc)
 
@@ -485,14 +480,14 @@ func main() {
 	log.Info().Msg("🔍 Tools Client inicializado (Gemini Flash)")
 
 	// 7.7 Autonomous Learner (aprendizagem autonoma — pesquisa, estuda e memoriza)
-	autonomousLearner := learning.NewAutonomousLearner(db.Conn, cfg, vectorAdapter, embedSvc)
+	autonomousLearner := learning.NewAutonomousLearner(db, cfg, vectorAdapter, embedSvc)
 	toolsHandler.SetAutonomousLearner(func(ctx context.Context, topic string) (interface{}, error) {
 		return autonomousLearner.StudyTopic(ctx, topic)
 	})
 	log.Info().Msg("Autonomous Learner inicializado")
 
 	// 7.8 Self-Awareness Service (introspecao — codigo, bancos, memorias)
-	selfAwareSvc := selfawareness.NewSelfAwarenessService(db.Conn, vectorAdapter, embedSvc, cfg)
+	selfAwareSvc := selfawareness.NewSelfAwarenessService(db, vectorAdapter, embedSvc, cfg)
 	selfAwareAgent := swarmself.New()
 	selfAwareAgent.SetService(selfAwareSvc)
 	log.Info().Msg("Self-Awareness Service inicializado")
@@ -515,7 +510,7 @@ func main() {
 		GoogleAPIKey: cfg.GoogleAPIKey,
 		Krylov:       krylovMgr,
 		AlertFamily: func(ctx context.Context, userID int64, reason, severity string) error {
-			return actions.AlertFamilyWithSeverity(db.Conn, pushService, emailSvc, userID, reason, severity)
+			return actions.AlertFamilyWithSeverity(db, pushService, emailSvc, userID, reason, severity)
 		},
 	}
 	orchestrator := swarm.NewOrchestrator(swarmDeps)
@@ -581,7 +576,7 @@ func main() {
 
 	// 7.14 Memory Orchestrator (Voice -> FDPN -> Krylov -> Spectral -> REM consolidation)
 	hippoFDPN := memory.NewFDPNEngine(graphAdapter, nil)
-	memOrchestrator := internalmemory.NewMemoryOrchestrator(db.Conn, graphAdapter, vectorAdapter, hippoFDPN, krylovMgr)
+	memOrchestrator := internalmemory.NewMemoryOrchestrator(db, graphAdapter, vectorAdapter, hippoFDPN, krylovMgr)
 	log.Info().Msg("Memory Orchestrator inicializado (FDPN -> Krylov -> REM)")
 
 	// 7.15 Krylov HTTP Bridge (porta 50052 — bridge HTTP/JSON para compressao vetorial)
@@ -590,7 +585,7 @@ func main() {
 	log.Info().Msg("🔌 Krylov HTTP Bridge iniciado na porta 50052")
 
 	// 7.16 Research Engine (pesquisa clinica longitudinal com anonimizacao LGPD)
-	researchEng := research.NewResearchEngine(db.Conn)
+	researchEng := research.NewResearchEngine(db)
 	log.Info().Msg("🔬 Research Engine inicializado")
 
 	// 8. SignalingServer
@@ -695,7 +690,7 @@ func main() {
 	// log.Info().Msg("OAuth Google routes registered: /api/v1/oauth/*")
 
 	// MCP Server — Model Context Protocol
-	mcpServer := mcp.NewServer(db.Conn)
+	mcpServer := mcp.NewServer(db)
 	if embedSvc != nil {
 		mcpServer.SetEmbeddingFunc(func(ctx context.Context, text string) ([]float32, error) {
 			return embedSvc.GenerateEmbedding(ctx, text)
@@ -727,7 +722,7 @@ func main() {
 	log.Info().Msg("🔌 MCP Server montado em /mcp")
 
 	// FHIR R4 Endpoints (HL7 interoperability)
-	fhirHandler := integration.NewFHIRHandler(db.Conn)
+	fhirHandler := integration.NewFHIRHandler(db)
 	integration.RegisterFHIRRoutes(router, fhirHandler)
 	log.Info().Msg("🏥 FHIR R4 endpoints registrados em /api/v1/fhir")
 

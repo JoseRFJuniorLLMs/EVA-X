@@ -5,12 +5,13 @@ package synthesis
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
+	"eva/internal/brainstem/database"
 	"eva/internal/clinical/goals"
 	"eva/internal/clinical/notes"
 	"eva/internal/clinical/risk"
@@ -21,7 +22,7 @@ import (
 
 // SessionSynthesizer generates comprehensive session reports
 type SessionSynthesizer struct {
-	db              *sql.DB
+	db              *database.DB
 	riskDetector    *risk.PediatricRiskDetector
 	noteGenerator   *notes.ClinicalNoteGenerator
 	goalTracker     *goals.TreatmentGoalTracker
@@ -30,7 +31,7 @@ type SessionSynthesizer struct {
 
 // NewSessionSynthesizer creates a new session synthesizer
 func NewSessionSynthesizer(
-	db *sql.DB,
+	db *database.DB,
 	riskDetector *risk.PediatricRiskDetector,
 	noteGenerator *notes.ClinicalNoteGenerator,
 	goalTracker *goals.TreatmentGoalTracker,
@@ -95,19 +96,17 @@ type RiskSummary struct {
 // GenerateSynthesis generates a comprehensive session synthesis
 func (s *SessionSynthesizer) GenerateSynthesis(ctx context.Context, sessionID int64) (*SessionSynthesis, error) {
 	// Get session info
-	var patientID int64
-	var sessionNumber int
-	var sessionDate time.Time
-
-	err := s.db.QueryRowContext(ctx, `
-		SELECT patient_id, session_number, started_at
-		FROM conversations
-		WHERE id = $1
-	`, sessionID).Scan(&patientID, &sessionNumber, &sessionDate)
-
+	convNode, err := s.db.GetNodeByID(ctx, "conversations", sessionID)
 	if err != nil {
 		return nil, err
 	}
+	if convNode == nil {
+		return nil, fmt.Errorf("conversation %d not found", sessionID)
+	}
+
+	patientID := database.GetInt64(convNode, "patient_id")
+	sessionNumber := int(database.GetInt64(convNode, "session_number"))
+	sessionDate := database.GetTime(convNode, "started_at")
 
 	synthesis := &SessionSynthesis{
 		PatientID:     patientID,
@@ -183,32 +182,53 @@ func (s *SessionSynthesizer) analyzeThemes(ctx context.Context, sessionID, patie
 func (s *SessionSynthesizer) getPreviousSessionThemes(ctx context.Context, patientID, currentSessionID int64) map[string]int {
 	themes := make(map[string]int)
 
-	// Get previous session
-	var prevSessionID int64
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id FROM conversations
-		WHERE patient_id = $1 AND id < $2
-		ORDER BY started_at DESC
-		LIMIT 1
-	`, patientID, currentSessionID).Scan(&prevSessionID)
-
+	// Get previous session: conversations for patient with id < currentSessionID, sorted DESC, limit 1
+	convRows, err := s.db.QueryByLabel(ctx, "conversations",
+		" AND n.patient_id = $pid", map[string]interface{}{
+			"pid": patientID,
+		}, 0)
 	if err != nil {
 		return themes
 	}
+
+	// Filter id < currentSessionID and sort by started_at DESC
+	type convEntry struct {
+		id        int64
+		startedAt time.Time
+	}
+	var candidates []convEntry
+	for _, m := range convRows {
+		cid := database.GetInt64(m, "id")
+		if cid < currentSessionID {
+			candidates = append(candidates, convEntry{
+				id:        cid,
+				startedAt: database.GetTime(m, "started_at"),
+			})
+		}
+	}
+
+	if len(candidates) == 0 {
+		return themes
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].startedAt.After(candidates[j].startedAt)
+	})
+
+	prevSessionID := candidates[0].id
 
 	// Get themes from previous synthesis
-	var themesJSON []byte
-	err = s.db.QueryRowContext(ctx, `
-		SELECT main_themes FROM session_syntheses
-		WHERE session_id = $1
-	`, prevSessionID).Scan(&themesJSON)
-
-	if err != nil {
+	synthRows, err := s.db.QueryByLabel(ctx, "session_syntheses",
+		" AND n.session_id = $sid", map[string]interface{}{
+			"sid": prevSessionID,
+		}, 1)
+	if err != nil || len(synthRows) == 0 {
 		return themes
 	}
 
+	themesJSON := database.GetString(synthRows[0], "main_themes")
 	var prevThemes []ThemeSummary
-	json.Unmarshal(themesJSON, &prevThemes)
+	json.Unmarshal([]byte(themesJSON), &prevThemes)
 
 	for _, t := range prevThemes {
 		themes[t.Theme] = t.Frequency
@@ -311,24 +331,25 @@ func (s *SessionSynthesizer) getTreatmentProgress(ctx context.Context, patientID
 // getRiskSummary gets risk assessment summary
 func (s *SessionSynthesizer) getRiskSummary(ctx context.Context, sessionID int64) *RiskSummary {
 	// Get highest risk assessment for this session
-	var level string
-	var score float64
-	var metaphorsJSON []byte
-
-	err := s.db.QueryRowContext(ctx, `
-		SELECT risk_level, risk_score, detected_metaphors
-		FROM risk_detections
-		WHERE session_id = $1
-		ORDER BY risk_score DESC
-		LIMIT 1
-	`, sessionID).Scan(&level, &score, &metaphorsJSON)
-
-	if err != nil {
+	rows, err := s.db.QueryByLabel(ctx, "risk_detections",
+		" AND n.session_id = $sid", map[string]interface{}{
+			"sid": sessionID,
+		}, 0)
+	if err != nil || len(rows) == 0 {
 		return &RiskSummary{Level: "NONE", Score: 0}
 	}
 
+	// Sort by risk_score DESC and take the first
+	sort.Slice(rows, func(i, j int) bool {
+		return database.GetFloat64(rows[i], "risk_score") > database.GetFloat64(rows[j], "risk_score")
+	})
+
+	best := rows[0]
+	level := database.GetString(best, "risk_level")
+	score := database.GetFloat64(best, "risk_score")
+
 	var metaphors []string
-	json.Unmarshal(metaphorsJSON, &metaphors)
+	json.Unmarshal([]byte(database.GetString(best, "detected_metaphors")), &metaphors)
 
 	return &RiskSummary{
 		Level:             level,
@@ -395,15 +416,21 @@ func (s *SessionSynthesizer) storeSynthesis(ctx context.Context, synthesis *Sess
 	riskJSON, _ := json.Marshal(synthesis.RiskSummary)
 	suggestionsJSON, _ := json.Marshal(synthesis.Suggestions)
 
-	return s.db.QueryRowContext(ctx, `
-		INSERT INTO session_syntheses (
-			patient_id, session_id, main_themes, alerts,
-			treatment_progress, risk_summary, suggestions, generated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		RETURNING id
-	`, synthesis.PatientID, synthesis.SessionID, themesJSON, alertsJSON,
-		progressJSON, riskJSON, suggestionsJSON, synthesis.GeneratedAt,
-	).Scan(&synthesis.ID)
+	id, err := s.db.Insert(ctx, "session_syntheses", map[string]interface{}{
+		"patient_id":         synthesis.PatientID,
+		"session_id":         synthesis.SessionID,
+		"main_themes":        string(themesJSON),
+		"alerts":             string(alertsJSON),
+		"treatment_progress": string(progressJSON),
+		"risk_summary":       string(riskJSON),
+		"suggestions":        string(suggestionsJSON),
+		"generated_at":       synthesis.GeneratedAt.Format(time.RFC3339),
+	})
+	if err != nil {
+		return err
+	}
+	synthesis.ID = id
+	return nil
 }
 
 // FormatAsMarkdown formats synthesis as markdown report

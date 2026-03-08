@@ -8,18 +8,17 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
 	"os"
 	"time"
 
 	"eva/internal/brainstem/config"
+	"eva/internal/brainstem/database"
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	"eva/internal/hippocampus/knowledge"
 
 	"github.com/joho/godotenv"
-	_ "github.com/lib/pq"
 )
 
 type KnowledgeEntry struct {
@@ -37,91 +36,82 @@ type KnowledgeEntry struct {
 func main() {
 	godotenv.Load()
 
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		dbURL = "postgres://postgres:Debian23%40@34.35.142.107:5432/eva-mind?sslmode=disable"
-	}
-
-	db, err := sql.Open("postgres", dbURL)
-	if err != nil {
-		log.Fatalf("DB connect failed: %v", err)
-	}
-	defer db.Close()
-
-	_, err = db.Exec(`
-		CREATE TABLE IF NOT EXISTS eva_self_knowledge (
-			id SERIAL PRIMARY KEY,
-			knowledge_type VARCHAR(100) NOT NULL,
-			knowledge_key VARCHAR(300) NOT NULL UNIQUE,
-			title VARCHAR(500) NOT NULL,
-			summary TEXT NOT NULL,
-			detailed_content TEXT NOT NULL,
-			code_location VARCHAR(500),
-			parent_key VARCHAR(300),
-			related_keys JSONB DEFAULT '[]',
-			tags JSONB DEFAULT '[]',
-			importance INTEGER DEFAULT 5,
-			created_at TIMESTAMP DEFAULT NOW(),
-			updated_at TIMESTAMP DEFAULT NOW()
-		)
-	`)
-	if err != nil {
-		log.Fatalf("Table creation failed: %v", err)
-	}
-
 	cfg, err := config.Load()
 	if err != nil {
-		log.Printf("WARN: Config load failed (NietzscheDB vector disabled): %v", err)
+		log.Fatalf("Config load failed: %v", err)
 	}
 
-	var vectorAdapter *nietzscheInfra.VectorAdapter
+	nietzscheClient, err := nietzscheInfra.NewClient(cfg.NietzscheGRPCAddr)
+	if err != nil {
+		log.Fatalf("NietzscheDB connect failed: %v", err)
+	}
+	defer nietzscheClient.Close()
+
+	db := database.NewNietzscheDB(nietzscheClient.SDK(), nil)
+	vectorAdapter := nietzscheInfra.NewVectorAdapter(nietzscheClient)
+
 	var embedSvc *knowledge.EmbeddingService
-	if cfg != nil {
-		nietzscheClient, niErr := nietzscheInfra.NewClient(cfg.NietzscheGRPCAddr)
-		if niErr != nil {
-			log.Printf("WARN: NietzscheDB unavailable: %v", niErr)
-		} else {
-			defer nietzscheClient.Close()
-			vectorAdapter = nietzscheInfra.NewVectorAdapter(nietzscheClient)
-			embedSvc, err = knowledge.NewEmbeddingService(cfg, vectorAdapter)
-			if err != nil {
-				log.Printf("WARN: Embedding service unavailable: %v", err)
-			}
-		}
+	embedSvc, err = knowledge.NewEmbeddingService(cfg, vectorAdapter)
+	if err != nil {
+		log.Printf("WARN: Embedding service unavailable: %v", err)
 	}
 
 	ctx := context.Background()
 	entries := getAllEntries()
 
-	// 1. NietzscheDB
-	stmt, err := db.Prepare(`
-		INSERT INTO eva_self_knowledge (knowledge_type, knowledge_key, title, summary, detailed_content, code_location, parent_key, tags, importance, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
-		ON CONFLICT (knowledge_key) DO UPDATE SET
-			title = EXCLUDED.title,
-			summary = EXCLUDED.summary,
-			detailed_content = EXCLUDED.detailed_content,
-			code_location = EXCLUDED.code_location,
-			parent_key = EXCLUDED.parent_key,
-			tags = EXCLUDED.tags,
-			importance = EXCLUDED.importance,
-			updated_at = NOW()
-	`)
-	if err != nil {
-		log.Fatalf("Prepare failed: %v", err)
-	}
-	defer stmt.Close()
+	// 1. Store entries in NietzscheDB graph
+	nzCount := 0
+	now := time.Now().Format(time.RFC3339)
+	_ = os.Getenv("DATABASE_URL") // unused, kept for env compat
 
-	pgCount := 0
 	for i, e := range entries {
-		_, err := stmt.Exec(e.Type, e.Key, e.Title, e.Summary, e.Content, e.Location, e.Parent, e.Tags, e.Importance)
-		if err != nil {
-			log.Printf("WARN [%d] PG %s: %v", i, e.Key, err)
+		// Check if entry already exists by key
+		rows, _ := db.QueryByLabel(ctx, "eva_self_knowledge",
+			" AND n.knowledge_key = $key",
+			map[string]interface{}{"key": e.Key}, 1)
+
+		if len(rows) > 0 {
+			// Update existing
+			err := db.Update(ctx, "eva_self_knowledge",
+				map[string]interface{}{"knowledge_key": e.Key},
+				map[string]interface{}{
+					"title":            e.Title,
+					"summary":          e.Summary,
+					"detailed_content": e.Content,
+					"code_location":    e.Location,
+					"parent_key":       e.Parent,
+					"tags":             e.Tags,
+					"importance":       e.Importance,
+					"updated_at":       now,
+				})
+			if err != nil {
+				log.Printf("WARN [%d] Update %s: %v", i, e.Key, err)
+			} else {
+				nzCount++
+			}
 		} else {
-			pgCount++
+			// Insert new
+			_, err := db.Insert(ctx, "eva_self_knowledge", map[string]interface{}{
+				"knowledge_type":   e.Type,
+				"knowledge_key":    e.Key,
+				"title":            e.Title,
+				"summary":          e.Summary,
+				"detailed_content": e.Content,
+				"code_location":    e.Location,
+				"parent_key":       e.Parent,
+				"tags":             e.Tags,
+				"importance":       e.Importance,
+				"created_at":       now,
+				"updated_at":       now,
+			})
+			if err != nil {
+				log.Printf("WARN [%d] Insert %s: %v", i, e.Key, err)
+			} else {
+				nzCount++
+			}
 		}
 	}
-	fmt.Printf("NietzscheDB: %d/%d entries seeded\n", pgCount, len(entries))
+	fmt.Printf("NietzscheDB: %d/%d entries seeded\n", nzCount, len(entries))
 
 	// 2. NietzscheDB vector index
 	if vectorAdapter != nil && embedSvc != nil {

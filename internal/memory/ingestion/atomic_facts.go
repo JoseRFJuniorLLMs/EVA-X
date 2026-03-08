@@ -5,11 +5,12 @@ package ingestion
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
+
+	"eva/internal/brainstem/database"
 
 	"github.com/google/generative-ai-go/genai"
 	"github.com/rs/zerolog/log"
@@ -33,18 +34,18 @@ type AtomicFact struct {
 
 // FactExtractor extracts atomic facts from conversation text
 type FactExtractor struct {
-	db     *sql.DB
+	db     *database.DB
 	apiKey string
 	model  string
 }
 
 // NewFactExtractor creates a new fact extractor
-func NewFactExtractor(db *sql.DB) *FactExtractor {
+func NewFactExtractor(db *database.DB) *FactExtractor {
 	return &FactExtractor{db: db}
 }
 
 // NewFactExtractorWithLLM creates a fact extractor with LLM support
-func NewFactExtractorWithLLM(db *sql.DB, apiKey, model string) *FactExtractor {
+func NewFactExtractorWithLLM(db *database.DB, apiKey, model string) *FactExtractor {
 	return &FactExtractor{db: db, apiKey: apiKey, model: model}
 }
 
@@ -139,42 +140,28 @@ Responda APENAS o JSON array, sem markdown.`, text)
 	return facts, nil
 }
 
-// StoreFacts stores atomic facts in database
+// StoreFacts stores atomic facts in database via NietzscheDB
 func (f *FactExtractor) StoreFacts(ctx context.Context, facts []*AtomicFact) error {
-	tx, err := f.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO atomic_facts (
-			content, confidence, source, revisable, version,
-			patient_id, event_time, ingestion_time, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
-		RETURNING id
-	`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-
+	now := time.Now()
 	for _, fact := range facts {
-		err = stmt.QueryRowContext(
-			ctx,
-			fact.Content,
-			fact.Confidence,
-			fact.Source,
-			fact.Revisable,
-			fact.Version,
-			fact.PatientID,
-			fact.EventTime,
-			fact.IngestionTime,
-		).Scan(&fact.ID)
+		content := map[string]interface{}{
+			"content":        fact.Content,
+			"confidence":     fact.Confidence,
+			"source":         fact.Source,
+			"revisable":      fact.Revisable,
+			"version":        fact.Version,
+			"patient_id":     fact.PatientID,
+			"event_time":     fact.EventTime.Format(time.RFC3339),
+			"ingestion_time": fact.IngestionTime.Format(time.RFC3339),
+			"created_at":     now.Format(time.RFC3339),
+			"updated_at":     now.Format(time.RFC3339),
+		}
 
+		id, err := f.db.Insert(ctx, "atomic_facts", content)
 		if err != nil {
 			return err
 		}
+		fact.ID = id
 
 		log.Info().
 			Int64("fact_id", fact.ID).
@@ -183,49 +170,42 @@ func (f *FactExtractor) StoreFacts(ctx context.Context, facts []*AtomicFact) err
 			Msg("Stored atomic fact")
 	}
 
-	return tx.Commit()
+	return nil
 }
 
-// GetFacts retrieves facts for a patient
+// GetFacts retrieves facts for a patient via NietzscheDB
 func (f *FactExtractor) GetFacts(ctx context.Context, patientID int64, limit int) ([]*AtomicFact, error) {
-	rows, err := f.db.QueryContext(ctx, `
-		SELECT 
-			id, content, confidence, source, revisable, version,
-			patient_id, event_time, ingestion_time, created_at, updated_at
-		FROM atomic_facts
-		WHERE patient_id = $1
-		ORDER BY event_time DESC
-		LIMIT $2
-	`, patientID, limit)
-
+	rows, err := f.db.QueryByLabel(ctx, "atomic_facts",
+		" AND n.patient_id = $patient_id",
+		map[string]interface{}{"patient_id": patientID},
+		limit,
+	)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	var facts []*AtomicFact
-	for rows.Next() {
-		var fact AtomicFact
-		err := rows.Scan(
-			&fact.ID,
-			&fact.Content,
-			&fact.Confidence,
-			&fact.Source,
-			&fact.Revisable,
-			&fact.Version,
-			&fact.PatientID,
-			&fact.EventTime,
-			&fact.IngestionTime,
-			&fact.CreatedAt,
-			&fact.UpdatedAt,
-		)
-		if err != nil {
-			return nil, err
+	for _, row := range rows {
+		fact := &AtomicFact{
+			ID:            database.GetInt64(row, "pg_id"),
+			Content:       database.GetString(row, "content"),
+			Confidence:    database.GetFloat64(row, "confidence"),
+			Source:        database.GetString(row, "source"),
+			Revisable:     database.GetBool(row, "revisable"),
+			Version:       int(database.GetInt64(row, "version")),
+			PatientID:     database.GetInt64(row, "patient_id"),
+			EventTime:     database.GetTime(row, "event_time"),
+			IngestionTime: database.GetTime(row, "ingestion_time"),
+			CreatedAt:     database.GetTime(row, "created_at"),
+			UpdatedAt:     database.GetTime(row, "updated_at"),
 		}
-		facts = append(facts, &fact)
+		if fact.ID == 0 {
+			fact.ID = database.GetInt64(row, "id")
+		}
+		facts = append(facts, fact)
 	}
 
-	return facts, rows.Err()
+	return facts, nil
 }
 
 // FactContradiction represents a contradiction between facts
@@ -319,53 +299,53 @@ Responda APENAS o JSON array, sem markdown.`, factsText.String())
 	return contradictions, nil
 }
 
-// ReviseFact creates a new version of a fact
+// ReviseFact creates a new version of a fact via NietzscheDB
 func (f *FactExtractor) ReviseFact(ctx context.Context, factID int64, newContent string, confidence float64) (*AtomicFact, error) {
-	// Get current fact
-	var currentFact AtomicFact
-	err := f.db.QueryRowContext(ctx, `
-		SELECT id, content, version, patient_id, event_time
-		FROM atomic_facts
-		WHERE id = $1
-	`, factID).Scan(
-		&currentFact.ID,
-		&currentFact.Content,
-		&currentFact.Version,
-		&currentFact.PatientID,
-		&currentFact.EventTime,
-	)
-
+	// Get current fact from NietzscheDB
+	node, err := f.db.GetNodeByID(ctx, "atomic_facts", factID)
 	if err != nil {
 		return nil, err
 	}
+	if node == nil {
+		return nil, fmt.Errorf("fact %d not found", factID)
+	}
+
+	currentVersion := int(database.GetInt64(node, "version"))
+	currentPatientID := database.GetInt64(node, "patient_id")
+	currentEventTime := database.GetTime(node, "event_time")
 
 	// Create new version
+	now := time.Now()
 	newFact := &AtomicFact{
 		Content:       newContent,
 		Confidence:    confidence,
 		Source:        "revised",
 		Revisable:     true,
-		Version:       currentFact.Version + 1,
-		PatientID:     currentFact.PatientID,
-		EventTime:     currentFact.EventTime, // Keep original event time
-		IngestionTime: time.Now(),            // New ingestion time
+		Version:       currentVersion + 1,
+		PatientID:     currentPatientID,
+		EventTime:     currentEventTime, // Keep original event time
+		IngestionTime: now,              // New ingestion time
 	}
 
-	err = f.db.QueryRowContext(ctx, `
-		INSERT INTO atomic_facts (
-			content, confidence, source, revisable, version,
-			patient_id, event_time, ingestion_time, created_at, updated_at,
-			previous_version_id
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW(), $9)
-		RETURNING id
-	`, newFact.Content, newFact.Confidence, newFact.Source, newFact.Revisable,
-		newFact.Version, newFact.PatientID, newFact.EventTime, newFact.IngestionTime,
-		factID,
-	).Scan(&newFact.ID)
+	content := map[string]interface{}{
+		"content":             newFact.Content,
+		"confidence":          newFact.Confidence,
+		"source":              newFact.Source,
+		"revisable":           newFact.Revisable,
+		"version":             newFact.Version,
+		"patient_id":          newFact.PatientID,
+		"event_time":          newFact.EventTime.Format(time.RFC3339),
+		"ingestion_time":      newFact.IngestionTime.Format(time.RFC3339),
+		"created_at":          now.Format(time.RFC3339),
+		"updated_at":          now.Format(time.RFC3339),
+		"previous_version_id": factID,
+	}
 
+	newID, err := f.db.Insert(ctx, "atomic_facts", content)
 	if err != nil {
 		return nil, err
 	}
+	newFact.ID = newID
 
 	log.Info().
 		Int64("old_fact_id", factID).
@@ -376,57 +356,45 @@ func (f *FactExtractor) ReviseFact(ctx context.Context, factID int64, newContent
 	return newFact, nil
 }
 
-// FactStats returns statistics about facts
+// FactStats returns statistics about facts via NietzscheDB
 func (f *FactExtractor) FactStats(ctx context.Context, patientID int64) (map[string]interface{}, error) {
 	stats := make(map[string]interface{})
 
 	// Total facts
-	var total int
-	err := f.db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM atomic_facts WHERE patient_id = $1
-	`, patientID).Scan(&total)
-
+	total, err := f.db.Count(ctx, "atomic_facts",
+		" AND n.patient_id = $patient_id",
+		map[string]interface{}{"patient_id": patientID},
+	)
 	if err != nil {
 		return nil, err
 	}
-
 	stats["total_facts"] = total
 
-	// By source
-	rows, err := f.db.QueryContext(ctx, `
-		SELECT source, COUNT(*) as count
-		FROM atomic_facts
-		WHERE patient_id = $1
-		GROUP BY source
-	`, patientID)
-
+	// By source + average confidence: fetch all rows and compute in Go
+	rows, err := f.db.QueryByLabel(ctx, "atomic_facts",
+		" AND n.patient_id = $patient_id",
+		map[string]interface{}{"patient_id": patientID},
+		0, // no limit
+	)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	bySource := make(map[string]int)
-	for rows.Next() {
-		var source string
-		var count int
-		if err := rows.Scan(&source, &count); err != nil {
-			return nil, err
+	var totalConfidence float64
+	for _, row := range rows {
+		source := database.GetString(row, "source")
+		if source != "" {
+			bySource[source]++
 		}
-		bySource[source] = count
+		totalConfidence += database.GetFloat64(row, "confidence")
 	}
-
 	stats["by_source"] = bySource
 
-	// Average confidence
 	var avgConfidence float64
-	err = f.db.QueryRowContext(ctx, `
-		SELECT AVG(confidence) FROM atomic_facts WHERE patient_id = $1
-	`, patientID).Scan(&avgConfidence)
-
-	if err != nil {
-		return nil, err
+	if len(rows) > 0 {
+		avgConfidence = totalConfidence / float64(len(rows))
 	}
-
 	stats["avg_confidence"] = avgConfidence
 
 	return stats, nil

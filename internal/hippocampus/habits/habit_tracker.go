@@ -5,14 +5,14 @@ package habits
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
-	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
+	"eva/internal/brainstem/database"
 )
 
 // ============================================================================
@@ -22,14 +22,8 @@ import (
 
 // HabitTracker gerencia o rastreamento de hábitos
 type HabitTracker struct {
-	db            *sql.DB
-	vectorAdapter *nietzscheInfra.VectorAdapter
-	notifyFunc    func(idosoID int64, msgType string, payload interface{})
-}
-
-// SetVectorAdapter injects NietzscheDB adapter for PG elimination (optional).
-func (h *HabitTracker) SetVectorAdapter(va *nietzscheInfra.VectorAdapter) {
-	h.vectorAdapter = va
+	db         *database.DB
+	notifyFunc func(idosoID int64, msgType string, payload interface{})
 }
 
 // Habit representa um hábito sendo rastreado
@@ -47,16 +41,16 @@ type Habit struct {
 
 // HabitLog representa um registro de hábito
 type HabitLog struct {
-	ID          int64      `json:"id"`
-	HabitID     int64      `json:"habit_id"`
-	IdosoID     int64      `json:"idoso_id"`
-	Success     bool       `json:"success"`       // true = completou, false = falhou/pulou
-	Timestamp   time.Time  `json:"timestamp"`
-	DayOfWeek   int        `json:"day_of_week"`   // 0=Domingo, 6=Sábado
-	TimeOfDay   string     `json:"time_of_day"`   // "morning", "afternoon", "evening", "night"
-	Source      string     `json:"source"`        // "voice", "app", "auto"
-	Notes       string     `json:"notes"`         // Observações
-	Metadata    string     `json:"metadata"`      // JSON com dados extras
+	ID        int64     `json:"id"`
+	HabitID   int64     `json:"habit_id"`
+	IdosoID   int64     `json:"idoso_id"`
+	Success   bool      `json:"success"`     // true = completou, false = falhou/pulou
+	Timestamp time.Time `json:"timestamp"`
+	DayOfWeek int       `json:"day_of_week"` // 0=Domingo, 6=Sábado
+	TimeOfDay string    `json:"time_of_day"` // "morning", "afternoon", "evening", "night"
+	Source    string    `json:"source"`      // "voice", "app", "auto"
+	Notes     string    `json:"notes"`       // Observações
+	Metadata  string    `json:"metadata"`    // JSON com dados extras
 }
 
 // HabitPattern padrão identificado
@@ -90,7 +84,7 @@ var dayNames = map[int]string{
 }
 
 // NewHabitTracker cria novo rastreador
-func NewHabitTracker(db *sql.DB) *HabitTracker {
+func NewHabitTracker(db *database.DB) *HabitTracker {
 	tracker := &HabitTracker{db: db}
 
 	if db == nil {
@@ -135,17 +129,19 @@ func (h *HabitTracker) LogHabit(ctx context.Context, idosoID int64, habitName st
 		}
 	}
 
-	query := `
-		INSERT INTO habit_logs (habit_id, idoso_id, success, logged_at, day_of_week, time_of_day, source, notes, metadata)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		RETURNING id
-	`
+	content := map[string]interface{}{
+		"habit_id":    habit.ID,
+		"idoso_id":    idosoID,
+		"success":     success,
+		"logged_at":   now.Format(time.RFC3339),
+		"day_of_week": int(now.Weekday()),
+		"time_of_day": timeOfDay,
+		"source":      source,
+		"notes":       notes,
+		"metadata":    metadataJSON,
+	}
 
-	var logID int64
-	err = h.db.QueryRowContext(ctx, query,
-		habit.ID, idosoID, success, now, int(now.Weekday()),
-		timeOfDay, source, notes, metadataJSON,
-	).Scan(&logID)
+	logID, err := h.db.Insert(ctx, "habit_logs", content)
 	if err != nil {
 		return nil, fmt.Errorf("erro ao registrar hábito: %w", err)
 	}
@@ -213,52 +209,70 @@ func (h *HabitTracker) GetPattern(ctx context.Context, idosoID int64, habitName 
 		ByTimeOfDay: make(map[string]float64),
 	}
 
-	// Taxa geral de sucesso (últimos 30 dias)
-	generalQuery := `
-		SELECT
-			COALESCE(AVG(CASE WHEN success THEN 1.0 ELSE 0.0 END), 0) as success_rate
-		FROM habit_logs
-		WHERE habit_id = $1 AND idoso_id = $2 AND logged_at > NOW() - INTERVAL '30 days'
-	`
-	h.db.QueryRowContext(ctx, generalQuery, habit.ID, idosoID).Scan(&pattern.SuccessRate)
+	// Fetch all habit_logs for this habit + idoso from the last 30 days
+	cutoff := time.Now().AddDate(0, 0, -30)
+	logs, err := h.db.QueryByLabel(ctx, "habit_logs",
+		" AND n.habit_id = $habit_id AND n.idoso_id = $idoso_id",
+		map[string]interface{}{
+			"habit_id": habit.ID,
+			"idoso_id": idosoID,
+		}, 0)
+	if err != nil {
+		return nil, fmt.Errorf("erro ao consultar logs de hábito: %w", err)
+	}
+
+	// Filter to last 30 days in Go (NQL doesn't support date arithmetic)
+	var recentLogs []map[string]interface{}
+	for _, m := range logs {
+		loggedAt := database.GetTime(m, "logged_at")
+		if !loggedAt.IsZero() && loggedAt.After(cutoff) {
+			recentLogs = append(recentLogs, m)
+		}
+	}
+
+	// Taxa geral de sucesso
+	if len(recentLogs) > 0 {
+		successCount := 0
+		for _, m := range recentLogs {
+			if database.GetBool(m, "success") {
+				successCount++
+			}
+		}
+		pattern.SuccessRate = float64(successCount) / float64(len(recentLogs))
+	}
 
 	// Taxa por dia da semana
-	dayQuery := `
-		SELECT day_of_week,
-		       COALESCE(AVG(CASE WHEN success THEN 1.0 ELSE 0.0 END), 0) as success_rate
-		FROM habit_logs
-		WHERE habit_id = $1 AND idoso_id = $2 AND logged_at > NOW() - INTERVAL '30 days'
-		GROUP BY day_of_week
-	`
-	rows, err := h.db.QueryContext(ctx, dayQuery, habit.ID, idosoID)
-	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var day int
-			var rate float64
-			if rows.Scan(&day, &rate) == nil {
-				pattern.ByDayOfWeek[day] = rate
-			}
+	dayTotal := make(map[int]int)
+	daySuccess := make(map[int]int)
+	for _, m := range recentLogs {
+		day := int(database.GetInt64(m, "day_of_week"))
+		dayTotal[day]++
+		if database.GetBool(m, "success") {
+			daySuccess[day]++
+		}
+	}
+	for day, total := range dayTotal {
+		if total > 0 {
+			pattern.ByDayOfWeek[day] = float64(daySuccess[day]) / float64(total)
 		}
 	}
 
 	// Taxa por período do dia
-	timeQuery := `
-		SELECT time_of_day,
-		       COALESCE(AVG(CASE WHEN success THEN 1.0 ELSE 0.0 END), 0) as success_rate
-		FROM habit_logs
-		WHERE habit_id = $1 AND idoso_id = $2 AND logged_at > NOW() - INTERVAL '30 days'
-		GROUP BY time_of_day
-	`
-	rows2, err := h.db.QueryContext(ctx, timeQuery, habit.ID, idosoID)
-	if err == nil {
-		defer rows2.Close()
-		for rows2.Next() {
-			var period string
-			var rate float64
-			if rows2.Scan(&period, &rate) == nil {
-				pattern.ByTimeOfDay[period] = rate
-			}
+	timeTotal := make(map[string]int)
+	timeSuccess := make(map[string]int)
+	for _, m := range recentLogs {
+		period := database.GetString(m, "time_of_day")
+		if period == "" {
+			continue
+		}
+		timeTotal[period]++
+		if database.GetBool(m, "success") {
+			timeSuccess[period]++
+		}
+	}
+	for period, total := range timeTotal {
+		if total > 0 {
+			pattern.ByTimeOfDay[period] = float64(timeSuccess[period]) / float64(total)
 		}
 	}
 
@@ -282,27 +296,42 @@ func (h *HabitTracker) GetPattern(ctx context.Context, idosoID int64, habitName 
 
 // GetAllPatterns retorna padrões de todos os hábitos do idoso
 func (h *HabitTracker) GetAllPatterns(ctx context.Context, idosoID int64) ([]HabitPattern, error) {
-	query := `
-		SELECT DISTINCT h.id, h.name
-		FROM habits h
-		JOIN habit_logs hl ON h.id = hl.habit_id
-		WHERE hl.idoso_id = $1 AND h.active = true
-	`
-
-	rows, err := h.db.QueryContext(ctx, query, idosoID)
+	// Get all active habits
+	habits, err := h.db.QueryByLabel(ctx, "habits",
+		" AND n.active = $active",
+		map[string]interface{}{
+			"active": true,
+		}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
+	// Get all habit_logs for this idoso to find which habits have logs
+	logs, err := h.db.QueryByLabel(ctx, "habit_logs",
+		" AND n.idoso_id = $idoso_id",
+		map[string]interface{}{
+			"idoso_id": idosoID,
+		}, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build set of habit IDs that have logs for this idoso
+	loggedHabitIDs := make(map[int64]bool)
+	for _, m := range logs {
+		loggedHabitIDs[database.GetInt64(m, "habit_id")] = true
+	}
+
+	// Build patterns only for habits that have log entries
 	var patterns []HabitPattern
-	for rows.Next() {
-		var habitID int64
-		var habitName string
-		if rows.Scan(&habitID, &habitName) == nil {
-			if pattern, err := h.GetPattern(ctx, idosoID, habitName); err == nil {
-				patterns = append(patterns, *pattern)
-			}
+	for _, m := range habits {
+		habitID := database.GetInt64(m, "id")
+		habitName := database.GetString(m, "name")
+		if !loggedHabitIDs[habitID] {
+			continue
+		}
+		if pattern, err := h.GetPattern(ctx, idosoID, habitName); err == nil {
+			patterns = append(patterns, *pattern)
 		}
 	}
 
@@ -342,41 +371,70 @@ func (h *HabitTracker) GetNotificationLevel(ctx context.Context, idosoID int64, 
 
 // GetDailySummary retorna resumo do dia
 func (h *HabitTracker) GetDailySummary(ctx context.Context, idosoID int64) (map[string]interface{}, error) {
-	query := `
-		SELECT h.name, h.description,
-		       COUNT(*) FILTER (WHERE hl.success = true) as completed,
-		       COUNT(*) as total
-		FROM habits h
-		LEFT JOIN habit_logs hl ON h.id = hl.habit_id
-		    AND hl.idoso_id = $1
-		    AND hl.logged_at::date = CURRENT_DATE
-		WHERE h.active = true
-		GROUP BY h.id, h.name, h.description
-	`
-
-	rows, err := h.db.QueryContext(ctx, query, idosoID)
+	// Get all active habits
+	allHabits, err := h.db.QueryByLabel(ctx, "habits",
+		" AND n.active = $active",
+		map[string]interface{}{
+			"active": true,
+		}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+
+	// Get today's logs for this idoso
+	todayLogs, err := h.db.QueryByLabel(ctx, "habit_logs",
+		" AND n.idoso_id = $idoso_id",
+		map[string]interface{}{
+			"idoso_id": idosoID,
+		}, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter logs to today only
+	today := time.Now().Truncate(24 * time.Hour)
+	todayEnd := today.Add(24 * time.Hour)
+	var todaysLogs []map[string]interface{}
+	for _, m := range todayLogs {
+		loggedAt := database.GetTime(m, "logged_at")
+		if !loggedAt.IsZero() && !loggedAt.Before(today) && loggedAt.Before(todayEnd) {
+			todaysLogs = append(todaysLogs, m)
+		}
+	}
+
+	// Group today's logs by habit_id
+	logsByHabit := make(map[int64][]map[string]interface{})
+	for _, m := range todaysLogs {
+		hid := database.GetInt64(m, "habit_id")
+		logsByHabit[hid] = append(logsByHabit[hid], m)
+	}
 
 	habits := make([]map[string]interface{}, 0)
 	totalCompleted := 0
 	totalHabits := 0
 
-	for rows.Next() {
-		var name, description string
-		var completed, total int
-		if rows.Scan(&name, &description, &completed, &total) == nil {
-			habits = append(habits, map[string]interface{}{
-				"name":        name,
-				"description": description,
-				"completed":   completed,
-				"total":       total,
-			})
-			totalCompleted += completed
-			totalHabits++
+	for _, m := range allHabits {
+		habitID := database.GetInt64(m, "id")
+		name := database.GetString(m, "name")
+		description := database.GetString(m, "description")
+
+		habitLogs := logsByHabit[habitID]
+		completed := 0
+		total := len(habitLogs)
+		for _, lg := range habitLogs {
+			if database.GetBool(lg, "success") {
+				completed++
+			}
 		}
+
+		habits = append(habits, map[string]interface{}{
+			"name":        name,
+			"description": description,
+			"completed":   completed,
+			"total":       total,
+		})
+		totalCompleted += completed
+		totalHabits++
 	}
 
 	return map[string]interface{}{
@@ -446,61 +504,57 @@ func (h *HabitTracker) getOrCreateHabit(ctx context.Context, idosoID int64, name
 	category := h.getDefaultCategory(name)
 	now := time.Now()
 
-	// NietzscheDB first: MergeNode on "habits" collection
-	if h.vectorAdapter != nil {
-		_, _, mergeErr := h.vectorAdapter.MergeNode(ctx, "habits", "Habit",
-			map[string]interface{}{"name": name},
-			map[string]interface{}{
-				"name":           name,
-				"description":    description,
-				"category":       category,
-				"target_per_day": 1,
-				"active":         true,
-				"created_at":     now.Format(time.RFC3339),
-			})
-		if mergeErr != nil {
-			log.Printf("⚠️ [HABITS] NietzscheDB merge failed: %v", mergeErr)
-		}
+	content := map[string]interface{}{
+		"name":           name,
+		"description":    description,
+		"category":       category,
+		"target_per_day": 1,
+		"active":         true,
+		"created_at":     now.Format(time.RFC3339),
 	}
 
-	// PG write (dual-write for backward compat)
-	query := `
-		INSERT INTO habits (name, description, category, target_per_day, active, created_at)
-		VALUES ($1, $2, $3, 1, true, NOW())
-		ON CONFLICT (name) DO UPDATE SET active = true
-		RETURNING id, name, description, category, target_per_day, created_at, active
-	`
-
-	habit = &Habit{}
-	err = h.db.QueryRowContext(ctx, query, name, description, category).Scan(
-		&habit.ID, &habit.Name, &habit.Description, &habit.Category,
-		&habit.TargetPerDay, &habit.CreatedAt, &habit.Active,
-	)
+	id, err := h.db.Insert(ctx, "habits", content)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("erro ao criar hábito: %w", err)
+	}
+
+	habit = &Habit{
+		ID:           id,
+		Name:         name,
+		Description:  description,
+		Category:     category,
+		TargetPerDay: 1,
+		CreatedAt:    now,
+		Active:       true,
 	}
 
 	return habit, nil
 }
 
 func (h *HabitTracker) getHabitByName(ctx context.Context, idosoID int64, name string) (*Habit, error) {
-	query := `
-		SELECT id, name, description, category, target_per_day, created_at, active
-		FROM habits
-		WHERE name = $1 AND active = true
-		LIMIT 1
-	`
-
-	habit := &Habit{}
-	err := h.db.QueryRowContext(ctx, query, name).Scan(
-		&habit.ID, &habit.Name, &habit.Description, &habit.Category,
-		&habit.TargetPerDay, &habit.CreatedAt, &habit.Active,
-	)
+	rows, err := h.db.QueryByLabel(ctx, "habits",
+		" AND n.name = $name AND n.active = $active",
+		map[string]interface{}{
+			"name":   name,
+			"active": true,
+		}, 1)
 	if err != nil {
 		return nil, err
 	}
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("hábito não encontrado: %s", name)
+	}
 
-	return habit, nil
+	m := rows[0]
+	return &Habit{
+		ID:           database.GetInt64(m, "id"),
+		Name:         database.GetString(m, "name"),
+		Description:  database.GetString(m, "description"),
+		Category:     database.GetString(m, "category"),
+		TargetPerDay: int(database.GetInt64(m, "target_per_day")),
+		CreatedAt:    database.GetTime(m, "created_at"),
+		Active:       database.GetBool(m, "active"),
+	}, nil
 }
 
 func (h *HabitTracker) getTimeOfDay(t time.Time) string {
@@ -518,37 +572,44 @@ func (h *HabitTracker) getTimeOfDay(t time.Time) string {
 }
 
 func (h *HabitTracker) calculateStreak(ctx context.Context, habitID, idosoID int64) (current, longest int) {
-	query := `
-		SELECT logged_at::date, success
-		FROM habit_logs
-		WHERE habit_id = $1 AND idoso_id = $2
-		ORDER BY logged_at DESC
-		LIMIT 90
-	`
-
-	rows, err := h.db.QueryContext(ctx, query, habitID, idosoID)
+	// Fetch recent logs ordered by time (we sort in Go)
+	logs, err := h.db.QueryByLabel(ctx, "habit_logs",
+		" AND n.habit_id = $habit_id AND n.idoso_id = $idoso_id",
+		map[string]interface{}{
+			"habit_id": habitID,
+			"idoso_id": idosoID,
+		}, 0)
 	if err != nil {
 		return 0, 0
 	}
-	defer rows.Close()
 
-	var dates []struct {
+	type logEntry struct {
 		date    time.Time
 		success bool
 	}
 
-	for rows.Next() {
-		var d struct {
-			date    time.Time
-			success bool
+	var entries []logEntry
+	for _, m := range logs {
+		loggedAt := database.GetTime(m, "logged_at")
+		if loggedAt.IsZero() {
+			continue
 		}
-		if rows.Scan(&d.date, &d.success) == nil {
-			dates = append(dates, d)
-		}
+		entries = append(entries, logEntry{
+			date:    loggedAt,
+			success: database.GetBool(m, "success"),
+		})
+	}
+
+	// Sort descending by date (most recent first), limit to 90
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].date.After(entries[j].date)
+	})
+	if len(entries) > 90 {
+		entries = entries[:90]
 	}
 
 	// Calcular streak atual
-	for _, d := range dates {
+	for _, d := range entries {
 		if d.success {
 			current++
 		} else {
@@ -558,7 +619,7 @@ func (h *HabitTracker) calculateStreak(ctx context.Context, habitID, idosoID int
 
 	// Calcular maior streak
 	streak := 0
-	for _, d := range dates {
+	for _, d := range entries {
 		if d.success {
 			streak++
 			if streak > longest {
@@ -591,9 +652,12 @@ func (h *HabitTracker) updatePatterns(idosoID, habitID int64) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Buscar padrão atualizado
-	var habitName string
-	h.db.QueryRowContext(ctx, "SELECT name FROM habits WHERE id = $1", habitID).Scan(&habitName)
+	// Buscar nome do hábito pelo ID
+	habitNode, err := h.db.GetNodeByID(ctx, "habits", habitID)
+	if err != nil || habitNode == nil {
+		return
+	}
+	habitName := database.GetString(habitNode, "name")
 
 	pattern, err := h.GetPattern(ctx, idosoID, habitName)
 	if err != nil {
@@ -666,73 +730,51 @@ func (h *HabitTracker) ensureDefaultHabits() {
 	}
 
 	for _, d := range defaults {
-		// NietzscheDB first: MergeNode (idempotent)
-		if h.vectorAdapter != nil {
-			h.vectorAdapter.MergeNode(ctx, "habits", "Habit",
-				map[string]interface{}{"name": d.name},
-				map[string]interface{}{
-					"name":           d.name,
-					"description":    d.description,
-					"category":       d.category,
-					"target_per_day": d.target,
-					"active":         true,
-					"created_at":     time.Now().Format(time.RFC3339),
-				})
+		// Check if habit already exists
+		existing, err := h.db.QueryByLabel(ctx, "habits",
+			" AND n.name = $name",
+			map[string]interface{}{
+				"name": d.name,
+			}, 1)
+		if err != nil {
+			log.Printf("⚠️ [HABITS] Erro ao verificar hábito %s: %v", d.name, err)
+			continue
 		}
 
-		// PG dual-write
-		query := `
-			INSERT INTO habits (name, description, category, target_per_day, active, created_at)
-			VALUES ($1, $2, $3, $4, true, NOW())
-			ON CONFLICT (name) DO NOTHING
-		`
-		h.db.ExecContext(ctx, query, d.name, d.description, d.category, d.target)
+		if len(existing) > 0 {
+			// Already exists, ensure it is active
+			if !database.GetBool(existing[0], "active") {
+				_ = h.db.Update(ctx, "habits",
+					map[string]interface{}{"name": d.name},
+					map[string]interface{}{"active": true},
+				)
+			}
+			continue
+		}
+
+		// Insert new default habit
+		_, err = h.db.Insert(ctx, "habits", map[string]interface{}{
+			"name":           d.name,
+			"description":    d.description,
+			"category":       d.category,
+			"target_per_day": d.target,
+			"active":         true,
+			"created_at":     time.Now().Format(time.RFC3339),
+		})
+		if err != nil {
+			log.Printf("⚠️ [HABITS] Erro ao criar hábito padrão %s: %v", d.name, err)
+		}
 	}
 
 	log.Println("✅ [HABITS] Hábitos padrão verificados")
 }
 
 // ============================================================================
-// CRIAÇÃO DE TABELAS
+// CRIAÇÃO DE TABELAS (NO-OP para NietzscheDB)
 // ============================================================================
 
 func (h *HabitTracker) createTables() error {
-	query := `
-		CREATE TABLE IF NOT EXISTS habits (
-			id SERIAL PRIMARY KEY,
-			name VARCHAR(100) UNIQUE NOT NULL,
-			description TEXT,
-			category VARCHAR(50) DEFAULT 'general',
-			target_per_day INT DEFAULT 1,
-			reminder_times JSONB DEFAULT '[]',
-			active BOOLEAN DEFAULT true,
-			created_at TIMESTAMP DEFAULT NOW()
-		);
-
-		CREATE TABLE IF NOT EXISTS habit_logs (
-			id SERIAL PRIMARY KEY,
-			habit_id INT REFERENCES habits(id),
-			idoso_id BIGINT NOT NULL REFERENCES idosos(id),
-			success BOOLEAN NOT NULL,
-			logged_at TIMESTAMP DEFAULT NOW(),
-			day_of_week INT NOT NULL,
-			time_of_day VARCHAR(20),
-			source VARCHAR(50) DEFAULT 'voice',
-			notes TEXT,
-			metadata JSONB DEFAULT '{}'
-		);
-
-		CREATE INDEX IF NOT EXISTS idx_habit_logs_idoso ON habit_logs(idoso_id);
-		CREATE INDEX IF NOT EXISTS idx_habit_logs_habit ON habit_logs(habit_id);
-		CREATE INDEX IF NOT EXISTS idx_habit_logs_date ON habit_logs(logged_at);
-		CREATE INDEX IF NOT EXISTS idx_habit_logs_day ON habit_logs(day_of_week);
-	`
-
-	_, err := h.db.Exec(query)
-	if err != nil && !strings.Contains(err.Error(), "already exists") {
-		return err
-	}
-
-	log.Println("✅ [HABITS] Tabelas de hábitos verificadas/criadas")
+	// NietzscheDB is schemaless — no CREATE TABLE needed.
+	log.Println("✅ [HABITS] Tabelas de hábitos verificadas/criadas (NietzscheDB: schemaless)")
 	return nil
 }

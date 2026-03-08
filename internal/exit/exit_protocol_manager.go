@@ -4,11 +4,14 @@
 package exit
 
 import (
-	"database/sql"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"time"
+
+	"eva/internal/brainstem/database"
 )
 
 // ============================================================================
@@ -17,10 +20,10 @@ import (
 // Gerencia cuidados paliativos, qualidade de vida e preparação para despedida
 
 type ExitProtocolManager struct {
-	db *sql.DB
+	db *database.DB
 }
 
-func NewExitProtocolManager(db *sql.DB) *ExitProtocolManager {
+func NewExitProtocolManager(db *database.DB) *ExitProtocolManager {
 	return &ExitProtocolManager{db: db}
 }
 
@@ -51,22 +54,25 @@ type LastWishes struct {
 func (epm *ExitProtocolManager) CreateLastWishes(patientID int64) (*LastWishes, error) {
 	log.Printf("📝 [EXIT] Criando Last Wishes para paciente %d", patientID)
 
-	query := `
-		INSERT INTO last_wishes (patient_id)
-		VALUES ($1)
-		RETURNING id, patient_id, completion_percentage, completed
-	`
+	ctx := context.Background()
+	now := time.Now().Format(time.RFC3339)
 
-	lw := &LastWishes{}
-	err := epm.db.QueryRow(query, patientID).Scan(
-		&lw.ID,
-		&lw.PatientID,
-		&lw.CompletionPercentage,
-		&lw.Completed,
-	)
-
+	id, err := epm.db.Insert(ctx, "last_wishes", map[string]interface{}{
+		"patient_id":            patientID,
+		"completion_percentage": 0,
+		"completed":             false,
+		"created_at":            now,
+		"updated_at":            now,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("erro ao criar last wishes: %w", err)
+	}
+
+	lw := &LastWishes{
+		ID:                   fmt.Sprintf("%d", id),
+		PatientID:            patientID,
+		CompletionPercentage: 0,
+		Completed:            false,
 	}
 
 	log.Printf("✅ [EXIT] Last Wishes criado: ID=%s", lw.ID)
@@ -76,29 +82,14 @@ func (epm *ExitProtocolManager) CreateLastWishes(patientID int64) (*LastWishes, 
 func (epm *ExitProtocolManager) UpdateLastWishes(lastWishesID string, updates map[string]interface{}) error {
 	log.Printf("📝 [EXIT] Atualizando Last Wishes %s", lastWishesID)
 
-	// Construir query dinâmica
-	setClause := ""
-	args := []interface{}{}
-	argIndex := 1
+	ctx := context.Background()
 
-	for key, value := range updates {
-		if setClause != "" {
-			setClause += ", "
-		}
-		setClause += fmt.Sprintf("%s = $%d", key, argIndex)
-		args = append(args, value)
-		argIndex++
-	}
+	updates["last_reviewed_at"] = time.Now().Format(time.RFC3339)
 
-	args = append(args, lastWishesID)
-
-	query := fmt.Sprintf(`
-		UPDATE last_wishes
-		SET %s, last_reviewed_at = NOW()
-		WHERE id = $%d
-	`, setClause, argIndex)
-
-	_, err := epm.db.Exec(query, args...)
+	err := epm.db.Update(ctx, "last_wishes",
+		map[string]interface{}{"id": lastWishesID},
+		updates,
+	)
 	if err != nil {
 		return fmt.Errorf("erro ao atualizar last wishes: %w", err)
 	}
@@ -108,56 +99,32 @@ func (epm *ExitProtocolManager) UpdateLastWishes(lastWishesID string, updates ma
 }
 
 func (epm *ExitProtocolManager) GetLastWishes(patientID int64) (*LastWishes, error) {
-	query := `
-		SELECT
-			id, patient_id, resuscitation_preference, preferred_death_location,
-			pain_management_preference, organ_donation_preference, burial_cremation,
-			personal_statement, completion_percentage, completed
-		FROM last_wishes
-		WHERE patient_id = $1
-	`
+	ctx := context.Background()
 
-	lw := &LastWishes{}
-	var resuscitation, deathLocation, painMgmt, organDonation, burialCremation sql.NullString
-	var personalStatement sql.NullString
-
-	err := epm.db.QueryRow(query, patientID).Scan(
-		&lw.ID,
-		&lw.PatientID,
-		&resuscitation,
-		&deathLocation,
-		&painMgmt,
-		&organDonation,
-		&burialCremation,
-		&personalStatement,
-		&lw.CompletionPercentage,
-		&lw.Completed,
+	rows, err := epm.db.QueryByLabel(ctx, "last_wishes",
+		" AND n.patient_id = $pid",
+		map[string]interface{}{"pid": patientID},
+		1,
 	)
-
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("last wishes não encontrado para paciente %d", patientID)
-		}
 		return nil, err
 	}
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("last wishes não encontrado para paciente %d", patientID)
+	}
 
-	if resuscitation.Valid {
-		lw.ResuscitationPreference = resuscitation.String
-	}
-	if deathLocation.Valid {
-		lw.PreferredDeathLocation = deathLocation.String
-	}
-	if painMgmt.Valid {
-		lw.PainManagementPreference = painMgmt.String
-	}
-	if organDonation.Valid {
-		lw.OrganDonationPreference = organDonation.String
-	}
-	if burialCremation.Valid {
-		lw.BurialCremation = burialCremation.String
-	}
-	if personalStatement.Valid {
-		lw.PersonalStatement = personalStatement.String
+	m := rows[0]
+	lw := &LastWishes{
+		ID:                       fmt.Sprintf("%v", m["id"]),
+		PatientID:                database.GetInt64(m, "patient_id"),
+		ResuscitationPreference:  database.GetString(m, "resuscitation_preference"),
+		PreferredDeathLocation:   database.GetString(m, "preferred_death_location"),
+		PainManagementPreference: database.GetString(m, "pain_management_preference"),
+		OrganDonationPreference:  database.GetString(m, "organ_donation_preference"),
+		BurialCremation:          database.GetString(m, "burial_cremation"),
+		PersonalStatement:        database.GetString(m, "personal_statement"),
+		CompletionPercentage:     int(database.GetInt64(m, "completion_percentage")),
+		Completed:                database.GetBool(m, "completed"),
 	}
 
 	return lw, nil
@@ -168,139 +135,184 @@ func (epm *ExitProtocolManager) GetLastWishes(patientID int64) (*LastWishes, err
 // ============================================================================
 
 type QoLAssessment struct {
-	ID                         string
-	PatientID                  int64
-	AssessmentDate             time.Time
-	PhysicalDomainScore        float64
-	PsychologicalDomainScore   float64
-	SocialDomainScore          float64
-	EnvironmentalDomainScore   float64
-	OverallQoLScore            float64
-	OverallQualityOfLife       int
-	OverallHealthSatisfaction  int
+	ID                        string
+	PatientID                 int64
+	AssessmentDate            time.Time
+	PhysicalDomainScore       float64
+	PsychologicalDomainScore  float64
+	SocialDomainScore         float64
+	EnvironmentalDomainScore  float64
+	OverallQoLScore           float64
+	OverallQualityOfLife      int
+	OverallHealthSatisfaction int
+}
+
+// computeDomainScores calculates WHOQOL-BREF domain scores from individual question values.
+// Each domain score is the mean of its items, transformed to a 0-100 scale: ((mean - 1) / 4) * 100.
+func computeDomainScores(physical [7]int, psychological [6]int, social [3]int, environmental [8]int) (physScore, psychScore, socialScore, envScore, overallScore float64) {
+	mean := func(vals []int) float64 {
+		if len(vals) == 0 {
+			return 0
+		}
+		sum := 0
+		for _, v := range vals {
+			sum += v
+		}
+		return float64(sum) / float64(len(vals))
+	}
+	transform := func(m float64) float64 {
+		return ((m - 1) / 4) * 100
+	}
+
+	physScore = transform(mean(physical[:]))
+	psychScore = transform(mean(psychological[:]))
+	socialScore = transform(mean(social[:]))
+	envScore = transform(mean(environmental[:]))
+	overallScore = (physScore + psychScore + socialScore + envScore) / 4
+	return
 }
 
 func (epm *ExitProtocolManager) RecordQoLAssessment(assessment *QoLAssessment) error {
 	log.Printf("📊 [EXIT] Registrando avaliação WHOQOL-BREF para paciente %d", assessment.PatientID)
 
-	query := `
-		INSERT INTO quality_of_life_assessments (
-			patient_id,
-			physical_pain, energy_fatigue, sleep_quality, mobility, daily_activities,
-			medication_dependence, work_capacity,
-			positive_feelings, thinking_concentration, self_esteem, body_image,
-			negative_feelings, meaning_in_life,
-			personal_relationships, social_support, sexual_activity,
-			physical_safety, home_environment, financial_resources, healthcare_access,
-			information_access, leisure_opportunities, environment_quality, transportation,
-			overall_quality_of_life, overall_health_satisfaction,
-			administered_by, assessment_method
-		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-			$15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29
-		)
-		RETURNING id, physical_domain_score, psychological_domain_score,
-		          social_domain_score, environmental_domain_score, overall_qol_score
-	`
+	ctx := context.Background()
+	now := time.Now()
 
-	// Por simplicidade, vou usar valores padrão médios (3) para todas as questões
-	// Em produção, você coletaria todas as respostas do usuário
-	err := epm.db.QueryRow(query,
-		assessment.PatientID,
-		3, 3, 3, 3, 3, 3, 3, // Físico
-		3, 3, 3, 3, 3, 3, // Psicológico
-		3, 3, 3, // Social
-		3, 3, 3, 3, 3, 3, 3, 3, // Ambiental
-		assessment.OverallQualityOfLife,
-		assessment.OverallHealthSatisfaction,
-		"eva", "eva_assisted",
-	).Scan(
-		&assessment.ID,
-		&assessment.PhysicalDomainScore,
-		&assessment.PsychologicalDomainScore,
-		&assessment.SocialDomainScore,
-		&assessment.EnvironmentalDomainScore,
-		&assessment.OverallQoLScore,
+	// Default values (3) for all questions as per original code
+	physical := [7]int{3, 3, 3, 3, 3, 3, 3}
+	psychological := [6]int{3, 3, 3, 3, 3, 3}
+	social := [3]int{3, 3, 3}
+	environmental := [8]int{3, 3, 3, 3, 3, 3, 3, 3}
+
+	physScore, psychScore, socialScore, envScore, overallScore := computeDomainScores(
+		physical, psychological, social, environmental,
 	)
 
+	assessment.PhysicalDomainScore = physScore
+	assessment.PsychologicalDomainScore = psychScore
+	assessment.SocialDomainScore = socialScore
+	assessment.EnvironmentalDomainScore = envScore
+	assessment.OverallQoLScore = overallScore
+	assessment.AssessmentDate = now
+
+	id, err := epm.db.Insert(ctx, "quality_of_life_assessments", map[string]interface{}{
+		"patient_id":                 assessment.PatientID,
+		"assessment_date":            now.Format(time.RFC3339),
+		"physical_pain":              3,
+		"energy_fatigue":             3,
+		"sleep_quality":              3,
+		"mobility":                   3,
+		"daily_activities":           3,
+		"medication_dependence":      3,
+		"work_capacity":              3,
+		"positive_feelings":          3,
+		"thinking_concentration":     3,
+		"self_esteem":                3,
+		"body_image":                 3,
+		"negative_feelings":          3,
+		"meaning_in_life":            3,
+		"personal_relationships":     3,
+		"social_support":             3,
+		"sexual_activity":            3,
+		"physical_safety":            3,
+		"home_environment":           3,
+		"financial_resources":        3,
+		"healthcare_access":          3,
+		"information_access":         3,
+		"leisure_opportunities":      3,
+		"environment_quality":        3,
+		"transportation":             3,
+		"overall_quality_of_life":    assessment.OverallQualityOfLife,
+		"overall_health_satisfaction": assessment.OverallHealthSatisfaction,
+		"administered_by":            "eva",
+		"assessment_method":          "eva_assisted",
+		"physical_domain_score":      physScore,
+		"psychological_domain_score": psychScore,
+		"social_domain_score":        socialScore,
+		"environmental_domain_score": envScore,
+		"overall_qol_score":          overallScore,
+	})
 	if err != nil {
 		return fmt.Errorf("erro ao registrar QoL: %w", err)
 	}
+
+	assessment.ID = fmt.Sprintf("%d", id)
 
 	log.Printf("✅ [EXIT] QoL registrado: Overall=%.1f", assessment.OverallQoLScore)
 	return nil
 }
 
 func (epm *ExitProtocolManager) GetLatestQoL(patientID int64) (*QoLAssessment, error) {
-	query := `
-		SELECT
-			id, patient_id, assessment_date,
-			physical_domain_score, psychological_domain_score,
-			social_domain_score, environmental_domain_score,
-			overall_qol_score,
-			overall_quality_of_life, overall_health_satisfaction
-		FROM quality_of_life_assessments
-		WHERE patient_id = $1
-		ORDER BY assessment_date DESC
-		LIMIT 1
-	`
+	ctx := context.Background()
 
-	qol := &QoLAssessment{}
-	err := epm.db.QueryRow(query, patientID).Scan(
-		&qol.ID,
-		&qol.PatientID,
-		&qol.AssessmentDate,
-		&qol.PhysicalDomainScore,
-		&qol.PsychologicalDomainScore,
-		&qol.SocialDomainScore,
-		&qol.EnvironmentalDomainScore,
-		&qol.OverallQoLScore,
-		&qol.OverallQualityOfLife,
-		&qol.OverallHealthSatisfaction,
+	rows, err := epm.db.QueryByLabel(ctx, "quality_of_life_assessments",
+		" AND n.patient_id = $pid",
+		map[string]interface{}{"pid": patientID},
+		0,
 	)
-
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("nenhuma avaliação QoL encontrada para paciente %d", patientID)
-		}
 		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("nenhuma avaliação QoL encontrada para paciente %d", patientID)
+	}
+
+	// Sort by assessment_date DESC and pick the latest
+	sort.Slice(rows, func(i, j int) bool {
+		ti := database.GetTime(rows[i], "assessment_date")
+		tj := database.GetTime(rows[j], "assessment_date")
+		return ti.After(tj)
+	})
+
+	m := rows[0]
+	qol := &QoLAssessment{
+		ID:                        fmt.Sprintf("%v", m["id"]),
+		PatientID:                 database.GetInt64(m, "patient_id"),
+		AssessmentDate:            database.GetTime(m, "assessment_date"),
+		PhysicalDomainScore:       database.GetFloat64(m, "physical_domain_score"),
+		PsychologicalDomainScore:  database.GetFloat64(m, "psychological_domain_score"),
+		SocialDomainScore:         database.GetFloat64(m, "social_domain_score"),
+		EnvironmentalDomainScore:  database.GetFloat64(m, "environmental_domain_score"),
+		OverallQoLScore:           database.GetFloat64(m, "overall_qol_score"),
+		OverallQualityOfLife:      int(database.GetInt64(m, "overall_quality_of_life")),
+		OverallHealthSatisfaction: int(database.GetInt64(m, "overall_health_satisfaction")),
 	}
 
 	return qol, nil
 }
 
 func (epm *ExitProtocolManager) GetQoLTrend(patientID int64, days int) ([]QoLAssessment, error) {
-	query := `
-		SELECT
-			id, assessment_date, overall_qol_score,
-			physical_domain_score, psychological_domain_score
-		FROM quality_of_life_assessments
-		WHERE patient_id = $1
-		  AND assessment_date > NOW() - INTERVAL '%d days'
-		ORDER BY assessment_date ASC
-	`
+	ctx := context.Background()
 
-	rows, err := epm.db.Query(fmt.Sprintf(query, days), patientID)
+	rows, err := epm.db.QueryByLabel(ctx, "quality_of_life_assessments",
+		" AND n.patient_id = $pid",
+		map[string]interface{}{"pid": patientID},
+		0,
+	)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	assessments := []QoLAssessment{}
-	for rows.Next() {
-		var qol QoLAssessment
-		err := rows.Scan(
-			&qol.ID,
-			&qol.AssessmentDate,
-			&qol.OverallQoLScore,
-			&qol.PhysicalDomainScore,
-			&qol.PsychologicalDomainScore,
-		)
-		if err != nil {
-			continue
+	cutoff := time.Now().AddDate(0, 0, -days)
+
+	var assessments []QoLAssessment
+	for _, m := range rows {
+		assessmentDate := database.GetTime(m, "assessment_date")
+		if assessmentDate.After(cutoff) {
+			assessments = append(assessments, QoLAssessment{
+				ID:                       fmt.Sprintf("%v", m["id"]),
+				AssessmentDate:           assessmentDate,
+				OverallQoLScore:          database.GetFloat64(m, "overall_qol_score"),
+				PhysicalDomainScore:      database.GetFloat64(m, "physical_domain_score"),
+				PsychologicalDomainScore: database.GetFloat64(m, "psychological_domain_score"),
+			})
 		}
-		assessments = append(assessments, qol)
 	}
+
+	// Sort by assessment_date ASC
+	sort.Slice(assessments, func(i, j int) bool {
+		return assessments[i].AssessmentDate.Before(assessments[j].AssessmentDate)
+	})
 
 	return assessments, nil
 }
@@ -310,67 +322,59 @@ func (epm *ExitProtocolManager) GetQoLTrend(patientID int64, days int) ([]QoLAss
 // ============================================================================
 
 type PainLog struct {
-	ID                   string
-	PatientID            int64
-	LogTimestamp         time.Time
-	PainPresent          bool
-	PainIntensity        int
-	PainLocation         []string
-	PainQuality          []string
-	NauseaVomiting       int
-	ShortnessOfBreath    int
-	Fatigue              int
-	AnxietyLevel         int
-	DepressionLevel      int
-	OverallWellbeing     int
-	MedicationsTaken     []string
+	ID                        string
+	PatientID                 int64
+	LogTimestamp               time.Time
+	PainPresent               bool
+	PainIntensity             int
+	PainLocation              []string
+	PainQuality               []string
+	NauseaVomiting            int
+	ShortnessOfBreath         int
+	Fatigue                   int
+	AnxietyLevel              int
+	DepressionLevel           int
+	OverallWellbeing          int
+	MedicationsTaken          []string
 	InterventionEffectiveness int
-	ReportedBy           string
+	ReportedBy                string
 }
 
-func (epm *ExitProtocolManager) LogPainSymptoms(log *PainLog) error {
-	log.LogTimestamp = time.Now()
+func (epm *ExitProtocolManager) LogPainSymptoms(pl *PainLog) error {
+	pl.LogTimestamp = time.Now()
 
-	query := `
-		INSERT INTO pain_symptom_logs (
-			patient_id, pain_present, pain_intensity,
-			pain_location, pain_quality,
-			nausea_vomiting, shortness_of_breath, fatigue,
-			anxiety_level, depression_level, overall_wellbeing,
-			medications_taken, intervention_effectiveness,
-			reported_by
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-		RETURNING id
-	`
+	ctx := context.Background()
 
-	painLocationJSON, _ := json.Marshal(log.PainLocation)
-	painQualityJSON, _ := json.Marshal(log.PainQuality)
-	medicationsJSON, _ := json.Marshal(log.MedicationsTaken)
+	painLocationJSON, _ := json.Marshal(pl.PainLocation)
+	painQualityJSON, _ := json.Marshal(pl.PainQuality)
+	medicationsJSON, _ := json.Marshal(pl.MedicationsTaken)
 
-	err := epm.db.QueryRow(query,
-		log.PatientID,
-		log.PainPresent,
-		log.PainIntensity,
-		painLocationJSON,
-		painQualityJSON,
-		log.NauseaVomiting,
-		log.ShortnessOfBreath,
-		log.Fatigue,
-		log.AnxietyLevel,
-		log.DepressionLevel,
-		log.OverallWellbeing,
-		medicationsJSON,
-		log.InterventionEffectiveness,
-		log.ReportedBy,
-	).Scan(&log.ID)
-
+	id, err := epm.db.Insert(ctx, "pain_symptom_logs", map[string]interface{}{
+		"patient_id":                 pl.PatientID,
+		"log_timestamp":              pl.LogTimestamp.Format(time.RFC3339),
+		"pain_present":               pl.PainPresent,
+		"pain_intensity":             pl.PainIntensity,
+		"pain_location":              string(painLocationJSON),
+		"pain_quality":               string(painQualityJSON),
+		"nausea_vomiting":            pl.NauseaVomiting,
+		"shortness_of_breath":        pl.ShortnessOfBreath,
+		"fatigue":                    pl.Fatigue,
+		"anxiety_level":              pl.AnxietyLevel,
+		"depression_level":           pl.DepressionLevel,
+		"overall_wellbeing":          pl.OverallWellbeing,
+		"medications_taken":          string(medicationsJSON),
+		"intervention_effectiveness": pl.InterventionEffectiveness,
+		"reported_by":                pl.ReportedBy,
+	})
 	if err != nil {
 		return fmt.Errorf("erro ao registrar dor: %w", err)
 	}
 
+	pl.ID = fmt.Sprintf("%d", id)
+
 	// Alertar se dor severa
-	if log.PainIntensity >= 7 {
-		epm.handleSeverePainAlert(log)
+	if pl.PainIntensity >= 7 {
+		epm.handleSeverePainAlert(pl)
 	}
 
 	return nil
@@ -391,36 +395,42 @@ func (epm *ExitProtocolManager) handleSeverePainAlert(painLog *PainLog) {
 }
 
 func (epm *ExitProtocolManager) GetRecentPainLogs(patientID int64, hours int) ([]PainLog, error) {
-	query := `
-		SELECT
-			id, log_timestamp, pain_present, pain_intensity,
-			nausea_vomiting, shortness_of_breath, fatigue,
-			anxiety_level, depression_level, overall_wellbeing
-		FROM pain_symptom_logs
-		WHERE patient_id = $1
-		  AND log_timestamp > NOW() - INTERVAL '%d hours'
-		ORDER BY log_timestamp DESC
-	`
+	ctx := context.Background()
 
-	rows, err := epm.db.Query(fmt.Sprintf(query, hours), patientID)
+	rows, err := epm.db.QueryByLabel(ctx, "pain_symptom_logs",
+		" AND n.patient_id = $pid",
+		map[string]interface{}{"pid": patientID},
+		0,
+	)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	logs := []PainLog{}
-	for rows.Next() {
-		var pl PainLog
-		err := rows.Scan(
-			&pl.ID, &pl.LogTimestamp, &pl.PainPresent, &pl.PainIntensity,
-			&pl.NauseaVomiting, &pl.ShortnessOfBreath, &pl.Fatigue,
-			&pl.AnxietyLevel, &pl.DepressionLevel, &pl.OverallWellbeing,
-		)
-		if err != nil {
-			continue
+	cutoff := time.Now().Add(-time.Duration(hours) * time.Hour)
+
+	var logs []PainLog
+	for _, m := range rows {
+		logTime := database.GetTime(m, "log_timestamp")
+		if logTime.After(cutoff) {
+			logs = append(logs, PainLog{
+				ID:                fmt.Sprintf("%v", m["id"]),
+				LogTimestamp:       logTime,
+				PainPresent:       database.GetBool(m, "pain_present"),
+				PainIntensity:     int(database.GetInt64(m, "pain_intensity")),
+				NauseaVomiting:    int(database.GetInt64(m, "nausea_vomiting")),
+				ShortnessOfBreath: int(database.GetInt64(m, "shortness_of_breath")),
+				Fatigue:           int(database.GetInt64(m, "fatigue")),
+				AnxietyLevel:      int(database.GetInt64(m, "anxiety_level")),
+				DepressionLevel:   int(database.GetInt64(m, "depression_level")),
+				OverallWellbeing:  int(database.GetInt64(m, "overall_wellbeing")),
+			})
 		}
-		logs = append(logs, pl)
 	}
+
+	// Sort by log_timestamp DESC
+	sort.Slice(logs, func(i, j int) bool {
+		return logs[i].LogTimestamp.After(logs[j].LogTimestamp)
+	})
 
 	return logs, nil
 }
@@ -430,89 +440,100 @@ func (epm *ExitProtocolManager) GetRecentPainLogs(patientID int64, hours int) ([
 // ============================================================================
 
 type LegacyMessage struct {
-	ID                   string
-	PatientID            int64
-	RecipientName        string
+	ID                    string
+	PatientID             int64
+	RecipientName         string
 	RecipientRelationship string
-	MessageType          string
-	TextContent          string
-	DeliveryTrigger      string
-	DeliveryDate         *time.Time
-	IsComplete           bool
-	HasBeenDelivered     bool
-	EmotionalTone        string
-	Topics               []string
+	MessageType           string
+	TextContent           string
+	DeliveryTrigger       string
+	DeliveryDate          *time.Time
+	IsComplete            bool
+	HasBeenDelivered      bool
+	EmotionalTone         string
+	Topics                []string
 }
 
 func (epm *ExitProtocolManager) CreateLegacyMessage(msg *LegacyMessage) error {
 	log.Printf("💌 [EXIT] Criando mensagem de legado para %s (paciente %d)",
 		msg.RecipientName, msg.PatientID)
 
-	query := `
-		INSERT INTO legacy_messages (
-			patient_id, recipient_name, recipient_relationship,
-			message_type, text_content, delivery_trigger,
-			delivery_date, emotional_tone, topics
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		RETURNING id
-	`
+	ctx := context.Background()
+	now := time.Now().Format(time.RFC3339)
 
 	topicsJSON, _ := json.Marshal(msg.Topics)
 
-	err := epm.db.QueryRow(query,
-		msg.PatientID,
-		msg.RecipientName,
-		msg.RecipientRelationship,
-		msg.MessageType,
-		msg.TextContent,
-		msg.DeliveryTrigger,
-		msg.DeliveryDate,
-		msg.EmotionalTone,
-		topicsJSON,
-	).Scan(&msg.ID)
+	content := map[string]interface{}{
+		"patient_id":              msg.PatientID,
+		"recipient_name":         msg.RecipientName,
+		"recipient_relationship": msg.RecipientRelationship,
+		"message_type":           msg.MessageType,
+		"text_content":           msg.TextContent,
+		"delivery_trigger":       msg.DeliveryTrigger,
+		"emotional_tone":         msg.EmotionalTone,
+		"topics":                 string(topicsJSON),
+		"is_complete":            false,
+		"has_been_delivered":     false,
+		"created_at":             now,
+		"updated_at":             now,
+	}
 
+	if msg.DeliveryDate != nil {
+		content["delivery_date"] = msg.DeliveryDate.Format(time.RFC3339)
+	}
+
+	id, err := epm.db.Insert(ctx, "legacy_messages", content)
 	if err != nil {
 		return fmt.Errorf("erro ao criar legacy message: %w", err)
 	}
+
+	msg.ID = fmt.Sprintf("%d", id)
 
 	log.Printf("✅ [EXIT] Mensagem de legado criada: ID=%s", msg.ID)
 	return nil
 }
 
 func (epm *ExitProtocolManager) MarkLegacyMessageComplete(messageID string) error {
-	query := `UPDATE legacy_messages SET is_complete = TRUE, updated_at = NOW() WHERE id = $1`
-	_, err := epm.db.Exec(query, messageID)
-	return err
+	ctx := context.Background()
+	return epm.db.Update(ctx, "legacy_messages",
+		map[string]interface{}{"id": messageID},
+		map[string]interface{}{
+			"is_complete": true,
+			"updated_at":  time.Now().Format(time.RFC3339),
+		},
+	)
 }
 
 func (epm *ExitProtocolManager) GetLegacyMessages(patientID int64) ([]LegacyMessage, error) {
-	query := `
-		SELECT
-			id, recipient_name, recipient_relationship, message_type,
-			delivery_trigger, is_complete, has_been_delivered
-		FROM legacy_messages
-		WHERE patient_id = $1
-		ORDER BY created_at ASC
-	`
+	ctx := context.Background()
 
-	rows, err := epm.db.Query(query, patientID)
+	rows, err := epm.db.QueryByLabel(ctx, "legacy_messages",
+		" AND n.patient_id = $pid",
+		map[string]interface{}{"pid": patientID},
+		0,
+	)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	messages := []LegacyMessage{}
-	for rows.Next() {
-		var msg LegacyMessage
-		err := rows.Scan(
-			&msg.ID, &msg.RecipientName, &msg.RecipientRelationship,
-			&msg.MessageType, &msg.DeliveryTrigger,
-			&msg.IsComplete, &msg.HasBeenDelivered,
-		)
-		if err != nil {
-			continue
-		}
-		messages = append(messages, msg)
+	// Sort by created_at ASC
+	sort.Slice(rows, func(i, j int) bool {
+		ti := database.GetTime(rows[i], "created_at")
+		tj := database.GetTime(rows[j], "created_at")
+		return ti.Before(tj)
+	})
+
+	var messages []LegacyMessage
+	for _, m := range rows {
+		messages = append(messages, LegacyMessage{
+			ID:                    fmt.Sprintf("%v", m["id"]),
+			RecipientName:         database.GetString(m, "recipient_name"),
+			RecipientRelationship: database.GetString(m, "recipient_relationship"),
+			MessageType:           database.GetString(m, "message_type"),
+			DeliveryTrigger:       database.GetString(m, "delivery_trigger"),
+			IsComplete:            database.GetBool(m, "is_complete"),
+			HasBeenDelivered:      database.GetBool(m, "has_been_delivered"),
+		})
 	}
 
 	return messages, nil
@@ -545,17 +566,28 @@ type FarewellPreparation struct {
 func (epm *ExitProtocolManager) CreateFarewellPreparation(patientID int64) (*FarewellPreparation, error) {
 	log.Printf("🕊️ [EXIT] Iniciando preparação para despedida (paciente %d)", patientID)
 
-	query := `
-		INSERT INTO farewell_preparation (patient_id, five_stages_grief_position)
-		VALUES ($1, 'denial')
-		RETURNING id
-	`
+	ctx := context.Background()
+	now := time.Now().Format(time.RFC3339)
 
-	fp := &FarewellPreparation{PatientID: patientID}
-	err := epm.db.QueryRow(query, patientID).Scan(&fp.ID)
-
+	id, err := epm.db.Insert(ctx, "farewell_preparation", map[string]interface{}{
+		"patient_id":                  patientID,
+		"five_stages_grief_position":  "denial",
+		"legal_affairs_complete":      false,
+		"financial_affairs_complete":  false,
+		"funeral_arrangements_complete": false,
+		"peace_with_life":             false,
+		"peace_with_death":            false,
+		"created_at":                  now,
+		"last_updated":                now,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("erro ao criar farewell preparation: %w", err)
+	}
+
+	fp := &FarewellPreparation{
+		ID:                      fmt.Sprintf("%d", id),
+		PatientID:               patientID,
+		FiveStagesGriefPosition: "denial",
 	}
 
 	log.Printf("✅ [EXIT] Farewell Preparation criado: ID=%s", fp.ID)
@@ -563,75 +595,44 @@ func (epm *ExitProtocolManager) CreateFarewellPreparation(patientID int64) (*Far
 }
 
 func (epm *ExitProtocolManager) UpdateFarewellPreparation(patientID int64, updates map[string]interface{}) error {
-	// Similar à UpdateLastWishes, construir query dinâmica
-	setClause := ""
-	args := []interface{}{}
-	argIndex := 1
+	ctx := context.Background()
 
-	for key, value := range updates {
-		if setClause != "" {
-			setClause += ", "
-		}
-		setClause += fmt.Sprintf("%s = $%d", key, argIndex)
-		args = append(args, value)
-		argIndex++
-	}
+	updates["last_updated"] = time.Now().Format(time.RFC3339)
 
-	args = append(args, patientID)
-
-	query := fmt.Sprintf(`
-		UPDATE farewell_preparation
-		SET %s, last_updated = NOW()
-		WHERE patient_id = $%d
-	`, setClause, argIndex)
-
-	_, err := epm.db.Exec(query, args...)
-	return err
+	return epm.db.Update(ctx, "farewell_preparation",
+		map[string]interface{}{"patient_id": patientID},
+		updates,
+	)
 }
 
 func (epm *ExitProtocolManager) GetFarewellPreparation(patientID int64) (*FarewellPreparation, error) {
-	query := `
-		SELECT
-			id, patient_id, legal_affairs_complete, financial_affairs_complete,
-			funeral_arrangements_complete, five_stages_grief_position,
-			emotional_readiness, spiritual_readiness, overall_preparation_score,
-			peace_with_life, peace_with_death
-		FROM farewell_preparation
-		WHERE patient_id = $1
-	`
+	ctx := context.Background()
 
-	fp := &FarewellPreparation{}
-	var emotionalReadiness, spiritualReadiness, overallScore sql.NullInt64
-
-	err := epm.db.QueryRow(query, patientID).Scan(
-		&fp.ID,
-		&fp.PatientID,
-		&fp.LegalAffairsComplete,
-		&fp.FinancialAffairsComplete,
-		&fp.FuneralArrangementsComplete,
-		&fp.FiveStagesGriefPosition,
-		&emotionalReadiness,
-		&spiritualReadiness,
-		&overallScore,
-		&fp.PeaceWithLife,
-		&fp.PeaceWithDeath,
+	rows, err := epm.db.QueryByLabel(ctx, "farewell_preparation",
+		" AND n.patient_id = $pid",
+		map[string]interface{}{"pid": patientID},
+		1,
 	)
-
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("farewell preparation não encontrado")
-		}
 		return nil, err
 	}
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("farewell preparation não encontrado")
+	}
 
-	if emotionalReadiness.Valid {
-		fp.EmotionalReadiness = int(emotionalReadiness.Int64)
-	}
-	if spiritualReadiness.Valid {
-		fp.SpiritualReadiness = int(spiritualReadiness.Int64)
-	}
-	if overallScore.Valid {
-		fp.OverallPreparationScore = int(overallScore.Int64)
+	m := rows[0]
+	fp := &FarewellPreparation{
+		ID:                          fmt.Sprintf("%v", m["id"]),
+		PatientID:                   database.GetInt64(m, "patient_id"),
+		LegalAffairsComplete:        database.GetBool(m, "legal_affairs_complete"),
+		FinancialAffairsComplete:    database.GetBool(m, "financial_affairs_complete"),
+		FuneralArrangementsComplete: database.GetBool(m, "funeral_arrangements_complete"),
+		FiveStagesGriefPosition:     database.GetString(m, "five_stages_grief_position"),
+		EmotionalReadiness:          int(database.GetInt64(m, "emotional_readiness")),
+		SpiritualReadiness:          int(database.GetInt64(m, "spiritual_readiness")),
+		OverallPreparationScore:     int(database.GetInt64(m, "overall_preparation_score")),
+		PeaceWithLife:               database.GetBool(m, "peace_with_life"),
+		PeaceWithDeath:              database.GetBool(m, "peace_with_death"),
 	}
 
 	return fp, nil
@@ -662,79 +663,111 @@ func (epm *ExitProtocolManager) CreateComfortCarePlan(plan *ComfortCarePlan) err
 	log.Printf("📋 [EXIT] Criando Comfort Care Plan para %s (paciente %d)",
 		plan.TriggerSymptom, plan.PatientID)
 
+	ctx := context.Background()
+
 	interventionsJSON, _ := json.Marshal(plan.Interventions)
 
-	query := `
-		INSERT INTO comfort_care_plans (
-			patient_id, trigger_symptom, trigger_threshold,
-			interventions, is_active
-		) VALUES ($1, $2, $3, $4, $5)
-		RETURNING id
-	`
-
-	err := epm.db.QueryRow(query,
-		plan.PatientID,
-		plan.TriggerSymptom,
-		plan.TriggerThreshold,
-		interventionsJSON,
-		plan.IsActive,
-	).Scan(&plan.ID)
-
+	id, err := epm.db.Insert(ctx, "comfort_care_plans", map[string]interface{}{
+		"patient_id":        plan.PatientID,
+		"trigger_symptom":   plan.TriggerSymptom,
+		"trigger_threshold": plan.TriggerThreshold,
+		"interventions":     string(interventionsJSON),
+		"is_active":         plan.IsActive,
+		"times_used":        0,
+		"created_at":        time.Now().Format(time.RFC3339),
+	})
 	if err != nil {
 		return fmt.Errorf("erro ao criar comfort care plan: %w", err)
 	}
+
+	plan.ID = fmt.Sprintf("%d", id)
 
 	log.Printf("✅ [EXIT] Comfort Care Plan criado: ID=%s", plan.ID)
 	return nil
 }
 
 func (epm *ExitProtocolManager) GetComfortCarePlan(patientID int64, symptom string) (*ComfortCarePlan, error) {
-	query := `
-		SELECT id, patient_id, trigger_symptom, trigger_threshold, interventions, times_used
-		FROM comfort_care_plans
-		WHERE patient_id = $1 AND trigger_symptom = $2 AND is_active = TRUE
-		LIMIT 1
-	`
+	ctx := context.Background()
 
-	plan := &ComfortCarePlan{}
-	var interventionsJSON []byte
-
-	err := epm.db.QueryRow(query, patientID, symptom).Scan(
-		&plan.ID,
-		&plan.PatientID,
-		&plan.TriggerSymptom,
-		&plan.TriggerThreshold,
-		&interventionsJSON,
-		&plan.TimesUsed,
+	rows, err := epm.db.QueryByLabel(ctx, "comfort_care_plans",
+		" AND n.patient_id = $pid AND n.trigger_symptom = $symptom",
+		map[string]interface{}{
+			"pid":     patientID,
+			"symptom": symptom,
+		},
+		0,
 	)
-
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil // Nenhum plano encontrado (não é erro)
-		}
 		return nil, err
 	}
 
-	// Parse interventions
-	json.Unmarshal(interventionsJSON, &plan.Interventions)
+	// Filter for is_active = true in Go and pick first match
+	for _, m := range rows {
+		if !database.GetBool(m, "is_active") {
+			continue
+		}
 
-	return plan, nil
+		plan := &ComfortCarePlan{
+			ID:               fmt.Sprintf("%v", m["id"]),
+			PatientID:        database.GetInt64(m, "patient_id"),
+			TriggerSymptom:   database.GetString(m, "trigger_symptom"),
+			TriggerThreshold: int(database.GetInt64(m, "trigger_threshold")),
+			TimesUsed:        int(database.GetInt64(m, "times_used")),
+			IsActive:         true,
+		}
+
+		// Parse interventions JSON
+		interventionsStr := database.GetString(m, "interventions")
+		if interventionsStr != "" {
+			json.Unmarshal([]byte(interventionsStr), &plan.Interventions)
+		}
+
+		return plan, nil
+	}
+
+	return nil, nil // Nenhum plano encontrado (não é erro)
 }
 
 func (epm *ExitProtocolManager) IncrementComfortCarePlanUsage(planID string, effectiveness int) error {
-	query := `
-		UPDATE comfort_care_plans
-		SET times_used = times_used + 1,
-		    last_used = NOW(),
-		    average_effectiveness = COALESCE(
-		        (average_effectiveness * times_used + $2) / (times_used + 1),
-		        $2
-		    )
-		WHERE id = $1
-	`
+	ctx := context.Background()
 
-	_, err := epm.db.Exec(query, planID, effectiveness)
-	return err
+	// First, read the current node to compute new average
+	rows, err := epm.db.QueryByLabel(ctx, "comfort_care_plans",
+		" AND n.id = $planid",
+		map[string]interface{}{"planid": planID},
+		1,
+	)
+	if err != nil {
+		return err
+	}
+
+	var newTimesUsed int
+	var newAvgEffectiveness float64
+
+	if len(rows) > 0 {
+		m := rows[0]
+		timesUsed := int(database.GetInt64(m, "times_used"))
+		avgEff := database.GetFloat64(m, "average_effectiveness")
+
+		newTimesUsed = timesUsed + 1
+		if timesUsed == 0 {
+			newAvgEffectiveness = float64(effectiveness)
+		} else {
+			newAvgEffectiveness = (avgEff*float64(timesUsed) + float64(effectiveness)) / float64(newTimesUsed)
+		}
+	} else {
+		newTimesUsed = 1
+		newAvgEffectiveness = float64(effectiveness)
+	}
+
+	return epm.db.Update(ctx, "comfort_care_plans",
+		map[string]interface{}{"id": planID},
+		map[string]interface{}{
+			"times_used":              newTimesUsed,
+			"last_used":               time.Now().Format(time.RFC3339),
+			"average_effectiveness":   newAvgEffectiveness,
+		},
+	)
 }
 
 // ============================================================================
@@ -742,56 +775,48 @@ func (epm *ExitProtocolManager) IncrementComfortCarePlanUsage(planID string, eff
 // ============================================================================
 
 type SpiritualCareSession struct {
-	ID                      string
-	PatientID               int64
-	SessionDate             time.Time
-	ConductedBy             string
-	ConductorName           string
-	TopicsDiscussed         []string
-	PracticesPerformed      []string
-	PreSessionPeaceLevel    int
-	PostSessionPeaceLevel   int
+	ID                       string
+	PatientID                int64
+	SessionDate              time.Time
+	ConductedBy              string
+	ConductorName            string
+	TopicsDiscussed          []string
+	PracticesPerformed       []string
+	PreSessionPeaceLevel     int
+	PostSessionPeaceLevel    int
 	SpiritualNeedsIdentified []string
-	FollowUpNeeded          bool
-	DurationMinutes         int
+	FollowUpNeeded           bool
+	DurationMinutes          int
 }
 
 func (epm *ExitProtocolManager) RecordSpiritualCareSession(session *SpiritualCareSession) error {
 	log.Printf("🕊️ [EXIT] Registrando sessão de cuidado espiritual (paciente %d)", session.PatientID)
 
+	ctx := context.Background()
 	session.SessionDate = time.Now()
 
 	topicsJSON, _ := json.Marshal(session.TopicsDiscussed)
 	practicesJSON, _ := json.Marshal(session.PracticesPerformed)
 	needsJSON, _ := json.Marshal(session.SpiritualNeedsIdentified)
 
-	query := `
-		INSERT INTO spiritual_care_sessions (
-			patient_id, conducted_by, conductor_name,
-			topics_discussed, practices_performed,
-			pre_session_peace_level, post_session_peace_level,
-			spiritual_needs_identified, follow_up_needed,
-			duration_minutes
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		RETURNING id
-	`
-
-	err := epm.db.QueryRow(query,
-		session.PatientID,
-		session.ConductedBy,
-		session.ConductorName,
-		topicsJSON,
-		practicesJSON,
-		session.PreSessionPeaceLevel,
-		session.PostSessionPeaceLevel,
-		needsJSON,
-		session.FollowUpNeeded,
-		session.DurationMinutes,
-	).Scan(&session.ID)
-
+	id, err := epm.db.Insert(ctx, "spiritual_care_sessions", map[string]interface{}{
+		"patient_id":                session.PatientID,
+		"session_date":              session.SessionDate.Format(time.RFC3339),
+		"conducted_by":              session.ConductedBy,
+		"conductor_name":            session.ConductorName,
+		"topics_discussed":          string(topicsJSON),
+		"practices_performed":       string(practicesJSON),
+		"pre_session_peace_level":   session.PreSessionPeaceLevel,
+		"post_session_peace_level":  session.PostSessionPeaceLevel,
+		"spiritual_needs_identified": string(needsJSON),
+		"follow_up_needed":          session.FollowUpNeeded,
+		"duration_minutes":          session.DurationMinutes,
+	})
 	if err != nil {
 		return fmt.Errorf("erro ao registrar sessão espiritual: %w", err)
 	}
+
+	session.ID = fmt.Sprintf("%d", id)
 
 	peaceDelta := session.PostSessionPeaceLevel - session.PreSessionPeaceLevel
 	log.Printf("✅ [EXIT] Sessão espiritual registrada: Peace Δ=%+d", peaceDelta)
@@ -804,86 +829,79 @@ func (epm *ExitProtocolManager) RecordSpiritualCareSession(session *SpiritualCar
 // ============================================================================
 
 type PalliativeSummary struct {
-	PatientID                 int64
-	PatientName               string
-	Age                       int
-	LastWishesCompletion      int
-	ResuscitationPreference   string
-	OverallQoLScore           float64
-	AvgPain7Days              float64
-	MaxPain7Days              int
-	EmotionalReadiness        int
-	SpiritualReadiness        int
-	LegacyMessagesCompleted   int
-	LegacyMessagesPending     int
+	PatientID               int64
+	PatientName             string
+	Age                     int
+	LastWishesCompletion    int
+	ResuscitationPreference string
+	OverallQoLScore         float64
+	AvgPain7Days            float64
+	MaxPain7Days            int
+	EmotionalReadiness      int
+	SpiritualReadiness      int
+	LegacyMessagesCompleted int
+	LegacyMessagesPending   int
 }
 
 func (epm *ExitProtocolManager) GetPalliativeCareSummary(patientID int64) (*PalliativeSummary, error) {
-	query := `
-		SELECT
-			patient_id, nome, age,
-			last_wishes_completion, resuscitation_preference,
-			overall_qol_score, avg_pain_7days, max_pain_7days,
-			emotional_readiness, spiritual_readiness,
-			legacy_messages_completed, legacy_messages_pending
-		FROM v_palliative_care_summary
-		WHERE patient_id = $1
-	`
+	ctx := context.Background()
+	summary := &PalliativeSummary{PatientID: patientID}
 
-	summary := &PalliativeSummary{}
-	var resuscitation sql.NullString
-	var qolScore, avgPain sql.NullFloat64
-	var maxPain, lastWishesCompletion, emotionalReadiness, spiritualReadiness sql.NullInt64
-	var legacyCompleted, legacyPending sql.NullInt64
+	// 1. Get Last Wishes
+	lw, err := epm.GetLastWishes(patientID)
+	if err == nil && lw != nil {
+		summary.LastWishesCompletion = lw.CompletionPercentage
+		summary.ResuscitationPreference = lw.ResuscitationPreference
+	}
 
-	err := epm.db.QueryRow(query, patientID).Scan(
-		&summary.PatientID,
-		&summary.PatientName,
-		&summary.Age,
-		&lastWishesCompletion,
-		&resuscitation,
-		&qolScore,
-		&avgPain,
-		&maxPain,
-		&emotionalReadiness,
-		&spiritualReadiness,
-		&legacyCompleted,
-		&legacyPending,
-	)
+	// 2. Get latest QoL
+	qol, err := epm.GetLatestQoL(patientID)
+	if err == nil && qol != nil {
+		summary.OverallQoLScore = qol.OverallQoLScore
+	}
 
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("paciente %d não está em cuidados paliativos", patientID)
+	// 3. Get pain stats for last 7 days
+	painLogs, err := epm.GetRecentPainLogs(patientID, 7*24)
+	if err == nil && len(painLogs) > 0 {
+		totalPain := 0
+		maxPain := 0
+		for _, pl := range painLogs {
+			totalPain += pl.PainIntensity
+			if pl.PainIntensity > maxPain {
+				maxPain = pl.PainIntensity
+			}
 		}
-		return nil, err
+		summary.AvgPain7Days = float64(totalPain) / float64(len(painLogs))
+		summary.MaxPain7Days = maxPain
 	}
 
-	if resuscitation.Valid {
-		summary.ResuscitationPreference = resuscitation.String
+	// 4. Get farewell preparation readiness
+	fp, err := epm.GetFarewellPreparation(patientID)
+	if err == nil && fp != nil {
+		summary.EmotionalReadiness = fp.EmotionalReadiness
+		summary.SpiritualReadiness = fp.SpiritualReadiness
 	}
-	if qolScore.Valid {
-		summary.OverallQoLScore = qolScore.Float64
+
+	// 5. Get legacy messages stats
+	messages, err := epm.GetLegacyMessages(patientID)
+	if err == nil {
+		for _, msg := range messages {
+			if msg.IsComplete {
+				summary.LegacyMessagesCompleted++
+			} else {
+				summary.LegacyMessagesPending++
+			}
+		}
 	}
-	if avgPain.Valid {
-		summary.AvgPain7Days = avgPain.Float64
-	}
-	if maxPain.Valid {
-		summary.MaxPain7Days = int(maxPain.Int64)
-	}
-	if lastWishesCompletion.Valid {
-		summary.LastWishesCompletion = int(lastWishesCompletion.Int64)
-	}
-	if emotionalReadiness.Valid {
-		summary.EmotionalReadiness = int(emotionalReadiness.Int64)
-	}
-	if spiritualReadiness.Valid {
-		summary.SpiritualReadiness = int(spiritualReadiness.Int64)
-	}
-	if legacyCompleted.Valid {
-		summary.LegacyMessagesCompleted = int(legacyCompleted.Int64)
-	}
-	if legacyPending.Valid {
-		summary.LegacyMessagesPending = int(legacyPending.Int64)
+
+	// 6. Try to get patient name/age from idosos table
+	idosoNode, err := epm.db.GetNodeByID(ctx, "idosos", patientID)
+	if err == nil && idosoNode != nil {
+		summary.PatientName = database.GetString(idosoNode, "nome")
+		dob := database.GetTime(idosoNode, "data_nascimento")
+		if !dob.IsZero() {
+			summary.Age = int(time.Since(dob).Hours() / 24 / 365.25)
+		}
 	}
 
 	return summary, nil
@@ -894,51 +912,70 @@ func (epm *ExitProtocolManager) GetPalliativeCareSummary(patientID int64) (*Pall
 // ============================================================================
 
 type PainAlert struct {
-	PatientID         int64
-	PatientName       string
-	PainIntensity     int
-	PainLocation      []string
-	HoursSinceReport  float64
+	PatientID                 int64
+	PatientName               string
+	PainIntensity             int
+	PainLocation              []string
+	HoursSinceReport          float64
 	InterventionEffectiveness int
 }
 
 func (epm *ExitProtocolManager) GetUncontrolledPainAlerts() ([]PainAlert, error) {
-	query := `
-		SELECT
-			patient_id, patient_name, pain_intensity,
-			hours_since_report, intervention_effectiveness
-		FROM v_uncontrolled_pain_alerts
-		ORDER BY pain_intensity DESC, hours_since_report DESC
-	`
+	ctx := context.Background()
 
-	rows, err := epm.db.Query(query)
+	// Query all recent pain logs with high intensity (>= 7) and low/no intervention effectiveness
+	rows, err := epm.db.QueryByLabel(ctx, "pain_symptom_logs", "", nil, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	alerts := []PainAlert{}
-	for rows.Next() {
-		var alert PainAlert
-		var interventionEff sql.NullInt64
+	now := time.Now()
+	var alerts []PainAlert
 
-		err := rows.Scan(
-			&alert.PatientID,
-			&alert.PatientName,
-			&alert.PainIntensity,
-			&alert.HoursSinceReport,
-			&interventionEff,
-		)
-		if err != nil {
+	for _, m := range rows {
+		intensity := int(database.GetInt64(m, "pain_intensity"))
+		if intensity < 7 {
 			continue
 		}
 
-		if interventionEff.Valid {
-			alert.InterventionEffectiveness = int(interventionEff.Int64)
+		interventionEff := int(database.GetInt64(m, "intervention_effectiveness"))
+		if interventionEff >= 5 {
+			continue // Intervention is working, not uncontrolled
 		}
 
-		alerts = append(alerts, alert)
+		logTime := database.GetTime(m, "log_timestamp")
+		hoursSince := now.Sub(logTime).Hours()
+
+		// Only include recent alerts (within 48 hours)
+		if hoursSince > 48 {
+			continue
+		}
+
+		patientID := database.GetInt64(m, "patient_id")
+
+		// Try to get patient name
+		patientName := ""
+		idosoNode, err := epm.db.GetNodeByID(ctx, "idosos", patientID)
+		if err == nil && idosoNode != nil {
+			patientName = database.GetString(idosoNode, "nome")
+		}
+
+		alerts = append(alerts, PainAlert{
+			PatientID:                 patientID,
+			PatientName:               patientName,
+			PainIntensity:             intensity,
+			HoursSinceReport:          hoursSince,
+			InterventionEffectiveness: interventionEff,
+		})
 	}
+
+	// Sort by pain_intensity DESC, hours_since_report DESC
+	sort.Slice(alerts, func(i, j int) bool {
+		if alerts[i].PainIntensity != alerts[j].PainIntensity {
+			return alerts[i].PainIntensity > alerts[j].PainIntensity
+		}
+		return alerts[i].HoursSinceReport > alerts[j].HoursSinceReport
+	})
 
 	return alerts, nil
 }

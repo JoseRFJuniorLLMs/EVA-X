@@ -5,11 +5,11 @@ package multitenancy
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"log"
 	"strings"
 
+	"eva/internal/brainstem/database"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -91,9 +91,9 @@ var allowedTables = map[string]bool{
 }
 
 // ValidateIsolation ensures query results belong to the tenant
-func ValidateIsolation(ctx context.Context, db *sql.DB, table string, id int64) error {
+func ValidateIsolation(ctx context.Context, db *database.DB, table string, id int64) error {
 	if !allowedTables[table] {
-		log.Printf("⚠️ [SECURITY] Rejected invalid table name in isolation check: %s", table)
+		log.Printf("[SECURITY] Rejected invalid table name in isolation check: %s", table)
 		return errors.New("invalid resource type")
 	}
 
@@ -102,31 +102,30 @@ func ValidateIsolation(ctx context.Context, db *sql.DB, table string, id int64) 
 		return err
 	}
 
-	var count int
-	query := "SELECT COUNT(*) FROM " + table + " WHERE id = $1 AND tenant_id = $2"
-	err = db.QueryRowContext(ctx, query, id, tenantID).Scan(&count)
+	rows, err := db.QueryByLabel(ctx, table,
+		" AND n.id = $id AND n.tenant_id = $tenant_id",
+		map[string]interface{}{"id": id, "tenant_id": tenantID}, 1)
 	if err != nil {
 		return err
 	}
 
-	if count == 0 {
-		log.Printf("⚠️ [SECURITY] Tenant %s attempted to access %s.%d (not owned)", tenantID, table, id)
+	if len(rows) == 0 {
+		log.Printf("[SECURITY] Tenant %s attempted to access %s.%d (not owned)", tenantID, table, id)
 		return errors.New("resource not found or access denied")
 	}
 
 	return nil
 }
 
-// WrapQueryWithTenant wraps a SQL query to filter by tenant_id
-func WrapQueryWithTenant(ctx context.Context, baseQuery string) (string, []interface{}, error) {
+// WrapQueryWithTenant appends a tenant_id filter to an NQL WHERE clause
+// and returns the extra clause plus params map for use with QueryByLabel.
+func WrapQueryWithTenant(ctx context.Context, extraWhere string) (string, map[string]interface{}, error) {
 	tenantID, err := GetTenantFromContext(ctx)
 	if err != nil {
 		return "", nil, err
 	}
 
-	// Simple approach: append WHERE tenant_id = $N
-	// In production, use proper query builder
-	wrappedQuery := baseQuery + " AND tenant_id = $1"
+	wrappedWhere := extraWhere + " AND n.tenant_id = $tenant_id"
 
-	return wrappedQuery, []interface{}{tenantID}, nil
+	return wrappedWhere, map[string]interface{}{"tenant_id": tenantID}, nil
 }

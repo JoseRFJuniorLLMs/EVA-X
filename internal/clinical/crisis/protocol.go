@@ -9,7 +9,6 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -19,17 +18,19 @@ import (
 	"strings"
 	"time"
 
+	"eva/internal/brainstem/database"
+
 	"github.com/rs/zerolog/log"
 )
 
 // CrisisProtocol handles crisis detection and response
 type CrisisProtocol struct {
-	db       *sql.DB
+	db       *database.DB
 	notifier *Notifier
 }
 
 // NewCrisisProtocol creates a new crisis protocol handler
-func NewCrisisProtocol(db *sql.DB, notifier *Notifier) *CrisisProtocol {
+func NewCrisisProtocol(db *database.DB, notifier *Notifier) *CrisisProtocol {
 	return &CrisisProtocol{
 		db:       db,
 		notifier: notifier,
@@ -291,28 +292,30 @@ func (c *CrisisProtocol) executeResponseActions(ctx context.Context, event *Cris
 func (c *CrisisProtocol) storeCrisisEvent(ctx context.Context, event *CrisisEvent) error {
 	actionsJSON, _ := json.Marshal(event.ResponseActions)
 
-	return c.db.QueryRowContext(ctx, `
-		INSERT INTO crisis_events (
-			patient_id, session_id, crisis_type, severity,
-			trigger_statement, response_actions, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7)
-		RETURNING id
-	`, event.PatientID, event.SessionID, event.CrisisType, event.Severity,
-		event.TriggerStatement, actionsJSON, event.CreatedAt,
-	).Scan(&event.ID)
+	id, err := c.db.Insert(ctx, "crisis_events", map[string]interface{}{
+		"patient_id":        event.PatientID,
+		"session_id":        event.SessionID,
+		"crisis_type":       string(event.CrisisType),
+		"severity":          event.Severity,
+		"trigger_statement": event.TriggerStatement,
+		"response_actions":  string(actionsJSON),
+		"created_at":        event.CreatedAt.Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		return err
+	}
+	event.ID = id
+	return nil
 }
 
 // updateNotificationsSent updates notifications sent
 func (c *CrisisProtocol) updateNotificationsSent(ctx context.Context, eventID int64, notifications map[string]interface{}) error {
 	notificationsJSON, _ := json.Marshal(notifications)
 
-	_, err := c.db.ExecContext(ctx, `
-		UPDATE crisis_events
-		SET notifications_sent = $1
-		WHERE id = $2
-	`, notificationsJSON, eventID)
-
-	return err
+	return c.db.Update(ctx, "crisis_events",
+		map[string]interface{}{"id": float64(eventID)},
+		map[string]interface{}{"notifications_sent": string(notificationsJSON)},
+	)
 }
 
 // createLegalRecord creates an immutable, encrypted legal record
@@ -341,20 +344,31 @@ func (c *CrisisProtocol) createLegalRecord(ctx context.Context, event *CrisisEve
 		encryptedRecord = base64.StdEncoding.EncodeToString(recordJSON)
 	}
 
+	// Check if legal record already exists for this event
+	existing, _ := c.db.QueryByLabel(ctx, "legal_records",
+		" AND n.event_id = $eid", map[string]interface{}{
+			"eid": float64(event.ID),
+		}, 1)
+	if len(existing) > 0 {
+		// Already exists, skip (equivalent to ON CONFLICT DO NOTHING)
+		log.Info().Int64("event_id", event.ID).Msg("Registro legal ja existe, pulando")
+		return nil
+	}
+
 	// Store encrypted record in database
-	_, err = c.db.ExecContext(ctx, `
-		INSERT INTO legal_records (
-			event_id, patient_id, encrypted_data, hash,
-			encryption_version, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6)
-		ON CONFLICT (event_id) DO NOTHING
-	`, event.ID, event.PatientID, encryptedRecord, c.generateHash(event),
-		"AES-256-GCM-v1", event.CreatedAt)
+	_, err = c.db.Insert(ctx, "legal_records", map[string]interface{}{
+		"event_id":           float64(event.ID),
+		"patient_id":         event.PatientID,
+		"encrypted_data":     encryptedRecord,
+		"hash":               c.generateHash(event),
+		"encryption_version": "AES-256-GCM-v1",
+		"created_at":         event.CreatedAt.Format(time.RFC3339Nano),
+	})
 
 	if err != nil {
 		log.Error().Err(err).Int64("event_id", event.ID).
-			Msg("Falha ao armazenar registro legal no banco - tabela pode nao existir")
-		// Don't fail the whole operation if table doesn't exist yet
+			Msg("Falha ao armazenar registro legal no banco")
+		// Don't fail the whole operation
 		return nil
 	}
 
@@ -417,24 +431,26 @@ func (c *CrisisProtocol) generateHash(event *CrisisEvent) string {
 
 // lockConversation locks a conversation to prevent tampering
 func (c *CrisisProtocol) lockConversation(ctx context.Context, sessionID int64) error {
-	_, err := c.db.ExecContext(ctx, `
-		UPDATE conversations
-		SET locked = TRUE, locked_at = NOW()
-		WHERE id = $1
-	`, sessionID)
-
-	return err
+	return c.db.Update(ctx, "conversations",
+		map[string]interface{}{"id": float64(sessionID)},
+		map[string]interface{}{
+			"locked":    true,
+			"locked_at": time.Now().Format(time.RFC3339Nano),
+		},
+	)
 }
 
 // AcknowledgeCrisis marks a crisis as acknowledged by psychologist
 func (c *CrisisProtocol) AcknowledgeCrisis(ctx context.Context, eventID, psychologistID int64) error {
 	now := time.Now()
 
-	_, err := c.db.ExecContext(ctx, `
-		UPDATE crisis_events
-		SET acknowledged_by = $1, acknowledged_at = $2
-		WHERE id = $3
-	`, psychologistID, now, eventID)
+	err := c.db.Update(ctx, "crisis_events",
+		map[string]interface{}{"id": float64(eventID)},
+		map[string]interface{}{
+			"acknowledged_by": psychologistID,
+			"acknowledged_at": now.Format(time.RFC3339Nano),
+		},
+	)
 
 	if err == nil {
 		log.Info().
@@ -448,38 +464,49 @@ func (c *CrisisProtocol) AcknowledgeCrisis(ctx context.Context, eventID, psychol
 
 // GetUnacknowledgedCrises retrieves unacknowledged crises
 func (c *CrisisProtocol) GetUnacknowledgedCrises(ctx context.Context) ([]*CrisisEvent, error) {
-	rows, err := c.db.QueryContext(ctx, `
-		SELECT id, patient_id, session_id, crisis_type, severity,
-		       trigger_statement, response_actions, notifications_sent, created_at
-		FROM crisis_events
-		WHERE acknowledged_by IS NULL
-		ORDER BY created_at DESC
-	`)
-
+	rows, err := c.db.QueryByLabel(ctx, "crisis_events", "", nil, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	var events []*CrisisEvent
-	for rows.Next() {
-		var event CrisisEvent
-		var actionsJSON, notificationsJSON []byte
-
-		err := rows.Scan(
-			&event.ID, &event.PatientID, &event.SessionID, &event.CrisisType,
-			&event.Severity, &event.TriggerStatement, &actionsJSON,
-			&notificationsJSON, &event.CreatedAt,
-		)
-		if err != nil {
+	for _, m := range rows {
+		// Filter: only unacknowledged (acknowledged_by is nil/missing)
+		if v, ok := m["acknowledged_by"]; ok && v != nil {
 			continue
 		}
 
-		json.Unmarshal(actionsJSON, &event.ResponseActions)
-		json.Unmarshal(notificationsJSON, &event.NotificationsSent)
+		event := &CrisisEvent{
+			ID:               database.GetInt64(m, "id"),
+			PatientID:        database.GetInt64(m, "patient_id"),
+			SessionID:        database.GetInt64(m, "session_id"),
+			CrisisType:       CrisisType(database.GetString(m, "crisis_type")),
+			Severity:         database.GetString(m, "severity"),
+			TriggerStatement: database.GetString(m, "trigger_statement"),
+			CreatedAt:        database.GetTime(m, "created_at"),
+		}
 
-		events = append(events, &event)
+		// Parse JSON fields
+		actionsStr := database.GetString(m, "response_actions")
+		if actionsStr != "" {
+			json.Unmarshal([]byte(actionsStr), &event.ResponseActions)
+		}
+		notifStr := database.GetString(m, "notifications_sent")
+		if notifStr != "" {
+			json.Unmarshal([]byte(notifStr), &event.NotificationsSent)
+		}
+
+		events = append(events, event)
 	}
 
-	return events, rows.Err()
+	// Sort by created_at DESC
+	for i := 0; i < len(events); i++ {
+		for j := i + 1; j < len(events); j++ {
+			if events[j].CreatedAt.After(events[i].CreatedAt) {
+				events[i], events[j] = events[j], events[i]
+			}
+		}
+	}
+
+	return events, nil
 }

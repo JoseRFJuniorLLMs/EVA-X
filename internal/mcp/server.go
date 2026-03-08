@@ -5,12 +5,15 @@ package mcp
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"time"
+
+	"eva/internal/brainstem/database"
 
 	"github.com/gorilla/mux"
 	"github.com/rs/zerolog/log"
@@ -31,14 +34,14 @@ type VectorResult struct {
 
 // Server implements Model Context Protocol server
 type Server struct {
-	db           *sql.DB
+	db           *database.DB
 	router       *mux.Router
 	embedFunc    EmbeddingFunc
 	vectorSearch VectorSearchFunc
 }
 
 // NewServer creates a new MCP server
-func NewServer(db *sql.DB) *Server {
+func NewServer(db *database.DB) *Server {
 	if db == nil {
 		log.Warn().Msg("⚠️ [MCP] NietzscheDB unavailable — running in degraded mode")
 	}
@@ -101,31 +104,23 @@ func (s *Server) listResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Query memories
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, content, created_at
-		FROM memories
-		WHERE patient_id = $1
-		ORDER BY created_at DESC
-		LIMIT 100
-	`, patientID)
+	// Query memories by patient_id using NietzscheDB
+	rows, err := s.db.QueryByLabel(ctx, "memories",
+		" AND n.patient_id = $patient_id", map[string]interface{}{
+			"patient_id": patientID,
+		}, 100)
 
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to query memories")
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-	defer rows.Close()
 
 	resources := []Resource{}
-	for rows.Next() {
-		var id int64
-		var content string
-		var createdAt time.Time
-
-		if err := rows.Scan(&id, &content, &createdAt); err != nil {
-			continue
-		}
+	for _, m := range rows {
+		id := database.GetInt64(m, "id")
+		content := database.GetString(m, "content")
+		createdAt := database.GetTime(m, "created_at")
 
 		resources = append(resources, Resource{
 			URI:         fmt.Sprintf("memory://%s/%d", patientID, id),
@@ -154,25 +149,27 @@ func (s *Server) getResource(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	resourceID := vars["id"]
 
-	var content string
-	var createdAt time.Time
-
-	err := s.db.QueryRowContext(ctx, `
-		SELECT content, created_at
-		FROM memories
-		WHERE id = $1
-	`, resourceID).Scan(&content, &createdAt)
-
-	if err == sql.ErrNoRows {
-		http.Error(w, "Resource not found", http.StatusNotFound)
+	// Parse the resource ID to int64 for NietzscheDB lookup
+	rid, err := strconv.ParseInt(resourceID, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid resource ID", http.StatusBadRequest)
 		return
 	}
 
+	m, err := s.db.GetNodeByID(ctx, "memories", rid)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to get memory")
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
+
+	if m == nil {
+		http.Error(w, "Resource not found", http.StatusNotFound)
+		return
+	}
+
+	content := database.GetString(m, "content")
+	createdAt := database.GetTime(m, "created_at")
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -203,12 +200,14 @@ func (s *Server) rememberTool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var memoryID int64
-	err := s.db.QueryRowContext(ctx, `
-		INSERT INTO memories (patient_id, content, event_time, ingestion_time, created_at)
-		VALUES ($1, $2, NOW(), NOW(), NOW())
-		RETURNING id
-	`, req.PatientID, req.Content).Scan(&memoryID)
+	now := time.Now().Format(time.RFC3339)
+	memoryID, err := s.db.Insert(ctx, "memories", map[string]interface{}{
+		"patient_id":     req.PatientID,
+		"content":        req.Content,
+		"event_time":     now,
+		"ingestion_time": now,
+		"created_at":     now,
+	})
 
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to store memory")
@@ -244,7 +243,7 @@ func (s *Server) recallTool(w http.ResponseWriter, r *http.Request) {
 		req.Limit = 10
 	}
 
-	// Vector search with ILIKE fallback
+	// Vector search with text fallback
 	if s.embedFunc != nil && s.vectorSearch != nil {
 		memories, vectorErr := s.recallWithVectorSearch(ctx, req)
 		if vectorErr == nil && len(memories) > 0 {
@@ -261,43 +260,70 @@ func (s *Server) recallTool(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Fallback: text search
+	// Fallback: text search via NietzscheDB
 	if s.db == nil {
 		http.Error(w, `{"error":"NietzscheDB unavailable"}`, http.StatusServiceUnavailable)
 		return
 	}
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, content, event_time, importance_score
-		FROM memories
-		WHERE patient_id = $1
-		AND content ILIKE '%' || $2 || '%'
-		ORDER BY importance_score DESC, event_time DESC
-		LIMIT $3
-	`, req.PatientID, req.Query, req.Limit)
+
+	// NietzscheDB NQL does not support ILIKE; query all for patient and filter in Go
+	rows, err := s.db.QueryByLabel(ctx, "memories",
+		" AND n.patient_id = $patient_id", map[string]interface{}{
+			"patient_id": req.PatientID,
+		}, 0)
 
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to recall memories")
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-	defer rows.Close()
 
-	memories := []map[string]interface{}{}
-	for rows.Next() {
-		var id int64
-		var content string
-		var eventTime time.Time
-		var importance float64
-
-		if err := rows.Scan(&id, &content, &eventTime, &importance); err != nil {
+	// Filter by query substring (case-insensitive), sort by importance then event_time
+	queryLower := strings.ToLower(req.Query)
+	type scoredMemory struct {
+		id         int64
+		content    string
+		eventTime  time.Time
+		importance float64
+	}
+	var matched []scoredMemory
+	for _, m := range rows {
+		content := database.GetString(m, "content")
+		if queryLower != "" && !strings.Contains(strings.ToLower(content), queryLower) {
 			continue
 		}
+		matched = append(matched, scoredMemory{
+			id:         database.GetInt64(m, "id"),
+			content:    content,
+			eventTime:  database.GetTime(m, "event_time"),
+			importance: database.GetFloat64(m, "importance_score"),
+		})
+	}
 
+	// Sort: importance DESC, event_time DESC
+	for i := 1; i < len(matched); i++ {
+		for j := i; j > 0; j-- {
+			if matched[j].importance > matched[j-1].importance ||
+				(matched[j].importance == matched[j-1].importance && matched[j].eventTime.After(matched[j-1].eventTime)) {
+				matched[j], matched[j-1] = matched[j-1], matched[j]
+			} else {
+				break
+			}
+		}
+	}
+
+	// Apply limit
+	if req.Limit > 0 && len(matched) > req.Limit {
+		matched = matched[:req.Limit]
+	}
+
+	memories := []map[string]interface{}{}
+	for _, mem := range matched {
 		memories = append(memories, map[string]interface{}{
-			"id":         id,
-			"content":    content,
-			"event_time": eventTime,
-			"importance": importance,
+			"id":         mem.id,
+			"content":    mem.content,
+			"event_time": mem.eventTime,
+			"importance": mem.importance,
 		})
 	}
 
@@ -402,9 +428,9 @@ func (s *Server) recallWithVectorSearch(ctx context.Context, req RecallRequest) 
 	memories := make([]map[string]interface{}, 0, len(results))
 	for _, r := range results {
 		memories = append(memories, map[string]interface{}{
-			"id":         r.ID,
-			"content":    r.Content,
-			"score":      r.Score,
+			"id":      r.ID,
+			"content": r.Content,
+			"score":   r.Score,
 		})
 	}
 

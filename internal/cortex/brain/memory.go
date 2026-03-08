@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pgvector/pgvector-go"
 )
 
 // ========================================
@@ -134,32 +133,19 @@ func (s *Service) SaveEpisodicMemory(idosoID int64, role, content string, eventD
 		embedding = make([]float32, 3072)
 	}
 
-	// 2. Salvar no Postgres (SEMPRE tenta)
+	// 2. Salvar no NietzscheDB
 	var memoryID int64
-	query := `
-		INSERT INTO episodic_memories (idoso_id, speaker, content, embedding, created_at)
-		VALUES ($1, $2, $3, $4, NOW())
-		RETURNING id
-	`
-	err := s.db.QueryRow(query, idosoID, role, content, pgvector.NewVector(embedding)).Scan(&memoryID)
+	memoryID, err := s.db.Insert(ctx, "episodic_memories", map[string]interface{}{
+		"idoso_id":   idosoID,
+		"speaker":    role,
+		"content":    content,
+		"created_at": time.Now().Format(time.RFC3339),
+	})
 	if err != nil {
-		log.Printf("❌ [POSTGRES] Erro ao salvar memória: %v", err)
-
-		// Tentar salvar SEM embedding como fallback
-		queryNoEmbed := `
-			INSERT INTO episodic_memories (idoso_id, speaker, content, created_at)
-			VALUES ($1, $2, $3, NOW())
-			RETURNING id
-		`
-		err2 := s.db.QueryRow(queryNoEmbed, idosoID, role, content).Scan(&memoryID)
-		if err2 != nil {
-			log.Printf("❌ [POSTGRES] Fallback também falhou: %v", err2)
-			return
-		}
-		log.Printf("✅ [POSTGRES] Memory saved (sem embedding): ID=%d", memoryID)
-	} else {
-		log.Printf("✅ [POSTGRES] Memory saved: ID=%d, Speaker=%s", memoryID, role)
+		log.Printf("❌ [NIETZSCHE] Erro ao salvar memória: %v", err)
+		return
 	}
+	log.Printf("✅ [NIETZSCHE] Memory saved: ID=%d, Speaker=%s", memoryID, role)
 
 	// 3. Upsert to NietzscheDB vector store
 	if s.vectorAdapter != nil {

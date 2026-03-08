@@ -4,13 +4,15 @@
 package prediction
 
 import (
-	"database/sql"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"math"
 	"math/rand"
 	"time"
+
+	"eva/internal/brainstem/database"
 )
 
 // ============================================================================
@@ -21,7 +23,7 @@ import (
 
 // TrajectorySimulator simula trajetórias futuras de pacientes
 type TrajectorySimulator struct {
-	db            *sql.DB
+	db            *database.DB
 	predictor     *CrisisPredictor
 	bayesianNet   *BayesianNetwork
 	modelVersion  string
@@ -30,7 +32,7 @@ type TrajectorySimulator struct {
 }
 
 // NewTrajectorySimulator cria novo simulador de trajetórias
-func NewTrajectorySimulator(db *sql.DB) *TrajectorySimulator {
+func NewTrajectorySimulator(db *database.DB) *TrajectorySimulator {
 	return &TrajectorySimulator{
 		db:           db,
 		predictor:    NewCrisisPredictor(db),
@@ -945,93 +947,92 @@ func clamp(value, min, max float64) float64 {
 // ============================================================================
 
 func (ts *TrajectorySimulator) saveSimulationResults(results *SimulationResults) error {
-	query := `
-		INSERT INTO trajectory_simulations (
-			patient_id, days_ahead, n_simulations,
-			crisis_probability_7d, crisis_probability_30d,
-			hospitalization_probability_30d, treatment_dropout_probability_90d,
-			fall_risk_probability_7d,
-			projected_phq9_score, projected_medication_adherence,
-			projected_sleep_hours, projected_social_isolation_days,
-			critical_factors, sample_trajectories, initial_state,
-			model_version, bayesian_network_config, computation_time_ms
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-		RETURNING id
-	`
+	ctx := context.Background()
 
 	initialStateJSON, _ := json.Marshal(results.InitialState)
 	sampleTrajJSON, _ := json.Marshal(results.SampleTrajectories)
 	bayesianConfigJSON, _ := json.Marshal(results.BayesianNetworkConfig)
-	criticalFactorsArray := "{" + joinStrings(results.CriticalFactors, ",") + "}"
 
-	var id string
-	err := ts.db.QueryRow(
-		query,
-		results.PatientID, results.DaysAhead, results.NSimulations,
-		results.CrisisProbability7d, results.CrisisProbability30d,
-		results.HospitalizationProb30d, results.TreatmentDropoutProb90d,
-		results.FallRiskProb7d,
-		results.ProjectedPHQ9, results.ProjectedAdherence,
-		results.ProjectedSleepHours, results.ProjectedIsolationDays,
-		criticalFactorsArray, sampleTrajJSON, initialStateJSON,
-		ts.modelVersion, bayesianConfigJSON, results.ComputationTimeMs,
-	).Scan(&id)
+	id, err := ts.db.Insert(ctx, "trajectory_simulations", map[string]interface{}{
+		"patient_id":                       results.PatientID,
+		"days_ahead":                       results.DaysAhead,
+		"n_simulations":                    results.NSimulations,
+		"crisis_probability_7d":            results.CrisisProbability7d,
+		"crisis_probability_30d":           results.CrisisProbability30d,
+		"hospitalization_probability_30d":  results.HospitalizationProb30d,
+		"treatment_dropout_probability_90d": results.TreatmentDropoutProb90d,
+		"fall_risk_probability_7d":         results.FallRiskProb7d,
+		"projected_phq9_score":             results.ProjectedPHQ9,
+		"projected_medication_adherence":   results.ProjectedAdherence,
+		"projected_sleep_hours":            results.ProjectedSleepHours,
+		"projected_social_isolation_days":  results.ProjectedIsolationDays,
+		"critical_factors":                 results.CriticalFactors,
+		"sample_trajectories":              string(sampleTrajJSON),
+		"initial_state":                    string(initialStateJSON),
+		"model_version":                    ts.modelVersion,
+		"bayesian_network_config":          string(bayesianConfigJSON),
+		"computation_time_ms":              results.ComputationTimeMs,
+		"created_at":                       time.Now().Format(time.RFC3339),
+	})
 
 	if err == nil {
-		results.SimulationID = id
+		results.SimulationID = fmt.Sprintf("%d", id)
 	}
 
 	return err
 }
 
 func (ts *TrajectorySimulator) saveInterventionScenario(simulationID string, patientID int64, scenario InterventionScenario) error {
-	query := `
-		INSERT INTO intervention_scenarios (
-			simulation_id, patient_id, scenario_type, scenario_name, scenario_description,
-			interventions, crisis_probability_7d, crisis_probability_30d,
-			hospitalization_probability_30d, projected_phq9_score,
-			projected_medication_adherence, projected_sleep_hours,
-			risk_reduction_7d, risk_reduction_30d, effectiveness_score,
-			estimated_cost_monthly, feasibility, required_resources
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-	`
+	ctx := context.Background()
 
 	interventionsJSON, _ := json.Marshal(scenario.Interventions)
-	resourcesArray := "{" + joinStrings(scenario.RequiredResources, ",") + "}"
 
-	_, err := ts.db.Exec(
-		query,
-		simulationID, patientID, scenario.ScenarioType, scenario.ScenarioName, scenario.Description,
-		interventionsJSON, scenario.CrisisProbability7d, scenario.CrisisProbability30d,
-		scenario.HospitalizationProb30d, scenario.ProjectedPHQ9,
-		scenario.ProjectedAdherence, scenario.ProjectedSleepHours,
-		scenario.RiskReduction7d, scenario.RiskReduction30d, scenario.EffectivenessScore,
-		scenario.EstimatedCostMonthly, scenario.Feasibility, resourcesArray,
-	)
+	_, err := ts.db.Insert(ctx, "intervention_scenarios", map[string]interface{}{
+		"simulation_id":                  simulationID,
+		"patient_id":                     patientID,
+		"scenario_type":                  scenario.ScenarioType,
+		"scenario_name":                  scenario.ScenarioName,
+		"scenario_description":           scenario.Description,
+		"interventions":                  string(interventionsJSON),
+		"crisis_probability_7d":          scenario.CrisisProbability7d,
+		"crisis_probability_30d":         scenario.CrisisProbability30d,
+		"hospitalization_probability_30d": scenario.HospitalizationProb30d,
+		"projected_phq9_score":           scenario.ProjectedPHQ9,
+		"projected_medication_adherence": scenario.ProjectedAdherence,
+		"projected_sleep_hours":          scenario.ProjectedSleepHours,
+		"risk_reduction_7d":              scenario.RiskReduction7d,
+		"risk_reduction_30d":             scenario.RiskReduction30d,
+		"effectiveness_score":            scenario.EffectivenessScore,
+		"estimated_cost_monthly":         scenario.EstimatedCostMonthly,
+		"feasibility":                    scenario.Feasibility,
+		"required_resources":             scenario.RequiredResources,
+		"created_at":                     time.Now().Format(time.RFC3339),
+	})
 
 	return err
 }
 
 func (ts *TrajectorySimulator) saveRecommendedIntervention(simulationID string, patientID int64, rec RecommendedIntervention) error {
-	query := `
-		INSERT INTO recommended_interventions (
-			simulation_id, patient_id, intervention_type, priority, urgency_timeframe,
-			title, description, rationale,
-			expected_risk_reduction, expected_phq9_improvement, confidence_level,
-			action_steps, responsible_parties, estimated_cost, status
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-	`
+	ctx := context.Background()
 
-	actionStepsArray := "{" + joinStrings(rec.ActionSteps, ",") + "}"
-	responsibleArray := "{" + joinStrings(rec.ResponsibleParties, ",") + "}"
-
-	_, err := ts.db.Exec(
-		query,
-		simulationID, patientID, rec.InterventionType, rec.Priority, rec.UrgencyTimeframe,
-		rec.Title, rec.Description, rec.Rationale,
-		rec.ExpectedRiskReduction, rec.ExpectedPHQ9Improvement, rec.ConfidenceLevel,
-		actionStepsArray, responsibleArray, rec.EstimatedCost, "pending",
-	)
+	_, err := ts.db.Insert(ctx, "recommended_interventions", map[string]interface{}{
+		"simulation_id":             simulationID,
+		"patient_id":                patientID,
+		"intervention_type":         rec.InterventionType,
+		"priority":                  rec.Priority,
+		"urgency_timeframe":         rec.UrgencyTimeframe,
+		"title":                     rec.Title,
+		"description":               rec.Description,
+		"rationale":                 rec.Rationale,
+		"expected_risk_reduction":   rec.ExpectedRiskReduction,
+		"expected_phq9_improvement": rec.ExpectedPHQ9Improvement,
+		"confidence_level":          rec.ConfidenceLevel,
+		"action_steps":              rec.ActionSteps,
+		"responsible_parties":       rec.ResponsibleParties,
+		"estimated_cost":            rec.EstimatedCost,
+		"status":                    "pending",
+		"created_at":                time.Now().Format(time.RFC3339),
+	})
 
 	return err
 }

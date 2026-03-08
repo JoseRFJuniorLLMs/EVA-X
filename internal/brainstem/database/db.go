@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	_ "github.com/lib/pq"
 
 	nietzsche "nietzsche-sdk"
 )
@@ -27,48 +26,19 @@ func nextID() int64 {
 }
 
 // DB wraps NietzscheDB for the EVA data layer.
-// Conn is kept for backward compatibility with packages that still use *sql.DB directly.
 type DB struct {
-	Conn *sql.DB                    // LEGACY: backward compat for packages using db.Conn
-	nz   *nietzsche.NietzscheClient // NietzscheDB gRPC client (primary)
-}
-
-// NewDB creates a DB backed by NietzscheDB (legacy constructor).
-func NewDB(connectionString string) (*DB, error) {
-	conn, err := sql.Open("postgres", connectionString)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %w", err)
-	}
-
-	conn.SetMaxOpenConns(25)
-	conn.SetMaxIdleConns(5)
-	conn.SetConnMaxLifetime(5 * time.Minute)
-
-	if err := conn.Ping(); err != nil {
-		return nil, fmt.Errorf("failed to ping database: %w", err)
-	}
-
-	return &DB{Conn: conn}, nil
+	nz *nietzsche.NietzscheClient // NietzscheDB gRPC client
 }
 
 // NewNietzscheDB creates a DB backed by NietzscheDB gRPC.
-// legacyConn is optional — pass nil if no packages need backward-compat *sql.DB.
-func NewNietzscheDB(nzClient *nietzsche.NietzscheClient, legacyConn *sql.DB) *DB {
+func NewNietzscheDB(nzClient *nietzsche.NietzscheClient, _ *sql.DB) *DB {
 	return &DB{
-		nz:   nzClient,
-		Conn: legacyConn,
+		nz: nzClient,
 	}
 }
 
 func (db *DB) Close() error {
-	if db.Conn != nil {
-		return db.Conn.Close()
-	}
 	return nil
-}
-
-func (db *DB) GetConnection() *sql.DB {
-	return db.Conn
 }
 
 // ── NietzscheDB internal helpers ──────────────────────────────────────
@@ -180,6 +150,104 @@ func (db *DB) queryNodesByLabel(ctx context.Context, label string, extraWhere st
 	}
 	return rows, nil
 }
+
+// ── Public API for external packages ────────────────────────────────────
+// These methods expose NietzscheDB operations to packages outside database/.
+
+// QueryByLabel finds all nodes with a specific node_label.
+// extraWhere adds NQL conditions (e.g., " AND n.status = $status").
+func (db *DB) QueryByLabel(ctx context.Context, label string, extraWhere string, params map[string]interface{}, limit int) ([]map[string]interface{}, error) {
+	return db.queryNodesByLabel(ctx, label, extraWhere, params, limit)
+}
+
+// Insert creates a new node with auto-generated int64 ID. Returns the new ID.
+func (db *DB) Insert(ctx context.Context, table string, content map[string]interface{}) (int64, error) {
+	return db.insertRow(ctx, table, content)
+}
+
+// InsertWithID creates a node with a specific ID (for migrations or deterministic IDs).
+func (db *DB) InsertWithID(ctx context.Context, table string, pgID interface{}, content map[string]interface{}) error {
+	return db.insertRowWithID(ctx, table, pgID, content)
+}
+
+// Update modifies fields on nodes matching the given keys.
+func (db *DB) Update(ctx context.Context, table string, matchKeys map[string]interface{}, updates map[string]interface{}) error {
+	return db.updateFields(ctx, table, matchKeys, updates)
+}
+
+// GetNodeByID retrieves a single node by table name + ID.
+func (db *DB) GetNodeByID(ctx context.Context, table string, pgID interface{}) (map[string]interface{}, error) {
+	return db.getNode(ctx, table, pgID)
+}
+
+// NQL executes a raw NQL query against the eva_mind collection.
+func (db *DB) NQL(ctx context.Context, nql string, params map[string]interface{}) (*nietzsche.QueryResult, error) {
+	return db.nqlQuery(ctx, nql, params)
+}
+
+// SoftDelete marks matching nodes as deleted (sets _deleted=true, ativo=false).
+func (db *DB) SoftDelete(ctx context.Context, table string, matchKeys map[string]interface{}) error {
+	return db.updateFields(ctx, table, matchKeys, map[string]interface{}{
+		"_deleted": true,
+		"ativo":    false,
+	})
+}
+
+// Count returns the number of nodes matching label + optional WHERE clause.
+func (db *DB) Count(ctx context.Context, label string, extraWhere string, params map[string]interface{}) (int, error) {
+	rows, err := db.queryNodesByLabel(ctx, label, extraWhere, params, 0)
+	if err != nil {
+		return 0, err
+	}
+	return len(rows), nil
+}
+
+// NzClient returns the underlying NietzscheDB client (for advanced operations).
+func (db *DB) NzClient() *nietzsche.NietzscheClient {
+	return db.nz
+}
+
+// ── Exported type conversion helpers ────────────────────────────────────
+
+// GetString extracts a string from a NietzscheDB content map.
+func GetString(m map[string]interface{}, key string) string { return getString(m, key) }
+
+// GetInt64 extracts an int64 from a NietzscheDB content map.
+func GetInt64(m map[string]interface{}, key string) int64 { return getInt64(m, key) }
+
+// GetBool extracts a bool from a NietzscheDB content map.
+func GetBool(m map[string]interface{}, key string) bool { return getBool(m, key) }
+
+// GetNullBool extracts a sql.NullBool from a NietzscheDB content map.
+func GetNullBool(m map[string]interface{}, key string) sql.NullBool { return getNullBool(m, key) }
+
+// GetNullString extracts a sql.NullString from a NietzscheDB content map.
+func GetNullString(m map[string]interface{}, key string) sql.NullString { return getNullString(m, key) }
+
+// GetTime extracts a time.Time from a NietzscheDB content map.
+func GetTime(m map[string]interface{}, key string) time.Time { return getTime(m, key) }
+
+// GetTimePtr extracts a *time.Time from a NietzscheDB content map (nil if missing).
+func GetTimePtr(m map[string]interface{}, key string) *time.Time { return getTimePtr(m, key) }
+
+// GetFloat64 extracts a float64 from a NietzscheDB content map.
+func GetFloat64(m map[string]interface{}, key string) float64 {
+	if v, ok := m[key]; ok && v != nil {
+		if f, ok := v.(float64); ok {
+			return f
+		}
+		if i, ok := v.(int64); ok {
+			return float64(i)
+		}
+		if i, ok := v.(int); ok {
+			return float64(i)
+		}
+	}
+	return 0
+}
+
+// StripNonDigits removes all non-digit characters from a string (exported wrapper).
+func StripNonDigits(s string) string { return stripNonDigits(s) }
 
 // EnsureIndexes creates needed indexes for the eva_mind collection.
 func (db *DB) EnsureIndexes(ctx context.Context) error {

@@ -259,7 +259,7 @@ func (a *Agent) handleQueryDatabase(ctx context.Context, call swarm.ToolCall) (*
 
 	log.Info().Str("query", query).Msg("[SELF-AWARE] Querying NietzscheDB")
 
-	rows, err := a.svc.QueryPostgres(ctx, query)
+	rows, err := a.svc.QueryNietzsche(ctx, query)
 	if err != nil {
 		return &swarm.ToolResult{Success: false, Message: fmt.Sprintf("Erro: %v", err)}, nil
 	}
@@ -317,11 +317,11 @@ func (a *Agent) handleSystemStats(ctx context.Context, call swarm.ToolCall) (*sw
 	}
 
 	msg := fmt.Sprintf(`Meus sistemas:
-- NietzscheDB: %d tabelas, %d memorias episodicas
+- NietzscheDB: %d labels, %d memorias episodicas
 - NietzscheDB: %d colecoes, %d nos vetoriais
 - Curriculum: %d pendentes, %d completados
 - Runtime: %d goroutines, %dMB RAM, uptime %s`,
-		stats.PostgresTables, stats.TotalMemories,
+		stats.NietzscheLabels, stats.TotalMemories,
 		stats.NietzscheCollections, stats.NietzscheTotalNodes,
 		stats.CurriculumPending, stats.CurriculumDone,
 		stats.GoRoutines, stats.MemAllocMB, stats.Uptime)
@@ -413,8 +413,8 @@ func (a *Agent) handleIntrospect(ctx context.Context, call swarm.ToolCall) (*swa
 	msg.WriteString("Meu estado atual:\n")
 
 	if report.Stats != nil {
-		msg.WriteString(fmt.Sprintf("\nSistemas: %d tabelas NietzscheDB, %d colecoes NietzscheDB (%d nos)\n",
-			report.Stats.PostgresTables, report.Stats.NietzscheCollections, report.Stats.NietzscheTotalNodes))
+		msg.WriteString(fmt.Sprintf("\nSistemas: %d labels NietzscheDB, %d colecoes NietzscheDB (%d nos)\n",
+			report.Stats.NietzscheLabels, report.Stats.NietzscheCollections, report.Stats.NietzscheTotalNodes))
 		msg.WriteString(fmt.Sprintf("Memorias: %d episodicas | Curriculum: %d pendentes, %d completados\n",
 			report.Stats.TotalMemories, report.Stats.CurriculumPending, report.Stats.CurriculumDone))
 		msg.WriteString(fmt.Sprintf("Runtime: %d goroutines, %dMB RAM, uptime %s\n",

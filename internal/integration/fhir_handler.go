@@ -4,13 +4,16 @@
 package integration
 
 import (
-	"database/sql"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
+
+	"eva/internal/brainstem/database"
 
 	"github.com/gorilla/mux"
 )
@@ -23,11 +26,11 @@ import (
 
 // FHIRHandler handles FHIR R4 endpoints
 type FHIRHandler struct {
-	db *sql.DB
+	db *database.DB
 }
 
-// NewFHIRHandler creates a new handler with a database connection
-func NewFHIRHandler(db *sql.DB) *FHIRHandler {
+// NewFHIRHandler creates a new handler with a NietzscheDB connection
+func NewFHIRHandler(db *database.DB) *FHIRHandler {
 	if db == nil {
 		log.Printf("⚠️ [FHIR] NietzscheDB unavailable — running in degraded mode")
 	}
@@ -55,11 +58,11 @@ func (h *FHIRHandler) GetPatient(w http.ResponseWriter, r *http.Request) {
 
 	patient, err := h.queryPatientDTO(id)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			writeFHIRError(w, http.StatusNotFound, "not-found", fmt.Sprintf("Patient/%d not found", id))
-			return
-		}
 		writeFHIRError(w, http.StatusInternalServerError, "database-error", "Failed to retrieve patient data")
+		return
+	}
+	if patient == nil {
+		writeFHIRError(w, http.StatusNotFound, "not-found", fmt.Sprintf("Patient/%d not found", id))
 		return
 	}
 
@@ -90,11 +93,11 @@ func (h *FHIRHandler) GetPatientBundle(w http.ResponseWriter, r *http.Request) {
 
 	patient, err := h.queryPatientDTO(id)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			writeFHIRError(w, http.StatusNotFound, "not-found", fmt.Sprintf("Patient/%d not found", id))
-			return
-		}
 		writeFHIRError(w, http.StatusInternalServerError, "database-error", "Failed to retrieve patient data")
+		return
+	}
+	if patient == nil {
+		writeFHIRError(w, http.StatusNotFound, "not-found", fmt.Sprintf("Patient/%d not found", id))
 		return
 	}
 
@@ -142,129 +145,112 @@ func RegisterFHIRRoutes(router *mux.Router, handler *FHIRHandler) {
 // DATABASE QUERIES (private)
 // ============================================================================
 
-// queryPatientDTO loads a patient from the idosos table and maps it to a PatientDTO.
+// queryPatientDTO loads a patient from the idosos table via NietzscheDB
+// and maps it to a PatientDTO. Returns (nil, nil) when not found.
 func (h *FHIRHandler) queryPatientDTO(id int64) (*PatientDTO, error) {
-	query := `
-		SELECT
-			id,
-			nome,
-			COALESCE(TO_CHAR(data_nascimento, 'YYYY-MM-DD'), ''),
-			COALESCE(EXTRACT(YEAR FROM AGE(data_nascimento))::int, 0),
-			COALESCE(sexo, ''),
-			telefone,
-			endereco,
-			COALESCE(criado_em, NOW()),
-			COALESCE(atualizado_em, NOW())
-		FROM idosos
-		WHERE id = $1
-	`
+	ctx := context.Background()
 
-	dto := &PatientDTO{}
-	var phone, address sql.NullString
-
-	err := h.db.QueryRow(query, id).Scan(
-		&dto.ID,
-		&dto.Name,
-		&dto.DateOfBirth,
-		&dto.Age,
-		&dto.Gender,
-		&phone,
-		&address,
-		&dto.CreatedAt,
-		&dto.UpdatedAt,
-	)
+	m, err := h.db.GetNodeByID(ctx, "idosos", id)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to query patient %d: %w", id, err)
+	}
+	if m == nil {
+		return nil, nil
 	}
 
-	if phone.Valid {
-		dto.Phone = &phone.String
+	// Compute date of birth string and age from data_nascimento
+	dob := database.GetTime(m, "data_nascimento")
+	var dobStr string
+	var age int
+	if !dob.IsZero() {
+		dobStr = dob.Format("2006-01-02")
+		age = int(time.Since(dob).Hours() / 24 / 365.25)
 	}
-	if address.Valid {
-		dto.Address = &address.String
+
+	dto := &PatientDTO{
+		ID:          database.GetInt64(m, "id"),
+		Name:        database.GetString(m, "nome"),
+		DateOfBirth: dobStr,
+		Age:         age,
+		Gender:      database.GetString(m, "sexo"),
+		CreatedAt:   database.GetTime(m, "criado_em"),
+		UpdatedAt:   database.GetTime(m, "atualizado_em"),
+	}
+
+	// Handle nullable fields
+	phoneNS := database.GetNullString(m, "telefone")
+	if phoneNS.Valid {
+		dto.Phone = &phoneNS.String
+	}
+
+	addressNS := database.GetNullString(m, "endereco")
+	if addressNS.Valid {
+		dto.Address = &addressNS.String
+	}
+
+	// Default CreatedAt/UpdatedAt to now if missing
+	if dto.CreatedAt.IsZero() {
+		dto.CreatedAt = time.Now()
+	}
+	if dto.UpdatedAt.IsZero() {
+		dto.UpdatedAt = time.Now()
 	}
 
 	return dto, nil
 }
 
-// queryAssessmentDTOs loads all clinical assessments for a patient and maps
-// them to AssessmentDTO slices suitable for FHIR conversion.
+// queryAssessmentDTOs loads all clinical assessments for a patient from
+// NietzscheDB and maps them to AssessmentDTO slices suitable for FHIR conversion.
 func (h *FHIRHandler) queryAssessmentDTOs(patientID int64) ([]*AssessmentDTO, error) {
-	query := `
-		SELECT
-			id,
-			patient_id,
-			assessment_type,
-			status,
-			total_score,
-			severity_level,
-			clinical_interpretation,
-			created_at,
-			completed_at
-		FROM clinical_assessments
-		WHERE patient_id = $1
-		ORDER BY created_at DESC
-	`
+	ctx := context.Background()
 
-	rows, err := h.db.Query(query, patientID)
+	rows, err := h.db.QueryByLabel(ctx, "clinical_assessments",
+		" AND n.patient_id = $patient_id",
+		map[string]interface{}{
+			"patient_id": patientID,
+		}, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query assessments: %w", err)
 	}
-	defer rows.Close()
 
 	var assessments []*AssessmentDTO
-	for rows.Next() {
-		var (
-			rawID          interface{} // UUID or int — scanned as string
-			idStr          string
-			totalScore     sql.NullInt64
-			severityLevel  sql.NullString
-			interpretation sql.NullString
-			completedAt    sql.NullTime
-		)
-
+	for _, m := range rows {
 		dto := &AssessmentDTO{}
 
-		err := rows.Scan(
-			&rawID,
-			&dto.PatientID,
-			&dto.AssessmentType,
-			&dto.Status,
-			&totalScore,
-			&severityLevel,
-			&interpretation,
-			&dto.CreatedAt,
-			&completedAt,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan assessment row: %w", err)
+		// Extract ID — may be stored as string, int, or float
+		idRaw := database.GetString(m, "id")
+		if idRaw == "" || idRaw == "0" {
+			idRaw = fmt.Sprintf("%v", m["id"])
 		}
+		dto.ID = idRaw
 
-		// Convert raw ID (could be UUID []byte or int64) to string
-		switch v := rawID.(type) {
-		case []byte:
-			idStr = string(v)
-		case int64:
-			idStr = fmt.Sprintf("%d", v)
-		case string:
-			idStr = v
-		default:
-			idStr = fmt.Sprintf("%v", v)
-		}
-		dto.ID = idStr
+		dto.PatientID = database.GetInt64(m, "patient_id")
+		dto.AssessmentType = database.GetString(m, "assessment_type")
+		dto.Status = database.GetString(m, "status")
+		dto.CreatedAt = database.GetTime(m, "created_at")
 
-		if totalScore.Valid {
-			score := int(totalScore.Int64)
+		// Handle nullable total_score
+		if scoreVal, ok := m["total_score"]; ok && scoreVal != nil {
+			score := int(database.GetInt64(m, "total_score"))
 			dto.TotalScore = &score
 		}
-		if severityLevel.Valid {
-			dto.Severity = &severityLevel.String
+
+		// Handle nullable severity_level
+		sevNS := database.GetNullString(m, "severity_level")
+		if sevNS.Valid {
+			dto.Severity = &sevNS.String
 		}
-		if interpretation.Valid {
-			dto.Notes = &interpretation.String
+
+		// Handle nullable clinical_interpretation -> Notes
+		interpNS := database.GetNullString(m, "clinical_interpretation")
+		if interpNS.Valid {
+			dto.Notes = &interpNS.String
 		}
-		if completedAt.Valid {
-			dto.CompletedAt = &completedAt.Time
+
+		// Handle nullable completed_at
+		completedAt := database.GetTimePtr(m, "completed_at")
+		if completedAt != nil {
+			dto.CompletedAt = completedAt
 		}
 
 		dto.AdministeredBy = "eva"
@@ -272,9 +258,10 @@ func (h *FHIRHandler) queryAssessmentDTOs(patientID int64) ([]*AssessmentDTO, er
 		assessments = append(assessments, dto)
 	}
 
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating assessment rows: %w", err)
-	}
+	// Sort by created_at DESC (most recent first), matching the original ORDER BY
+	sort.Slice(assessments, func(i, j int) bool {
+		return assessments[i].CreatedAt.After(assessments[j].CreatedAt)
+	})
 
 	return assessments, nil
 }

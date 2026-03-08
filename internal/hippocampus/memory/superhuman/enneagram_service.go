@@ -5,25 +5,26 @@ package superhuman
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"regexp"
 	"strings"
 	"time"
+
+	"eva/internal/brainstem/database"
 )
 
 // EnneagramService detects patient's Enneagram type from speech patterns
 // PRINCIPLE: This identifies HOW the patient is trapped, not WHO they are
 type EnneagramService struct {
-	db       *sql.DB
+	db       *database.DB
 	types    map[int]*EnneagramType
 	patterns map[int][]*regexp.Regexp
 }
 
 // NewEnneagramService creates a new Enneagram detection service
-func NewEnneagramService(db *sql.DB) *EnneagramService {
+func NewEnneagramService(db *database.DB) *EnneagramService {
 	svc := &EnneagramService{
 		db:       db,
 		types:    make(map[int]*EnneagramType),
@@ -319,91 +320,76 @@ func (s *EnneagramService) detectDefenseMechanism(text string, typeID int) bool 
 
 // saveEvidence persists evidence to database
 func (s *EnneagramService) saveEvidence(ctx context.Context, ev *EnneagramEvidence) error {
-	query := `
-		INSERT INTO enneagram_evidence
-		(idoso_id, memory_id, verbatim, suggested_type, weight, category, context, timestamp)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		RETURNING id
-	`
+	now := ev.Timestamp.Format(time.RFC3339)
 
-	var memoryID interface{} = nil
-	if ev.MemoryID > 0 {
-		memoryID = ev.MemoryID
+	content := map[string]interface{}{
+		"idoso_id":       ev.IdosoID,
+		"verbatim":       ev.Verbatim,
+		"suggested_type": ev.SuggestedType,
+		"weight":         ev.Weight,
+		"category":       ev.Category,
+		"context":        ev.Context,
+		"timestamp":      now,
+		"created_at":     now,
 	}
 
-	return s.db.QueryRowContext(ctx, query,
-		ev.IdosoID, memoryID, ev.Verbatim, ev.SuggestedType,
-		ev.Weight, ev.Category, ev.Context, ev.Timestamp,
-	).Scan(&ev.ID)
+	if ev.MemoryID > 0 {
+		content["memory_id"] = ev.MemoryID
+	}
+
+	id, err := s.db.Insert(ctx, "enneagram_evidence", content)
+	if err != nil {
+		return err
+	}
+	ev.ID = id
+	return nil
 }
 
 // GetPatientEnneagram retrieves patient's Enneagram assessment
 func (s *EnneagramService) GetPatientEnneagram(ctx context.Context, idosoID int64) (*PatientEnneagram, error) {
-	query := `
-		SELECT idoso_id, primary_type, primary_type_confidence, dominant_wing,
-			   wing_influence, health_level, instinctual_variant, type_scores,
-			   evidence_count, last_evidence_at, identification_method, identified_at
-		FROM patient_enneagram
-		WHERE idoso_id = $1
-	`
+	rows, err := s.db.QueryByLabel(ctx, "patient_enneagram",
+		" AND n.idoso_id = $idoso",
+		map[string]interface{}{"idoso": idosoID}, 1)
+	if err != nil {
+		return nil, err
+	}
 
-	pe := &PatientEnneagram{}
-	var typeScoresJSON []byte
-	var lastEvidence, identifiedAt sql.NullTime
-	var healthLevel, dominantWing sql.NullInt32
-	var instinctualVariant, identificationMethod sql.NullString
-	var primaryType sql.NullInt32
-	var wingInfluence, confidence sql.NullFloat64
-
-	err := s.db.QueryRowContext(ctx, query, idosoID).Scan(
-		&pe.IdosoID, &primaryType, &confidence, &dominantWing,
-		&wingInfluence, &healthLevel, &instinctualVariant, &typeScoresJSON,
-		&pe.EvidenceCount, &lastEvidence, &identificationMethod, &identifiedAt,
-	)
-
-	if err == sql.ErrNoRows {
+	if len(rows) == 0 {
 		// Return empty assessment
 		return &PatientEnneagram{
 			IdosoID:    idosoID,
 			TypeScores: make(map[string]float64),
 		}, nil
 	}
-	if err != nil {
-		return nil, err
-	}
 
-	// Parse nullable fields
-	if primaryType.Valid {
-		pe.PrimaryType = int(primaryType.Int32)
-	}
-	if confidence.Valid {
-		pe.PrimaryTypeConfidence = confidence.Float64
-	}
-	if dominantWing.Valid {
-		pe.DominantWing = int(dominantWing.Int32)
-	}
-	if wingInfluence.Valid {
-		pe.WingInfluence = wingInfluence.Float64
-	}
-	if healthLevel.Valid {
-		pe.HealthLevel = int(healthLevel.Int32)
-	}
-	if instinctualVariant.Valid {
-		pe.InstinctualVariant = instinctualVariant.String
-	}
-	if identificationMethod.Valid {
-		pe.IdentificationMethod = identificationMethod.String
-	}
-	if lastEvidence.Valid {
-		pe.LastEvidenceAt = lastEvidence.Time
-	}
-	if identifiedAt.Valid {
-		pe.IdentifiedAt = identifiedAt.Time
+	m := rows[0]
+	pe := &PatientEnneagram{
+		IdosoID:              idosoID,
+		PrimaryType:          int(database.GetInt64(m, "primary_type")),
+		PrimaryTypeConfidence: database.GetFloat64(m, "primary_type_confidence"),
+		DominantWing:         int(database.GetInt64(m, "dominant_wing")),
+		WingInfluence:        database.GetFloat64(m, "wing_influence"),
+		HealthLevel:          int(database.GetInt64(m, "health_level")),
+		InstinctualVariant:   database.GetString(m, "instinctual_variant"),
+		EvidenceCount:        int(database.GetInt64(m, "evidence_count")),
+		IdentificationMethod: database.GetString(m, "identification_method"),
+		LastEvidenceAt:       database.GetTime(m, "last_evidence_at"),
+		IdentifiedAt:         database.GetTime(m, "identified_at"),
 	}
 
 	// Parse type scores
-	if len(typeScoresJSON) > 0 {
-		json.Unmarshal(typeScoresJSON, &pe.TypeScores)
+	pe.TypeScores = make(map[string]float64)
+	if raw, ok := m["type_scores"]; ok && raw != nil {
+		switch v := raw.(type) {
+		case string:
+			json.Unmarshal([]byte(v), &pe.TypeScores)
+		case map[string]interface{}:
+			for k, val := range v {
+				if f, ok := val.(float64); ok {
+					pe.TypeScores[k] = f
+				}
+			}
+		}
 	}
 
 	return pe, nil
@@ -431,24 +417,18 @@ func (s *EnneagramService) GenerateMirrorOutput(ctx context.Context, idosoID int
 	}
 
 	// Count evidences by category
-	query := `
-		SELECT category, COUNT(*) as cnt
-		FROM enneagram_evidence
-		WHERE idoso_id = $1 AND suggested_type = $2
-		GROUP BY category
-	`
-	rows, err := s.db.QueryContext(ctx, query, idosoID, pe.PrimaryType)
+	evidenceRows, err := s.db.QueryByLabel(ctx, "enneagram_evidence",
+		" AND n.idoso_id = $idoso AND n.suggested_type = $stype",
+		map[string]interface{}{"idoso": idosoID, "stype": pe.PrimaryType}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	categoryCounts := make(map[string]int)
-	for rows.Next() {
-		var cat string
-		var cnt int
-		if err := rows.Scan(&cat, &cnt); err == nil {
-			categoryCounts[cat] = cnt
+	for _, m := range evidenceRows {
+		cat := database.GetString(m, "category")
+		if cat != "" {
+			categoryCounts[cat]++
 		}
 	}
 

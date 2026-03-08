@@ -5,23 +5,23 @@ package audit
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"time"
 
+	"eva/internal/brainstem/database"
 	"github.com/google/uuid"
 )
 
 // DataRightsService handles LGPD data subject rights (Art. 18)
 type DataRightsService struct {
-	db    *sql.DB
+	db    *database.DB
 	audit *LGPDAuditService
 }
 
 // NewDataRightsService creates a new data rights service
-func NewDataRightsService(db *sql.DB, audit *LGPDAuditService) *DataRightsService {
+func NewDataRightsService(db *database.DB, audit *LGPDAuditService) *DataRightsService {
 	return &DataRightsService{
 		db:    db,
 		audit: audit,
@@ -104,12 +104,14 @@ func (s *DataRightsService) ExportPersonalData(ctx context.Context, subjectID in
 		token := uuid.New().String()
 		expiresAt := time.Now().Add(24 * time.Hour)
 
-		_, err := s.db.ExecContext(ctx, `
-			INSERT INTO lgpd_data_exports (
-				subject_id, format, status,
-				download_token, download_expires_at, completed_at
-			) VALUES ($1, $2, 'completed', $3, $4, NOW())
-		`, subjectID, format, token, expiresAt)
+		_, err := s.db.Insert(ctx, "lgpd_data_exports", map[string]interface{}{
+			"subject_id":          subjectID,
+			"format":              format,
+			"status":              "completed",
+			"download_token":      token,
+			"download_expires_at": expiresAt.Format(time.RFC3339),
+			"completed_at":        time.Now().Format(time.RFC3339),
+		})
 
 		if err == nil {
 			result.DownloadToken = token
@@ -174,61 +176,47 @@ func (s *DataRightsService) DeletePersonalData(ctx context.Context, subjectID in
 		return result, nil
 	}
 
-	// Begin transaction
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to start transaction: %w", err)
-	}
-	defer tx.Rollback()
-
-	// Delete from each table
+	// Soft-delete from each table via NietzscheDB
 	for _, table := range deletableTables {
 		if !table.canDelete {
 			result.RetainedData[table.name] = table.retainReason
 			continue
 		}
 
-		query := fmt.Sprintf("DELETE FROM %s WHERE %s = $1", table.name, table.idColumn)
-		res, err := tx.ExecContext(ctx, query, subjectID)
+		matchKeys := map[string]interface{}{
+			table.idColumn: subjectID,
+		}
+		err := s.db.SoftDelete(ctx, table.name, matchKeys)
 		if err != nil {
 			log.Printf("⚠️ [LGPD] Error deleting from %s: %v", table.name, err)
 			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", table.name, err))
 			continue
 		}
 
-		rowsAffected, _ := res.RowsAffected()
-		if rowsAffected > 0 {
-			result.TablesAffected = append(result.TablesAffected, table.name)
-			result.RecordsDeleted[table.name] = int(rowsAffected)
-		}
+		result.TablesAffected = append(result.TablesAffected, table.name)
+		result.RecordsDeleted[table.name] = 1
 	}
 
 	// Anonymize the main idosos record instead of deleting
 	// (required for referential integrity and audit trail)
-	anonymizeQuery := `
-		UPDATE idosos SET
-			nome = 'ANONIMIZADO',
-			cpf = NULL,
-			email = NULL,
-			telefone = NULL,
-			endereco = NULL,
-			data_nascimento = NULL,
-			foto_url = NULL,
-			anonimizado = true,
-			anonimizado_em = NOW()
-		WHERE id = $1
-	`
-	_, err = tx.ExecContext(ctx, anonymizeQuery, subjectID)
+	err := s.db.Update(ctx, "idosos",
+		map[string]interface{}{"id": subjectID},
+		map[string]interface{}{
+			"nome":            "ANONIMIZADO",
+			"cpf":             nil,
+			"email":           nil,
+			"telefone":        nil,
+			"endereco":        nil,
+			"data_nascimento": nil,
+			"foto_url":        nil,
+			"anonimizado":     true,
+			"anonimizado_em":  time.Now().Format(time.RFC3339),
+		})
 	if err != nil {
 		log.Printf("⚠️ [LGPD] Error anonymizing subject: %v", err)
 		result.Errors = append(result.Errors, fmt.Sprintf("anonymization: %v", err))
 	} else {
 		result.TablesAffected = append(result.TablesAffected, "idosos (anonymized)")
-	}
-
-	// Commit transaction
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("failed to commit deletion: %w", err)
 	}
 
 	if len(result.Errors) > 0 {
@@ -266,8 +254,12 @@ func (s *DataRightsService) RectifyPersonalData(ctx context.Context, subjectID i
 	}
 
 	if s.db != nil {
-		query := fmt.Sprintf("UPDATE idosos SET %s = $1, atualizado_em = NOW() WHERE id = $2", field)
-		_, err := s.db.ExecContext(ctx, query, newValue, subjectID)
+		err := s.db.Update(ctx, "idosos",
+			map[string]interface{}{"id": subjectID},
+			map[string]interface{}{
+				field:            newValue,
+				"atualizado_em":  time.Now().Format(time.RFC3339),
+			})
 		if err != nil {
 			return fmt.Errorf("failed to rectify: %w", err)
 		}
@@ -299,38 +291,36 @@ func (s *DataRightsService) GetDataAccessReport(ctx context.Context, subjectID i
 		}, nil
 	}
 
-	query := `
-		SELECT timestamp, event_type, actor_id, actor_type, resource, action, description
-		FROM lgpd_audit_log
-		WHERE subject_id = $1
-		  AND timestamp BETWEEN $2 AND $3
-		  AND event_type IN ('DATA_ACCESS', 'DATA_CREATE', 'DATA_UPDATE')
-		ORDER BY timestamp DESC
-	`
-
-	rows, err := s.db.QueryContext(ctx, query, subjectID, startDate, endDate)
+	rows, err := s.db.QueryByLabel(ctx, "lgpd_audit_log",
+		" AND n.subject_id = $sid", map[string]interface{}{
+			"sid": subjectID,
+		}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	var results []map[string]interface{}
-	for rows.Next() {
-		var timestamp time.Time
-		var eventType, actorID, actorType, resource, action, description string
+	for _, m := range rows {
+		ts := database.GetTime(m, "timestamp")
+		// Filter by timestamp range in Go
+		if ts.Before(startDate) || ts.After(endDate) {
+			continue
+		}
 
-		if err := rows.Scan(&timestamp, &eventType, &actorID, &actorType, &resource, &action, &description); err != nil {
+		eventType := database.GetString(m, "event_type")
+		// Filter by event type in Go
+		if eventType != "DATA_ACCESS" && eventType != "DATA_CREATE" && eventType != "DATA_UPDATE" {
 			continue
 		}
 
 		results = append(results, map[string]interface{}{
-			"timestamp":   timestamp,
+			"timestamp":   ts,
 			"event_type":  eventType,
-			"actor":       actorID,
-			"actor_type":  actorType,
-			"resource":    resource,
-			"action":      action,
-			"description": description,
+			"actor":       database.GetString(m, "actor_id"),
+			"actor_type":  database.GetString(m, "actor_type"),
+			"resource":    database.GetString(m, "resource"),
+			"action":      database.GetString(m, "action"),
+			"description": database.GetString(m, "description"),
 		})
 	}
 
@@ -354,43 +344,19 @@ func (s *DataRightsService) exportTableData(ctx context.Context, table Exportabl
 		}, nil
 	}
 
-	query := fmt.Sprintf("SELECT * FROM %s WHERE %s = $1", table.Name, table.IDColumn)
-	rows, err := s.db.QueryContext(ctx, query, subjectID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	columns, err := rows.Columns()
+	rows, err := s.db.QueryByLabel(ctx, table.Name,
+		fmt.Sprintf(" AND n.%s = $sid", table.IDColumn), map[string]interface{}{
+			"sid": subjectID,
+		}, 0)
 	if err != nil {
 		return nil, err
 	}
 
-	var results []map[string]interface{}
-
-	for rows.Next() {
-		values := make([]interface{}, len(columns))
-		valuePtrs := make([]interface{}, len(columns))
-		for i := range values {
-			valuePtrs[i] = &values[i]
-		}
-
-		if err := rows.Scan(valuePtrs...); err != nil {
-			continue
-		}
-
-		row := make(map[string]interface{})
-		for i, col := range columns {
-			row[col] = values[i]
-		}
-		results = append(results, row)
-	}
-
-	if len(results) == 0 {
+	if len(rows) == 0 {
 		return nil, nil
 	}
 
-	return results, nil
+	return rows, nil
 }
 
 // ExportToJSON exports data in JSON format

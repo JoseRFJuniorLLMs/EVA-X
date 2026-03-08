@@ -5,7 +5,6 @@ package memory
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
 	"math"
@@ -13,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"eva/internal/brainstem/database"
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 )
 
@@ -24,7 +24,7 @@ type FDPNActivator interface {
 }
 
 type RetrievalService struct {
-	db            *sql.DB
+	db            *database.DB
 	embedder      *EmbeddingService
 	vectorAdapter *nietzscheInfra.VectorAdapter
 	graphStore    *GraphStore // Para busca recursiva via NietzscheDB graph
@@ -33,7 +33,7 @@ type RetrievalService struct {
 }
 
 // NewRetrievalService cria um novo serviço de busca
-func NewRetrievalService(db *sql.DB, embedder *EmbeddingService, vectorAdapter *nietzscheInfra.VectorAdapter, graphStore *GraphStore) *RetrievalService {
+func NewRetrievalService(db *database.DB, embedder *EmbeddingService, vectorAdapter *nietzscheInfra.VectorAdapter, graphStore *GraphStore) *RetrievalService {
 	return &RetrievalService{
 		db:            db,
 		embedder:      embedder,
@@ -132,46 +132,23 @@ func (r *RetrievalService) Retrieve(ctx context.Context, idosoID int64, query st
 		}
 	}
 
-	// 5. HIDRATAR APENAS graph-recursive IDs do Postgres (minoria)
+	// 5. HIDRATAR graph-recursive IDs do NietzscheDB
 	if len(graphOnlyIDs) > 0 {
-		queryIDs := make([]string, len(graphOnlyIDs))
-		args := make([]interface{}, len(graphOnlyIDs))
-		for i, id := range graphOnlyIDs {
-			queryIDs[i] = fmt.Sprintf("$%d", i+1)
-			args[i] = id
-		}
-
-		sqlQuery := fmt.Sprintf(`
-			SELECT id, idoso_id, timestamp, speaker, content, emotion,
-			       importance, topics, session_id, event_date, is_atomic
-			FROM episodic_memories
-			WHERE id IN (%s)
-		`, strings.Join(queryIDs, ","))
-
-		rows, err := r.db.QueryContext(ctx, sqlQuery, args...)
-		if err != nil {
-			log.Printf("⚠️ [MEMORY] PG hydration fallback failed: %v", err)
-		} else {
-			defer rows.Close()
-			for rows.Next() {
-				mem := &Memory{}
-				var topics string
-				err := rows.Scan(
-					&mem.ID, &mem.IdosoID, &mem.Timestamp, &mem.Speaker, &mem.Content,
-					&mem.Emotion, &mem.Importance, &topics, &mem.SessionID,
-					&mem.EventDate, &mem.IsAtomic,
-				)
-				if err != nil {
-					continue
-				}
-				mem.Topics = parsePostgresArray(topics)
-				allResults = append(allResults, &SearchResult{
-					Memory:     mem,
-					Similarity: 0.85, // Score "Associação Forte"
-				})
+		for _, gid := range graphOnlyIDs {
+			node, err := r.db.GetNodeByID(ctx, "episodic_memories", gid)
+			if err != nil || node == nil {
+				continue
 			}
+			mem := memoryFromPayload(node)
+			if mem == nil || mem.ID == 0 {
+				continue
+			}
+			allResults = append(allResults, &SearchResult{
+				Memory:     mem,
+				Similarity: 0.85, // Score "Associação Forte"
+			})
 		}
-		log.Printf("✅ [MEMORY] %d resultados graph-recursive hidratados do PG", len(graphOnlyIDs))
+		log.Printf("✅ [MEMORY] %d resultados graph-recursive hidratados do NietzscheDB", len(graphOnlyIDs))
 	}
 
 	if len(allResults) == 0 {
@@ -219,40 +196,33 @@ func (r *RetrievalService) RetrieveRecent(ctx context.Context, idosoID int64, da
 		}
 	}
 
-	// 2. Fallback para Postgres
-	query := `
-		SELECT id, idoso_id, timestamp, speaker, content, emotion,
-		       importance, topics, session_id
-		FROM episodic_memories
-		WHERE idoso_id = $1
-		  AND timestamp > NOW() - INTERVAL '1 day' * $2
-		ORDER BY importance DESC, timestamp DESC
-		LIMIT $3
-	`
-
-	rows, err := r.db.QueryContext(ctx, query, idosoID, days, limit)
+	// 2. Fallback: NietzscheDB QueryByLabel
+	rows, err := r.db.QueryByLabel(ctx, "episodic_memories",
+		" AND n.idoso_id = $idoso_id",
+		map[string]interface{}{"idoso_id": idosoID},
+		limit*2, // fetch extra, filter by time below
+	)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
+	cutoff := time.Now().AddDate(0, 0, -days)
 	var memories []*Memory
-	for rows.Next() {
-		memory := &Memory{}
-		var topics string
-		err := rows.Scan(
-			&memory.ID, &memory.IdosoID, &memory.Timestamp, &memory.Speaker,
-			&memory.Content, &memory.Emotion, &memory.Importance, &topics,
-			&memory.SessionID,
-		)
-		if err != nil {
-			return nil, err
+	for _, row := range rows {
+		mem := memoryFromPayload(row)
+		if mem == nil || mem.ID == 0 {
+			continue
 		}
-		memory.Topics = parsePostgresArray(topics)
-		memories = append(memories, memory)
+		if mem.Timestamp.Before(cutoff) {
+			continue
+		}
+		memories = append(memories, mem)
+		if len(memories) >= limit {
+			break
+		}
 	}
 
-	return memories, rows.Err()
+	return memories, nil
 }
 
 // RetrieveHybrid combina busca semântica + temporal
@@ -397,4 +367,25 @@ func (r *RetrievalService) RetrieveWithMode(ctx context.Context, idosoID int64, 
 		// Modo desconhecido → fallback para rápido
 		return r.Retrieve(ctx, idosoID, query, k)
 	}
+}
+
+// parsePostgresArray converte formato PostgreSQL array "{a,b,c}" em []string.
+// Mantido para backward compat com dados migrados que ainda usam este formato.
+func parsePostgresArray(pgArray string) []string {
+	if len(pgArray) < 2 {
+		return []string{}
+	}
+	cleaned := pgArray[1 : len(pgArray)-1]
+	if cleaned == "" {
+		return []string{}
+	}
+	parts := strings.Split(cleaned, ",")
+	result := make([]string, 0, len(parts))
+	for _, item := range parts {
+		trimmed := strings.TrimSpace(strings.Trim(item, "\""))
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
 }

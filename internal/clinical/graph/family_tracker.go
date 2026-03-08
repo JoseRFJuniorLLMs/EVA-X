@@ -5,20 +5,22 @@ package graph
 
 import (
 	"context"
-	"database/sql"
+	"sort"
 	"time"
+
+	"eva/internal/brainstem/database"
 
 	"github.com/rs/zerolog/log"
 )
 
 // FamilyTracker tracks family structure changes
 type FamilyTracker struct {
-	db          *sql.DB
+	db          *database.DB
 	personGraph *PersonGraph
 }
 
 // NewFamilyTracker creates a new family tracker
-func NewFamilyTracker(db *sql.DB, personGraph *PersonGraph) *FamilyTracker {
+func NewFamilyTracker(db *database.DB, personGraph *PersonGraph) *FamilyTracker {
 	return &FamilyTracker{
 		db:          db,
 		personGraph: personGraph,
@@ -104,14 +106,10 @@ func (f *FamilyTracker) DetectChanges(ctx context.Context, patientID int64) ([]F
 func (f *FamilyTracker) detectMissingPeople(ctx context.Context, patientID int64, allPeople []*Person) []*Person {
 	const sessionsThreshold = 3
 
-	// Get last N sessions
-	var recentSessionCount int
-	err := f.db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM conversations
-		WHERE patient_id = $1
-		ORDER BY started_at DESC
-		LIMIT $2
-	`, patientID, sessionsThreshold).Scan(&recentSessionCount)
+	// Count conversations for this patient via NietzscheDB
+	recentSessionCount, err := f.db.Count(ctx, "conversations", " AND n.patient_id = $pid", map[string]interface{}{
+		"pid": patientID,
+	})
 
 	if err != nil || recentSessionCount < sessionsThreshold {
 		return []*Person{}
@@ -134,56 +132,75 @@ func (f *FamilyTracker) detectMissingPeople(ctx context.Context, patientID int64
 
 // storeChange stores a family change in database
 func (f *FamilyTracker) storeChange(ctx context.Context, change *FamilyChange) error {
-	// Check if change already recorded
-	var exists bool
-	err := f.db.QueryRowContext(ctx, `
-		SELECT EXISTS(
-			SELECT 1 FROM family_changes
-			WHERE patient_id = $1 AND person_NietzscheDB_id = $2 AND change_type = $3
-			AND detected_at > NOW() - INTERVAL '7 days'
-		)
-	`, change.PatientID, change.PersonID, change.ChangeType).Scan(&exists)
+	// Check if change already recorded (within last 7 days)
+	rows, err := f.db.QueryByLabel(ctx, "family_changes",
+		" AND n.patient_id = $pid AND n.person_NietzscheDB_id = $nid AND n.change_type = $ct",
+		map[string]interface{}{
+			"pid": change.PatientID,
+			"nid": change.PersonID,
+			"ct":  change.ChangeType,
+		}, 0)
 
-	if err == nil && exists {
-		// Already recorded recently
-		return nil
+	if err == nil {
+		sevenDaysAgo := time.Now().AddDate(0, 0, -7)
+		for _, row := range rows {
+			detectedAt := database.GetTime(row, "detected_at")
+			if detectedAt.After(sevenDaysAgo) {
+				// Already recorded recently
+				return nil
+			}
+		}
 	}
 
-	return f.db.QueryRowContext(ctx, `
-		INSERT INTO family_changes (
-			patient_id, change_type, person_NietzscheDB_id, person_name, relationship, detected_at
-		) VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING id
-	`, change.PatientID, change.ChangeType, change.PersonID, change.PersonName,
-		change.Relationship, change.DetectedAt,
-	).Scan(&change.ID)
+	// Insert new family change
+	id, insertErr := f.db.Insert(ctx, "family_changes", map[string]interface{}{
+		"patient_id":          change.PatientID,
+		"change_type":         change.ChangeType,
+		"person_NietzscheDB_id": change.PersonID,
+		"person_name":         change.PersonName,
+		"relationship":        change.Relationship,
+		"detected_at":         change.DetectedAt.Format(time.RFC3339Nano),
+	})
+	if insertErr != nil {
+		return insertErr
+	}
+	change.ID = id
+	return nil
 }
 
 // GetRecentChanges retrieves recent family changes
 func (f *FamilyTracker) GetRecentChanges(ctx context.Context, patientID int64, days int) ([]FamilyChange, error) {
-	rows, err := f.db.QueryContext(ctx, `
-		SELECT id, patient_id, change_type, person_NietzscheDB_id, person_name, relationship, detected_at
-		FROM family_changes
-		WHERE patient_id = $1 AND detected_at > NOW() - INTERVAL '$2 days'
-		ORDER BY detected_at DESC
-	`, patientID, days)
+	rows, err := f.db.QueryByLabel(ctx, "family_changes",
+		" AND n.patient_id = $pid",
+		map[string]interface{}{
+			"pid": patientID,
+		}, 0)
 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
+	cutoff := time.Now().AddDate(0, 0, -days)
 	var changes []FamilyChange
-	for rows.Next() {
-		var change FamilyChange
-		err := rows.Scan(
-			&change.ID, &change.PatientID, &change.ChangeType, &change.PersonID,
-			&change.PersonName, &change.Relationship, &change.DetectedAt,
-		)
-		if err == nil {
-			changes = append(changes, change)
+	for _, row := range rows {
+		detectedAt := database.GetTime(row, "detected_at")
+		if detectedAt.After(cutoff) {
+			changes = append(changes, FamilyChange{
+				ID:           database.GetInt64(row, "id"),
+				PatientID:    database.GetInt64(row, "patient_id"),
+				ChangeType:   database.GetString(row, "change_type"),
+				PersonID:     database.GetString(row, "person_NietzscheDB_id"),
+				PersonName:   database.GetString(row, "person_name"),
+				Relationship: database.GetString(row, "relationship"),
+				DetectedAt:   detectedAt,
+			})
 		}
 	}
 
-	return changes, rows.Err()
+	// Sort by detected_at DESC
+	sort.Slice(changes, func(i, j int) bool {
+		return changes[i].DetectedAt.After(changes[j].DetectedAt)
+	})
+
+	return changes, nil
 }

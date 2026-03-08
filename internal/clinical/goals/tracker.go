@@ -5,20 +5,22 @@ package goals
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
+	"fmt"
 	"time"
+
+	"eva/internal/brainstem/database"
 
 	"github.com/rs/zerolog/log"
 )
 
 // TreatmentGoalTracker tracks therapeutic objectives and measures progress
 type TreatmentGoalTracker struct {
-	db *sql.DB
+	db *database.DB
 }
 
 // NewTreatmentGoalTracker creates a new treatment goal tracker
-func NewTreatmentGoalTracker(db *sql.DB) *TreatmentGoalTracker {
+func NewTreatmentGoalTracker(db *database.DB) *TreatmentGoalTracker {
 	return &TreatmentGoalTracker{db: db}
 }
 
@@ -56,19 +58,21 @@ func (t *TreatmentGoalTracker) CreateGoal(ctx context.Context, patientID int64, 
 		UpdatedAt:         time.Now(),
 	}
 
-	err := t.db.QueryRowContext(ctx, `
-		INSERT INTO treatment_goals (
-			patient_id, description, target_sessions, sessions_completed,
-			related_themes, progress_metrics, status, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		RETURNING id
-	`, patientID, description, targetSessions, 0, themesJSON, metricsJSON,
-		"ACTIVE", goal.CreatedAt, goal.UpdatedAt,
-	).Scan(&goal.ID)
-
+	id, err := t.db.Insert(ctx, "treatment_goals", map[string]interface{}{
+		"patient_id":         patientID,
+		"description":        description,
+		"target_sessions":    targetSessions,
+		"sessions_completed": 0,
+		"related_themes":     string(themesJSON),
+		"progress_metrics":   string(metricsJSON),
+		"status":             "ACTIVE",
+		"created_at":         goal.CreatedAt.Format(time.RFC3339Nano),
+		"updated_at":         goal.UpdatedAt.Format(time.RFC3339Nano),
+	})
 	if err != nil {
 		return nil, err
 	}
+	goal.ID = id
 
 	log.Info().
 		Int64("goal_id", goal.ID).
@@ -114,16 +118,21 @@ func (t *TreatmentGoalTracker) UpdateProgress(ctx context.Context, goalID int64,
 	metricsJSON, _ := json.Marshal(goal.ProgressMetrics)
 	notesJSON, _ := json.Marshal(goal.ProgressNotes)
 
-	_, err = t.db.ExecContext(ctx, `
-		UPDATE treatment_goals
-		SET sessions_completed = $1,
-		    progress_metrics = $2,
-		    progress_notes = $3,
-		    status = $4,
-		    completed_at = $5,
-		    updated_at = NOW()
-		WHERE id = $6
-	`, goal.SessionsCompleted, metricsJSON, notesJSON, goal.Status, goal.CompletedAt, goalID)
+	updates := map[string]interface{}{
+		"sessions_completed": goal.SessionsCompleted,
+		"progress_metrics":   string(metricsJSON),
+		"progress_notes":     string(notesJSON),
+		"status":             goal.Status,
+		"updated_at":         time.Now().Format(time.RFC3339Nano),
+	}
+	if goal.CompletedAt != nil {
+		updates["completed_at"] = goal.CompletedAt.Format(time.RFC3339Nano)
+	}
+
+	err = t.db.Update(ctx, "treatment_goals",
+		map[string]interface{}{"id": float64(goalID)},
+		updates,
+	)
 
 	if err == nil {
 		log.Info().
@@ -139,80 +148,86 @@ func (t *TreatmentGoalTracker) UpdateProgress(ctx context.Context, goalID int64,
 
 // GetGoal retrieves a treatment goal
 func (t *TreatmentGoalTracker) GetGoal(ctx context.Context, goalID int64) (*TreatmentGoal, error) {
-	var goal TreatmentGoal
-	var themesJSON, metricsJSON, notesJSON []byte
-	var completedAt sql.NullTime
-
-	err := t.db.QueryRowContext(ctx, `
-		SELECT id, patient_id, description, target_sessions, sessions_completed,
-		       related_themes, progress_metrics, progress_notes, status,
-		       created_at, updated_at, completed_at
-		FROM treatment_goals
-		WHERE id = $1
-	`, goalID).Scan(
-		&goal.ID, &goal.PatientID, &goal.Description, &goal.TargetSessions,
-		&goal.SessionsCompleted, &themesJSON, &metricsJSON, &notesJSON,
-		&goal.Status, &goal.CreatedAt, &goal.UpdatedAt, &completedAt,
-	)
-
+	m, err := t.db.GetNodeByID(ctx, "treatment_goals", goalID)
 	if err != nil {
 		return nil, err
 	}
-
-	json.Unmarshal(themesJSON, &goal.RelatedThemes)
-	json.Unmarshal(metricsJSON, &goal.ProgressMetrics)
-	json.Unmarshal(notesJSON, &goal.ProgressNotes)
-
-	if completedAt.Valid {
-		goal.CompletedAt = &completedAt.Time
+	if m == nil {
+		return nil, fmt.Errorf("treatment goal %d not found", goalID)
 	}
 
-	return &goal, nil
+	goal := contentToTreatmentGoal(m)
+	return goal, nil
 }
 
 // GetActiveGoals retrieves all active goals for a patient
 func (t *TreatmentGoalTracker) GetActiveGoals(ctx context.Context, patientID int64) ([]*TreatmentGoal, error) {
-	rows, err := t.db.QueryContext(ctx, `
-		SELECT id, patient_id, description, target_sessions, sessions_completed,
-		       related_themes, progress_metrics, progress_notes, status,
-		       created_at, updated_at, completed_at
-		FROM treatment_goals
-		WHERE patient_id = $1 AND status = 'ACTIVE'
-		ORDER BY created_at DESC
-	`, patientID)
-
+	rows, err := t.db.QueryByLabel(ctx, "treatment_goals",
+		" AND n.patient_id = $pid AND n.status = $status",
+		map[string]interface{}{
+			"pid":    float64(patientID),
+			"status": "ACTIVE",
+		}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	var goals []*TreatmentGoal
-	for rows.Next() {
-		var goal TreatmentGoal
-		var themesJSON, metricsJSON, notesJSON []byte
-		var completedAt sql.NullTime
-
-		err := rows.Scan(
-			&goal.ID, &goal.PatientID, &goal.Description, &goal.TargetSessions,
-			&goal.SessionsCompleted, &themesJSON, &metricsJSON, &notesJSON,
-			&goal.Status, &goal.CreatedAt, &goal.UpdatedAt, &completedAt,
-		)
-		if err != nil {
-			continue
-		}
-
-		json.Unmarshal(themesJSON, &goal.RelatedThemes)
-		json.Unmarshal(metricsJSON, &goal.ProgressMetrics)
-		json.Unmarshal(notesJSON, &goal.ProgressNotes)
-
-		if completedAt.Valid {
-			goal.CompletedAt = &completedAt.Time
-		}
-
-		goals = append(goals, &goal)
+	for _, m := range rows {
+		goals = append(goals, contentToTreatmentGoal(m))
 	}
 
-	return goals, rows.Err()
+	// Sort by created_at DESC
+	for i := 0; i < len(goals); i++ {
+		for j := i + 1; j < len(goals); j++ {
+			if goals[j].CreatedAt.After(goals[i].CreatedAt) {
+				goals[i], goals[j] = goals[j], goals[i]
+			}
+		}
+	}
+
+	return goals, nil
+}
+
+// contentToTreatmentGoal converts a NietzscheDB content map to a TreatmentGoal.
+func contentToTreatmentGoal(m map[string]interface{}) *TreatmentGoal {
+	goal := &TreatmentGoal{
+		ID:                database.GetInt64(m, "id"),
+		PatientID:         database.GetInt64(m, "patient_id"),
+		Description:       database.GetString(m, "description"),
+		TargetSessions:    int(database.GetInt64(m, "target_sessions")),
+		SessionsCompleted: int(database.GetInt64(m, "sessions_completed")),
+		Status:            database.GetString(m, "status"),
+		CreatedAt:         database.GetTime(m, "created_at"),
+		UpdatedAt:         database.GetTime(m, "updated_at"),
+		CompletedAt:       database.GetTimePtr(m, "completed_at"),
+	}
+
+	// Parse JSON string fields
+	themesStr := database.GetString(m, "related_themes")
+	if themesStr != "" {
+		json.Unmarshal([]byte(themesStr), &goal.RelatedThemes)
+	}
+	metricsStr := database.GetString(m, "progress_metrics")
+	if metricsStr != "" {
+		json.Unmarshal([]byte(metricsStr), &goal.ProgressMetrics)
+	}
+	notesStr := database.GetString(m, "progress_notes")
+	if notesStr != "" {
+		json.Unmarshal([]byte(notesStr), &goal.ProgressNotes)
+	}
+
+	if goal.ProgressMetrics == nil {
+		goal.ProgressMetrics = make(map[string][]int)
+	}
+	if goal.ProgressNotes == nil {
+		goal.ProgressNotes = []string{}
+	}
+	if goal.RelatedThemes == nil {
+		goal.RelatedThemes = []string{}
+	}
+
+	return goal
 }
 
 // CalculateProgress calculates progress percentage for a goal

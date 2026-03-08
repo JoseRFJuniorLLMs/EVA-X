@@ -4,21 +4,24 @@
 package explainability
 
 import (
-	"database/sql"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"sort"
 	"strings"
 	"time"
+
+	"eva/internal/brainstem/database"
 )
 
-// ClinicalDecisionExplainer explica decisões clínicas usando feature importance
+// ClinicalDecisionExplainer explica decisoes clinicas usando feature importance
 type ClinicalDecisionExplainer struct {
-	db *sql.DB
+	db  *database.DB
+	ctx context.Context
 }
 
-// ClinicalPrediction representa uma predição clínica
+// ClinicalPrediction representa uma predicao clinica
 type ClinicalPrediction struct {
 	PatientID           int64
 	DecisionType        string  // crisis_prediction, depression_alert, etc
@@ -29,7 +32,7 @@ type ClinicalPrediction struct {
 	ModelVersion        string
 }
 
-// Feature representa uma feature usada na predição
+// Feature representa uma feature usada na predicao
 type Feature struct {
 	Name          string
 	CurrentValue  float64
@@ -39,66 +42,69 @@ type Feature struct {
 	Details       map[string]interface{}
 }
 
-// Explanation representa explicação completa
+// Explanation representa explicacao completa
 type Explanation struct {
-	ID                  string
-	PatientID           int64
-	DecisionType        string
-	PredictionScore     float64
-	Severity            string
-	Timeframe           string
+	ID                   string
+	PatientID            int64
+	DecisionType         string
+	PredictionScore      float64
+	Severity             string
+	Timeframe            string
 	FeatureContributions map[string]float64 // SHAP-like values
-	PrimaryFactors      []ExplanationFactor
-	SecondaryFactors    []ExplanationFactor
-	Recommendations     []Recommendation
-	SupportingEvidence  map[string]interface{}
-	ExplanationText     string
-	CreatedAt           time.Time
+	PrimaryFactors       []ExplanationFactor
+	SecondaryFactors     []ExplanationFactor
+	Recommendations      []Recommendation
+	SupportingEvidence   map[string]interface{}
+	ExplanationText      string
+	CreatedAt            time.Time
 }
 
-// ExplanationFactor fator que contribuiu para decisão
+// ExplanationFactor fator que contribuiu para decisao
 type ExplanationFactor struct {
-	Factor              string
-	Contribution        float64 // 0-1 (percentage)
-	Status              string
-	Details             string
-	BaselineComparison  string
-	HumanReadable       string
+	Factor             string
+	Contribution       float64 // 0-1 (percentage)
+	Status             string
+	Details            string
+	BaselineComparison string
+	HumanReadable      string
 }
 
-// Recommendation recomendação clínica
+// Recommendation recomendacao clinica
 type Recommendation struct {
-	Urgency     string // low, medium, high, critical
-	Action      string
-	Rationale   string
-	Timeframe   string
+	Urgency   string // low, medium, high, critical
+	Action    string
+	Rationale string
+	Timeframe string
 }
 
 // NewClinicalDecisionExplainer cria novo explainer
-func NewClinicalDecisionExplainer(db *sql.DB) *ClinicalDecisionExplainer {
-	return &ClinicalDecisionExplainer{db: db}
+func NewClinicalDecisionExplainer(db *database.DB) *ClinicalDecisionExplainer {
+	return &ClinicalDecisionExplainer{
+		db:  db,
+		ctx: context.Background(),
+	}
 }
 
-// ExplainDecision gera explicação completa para uma decisão clínica
+// ExplainDecision gera explicacao completa para uma decisao clinica
 func (cde *ClinicalDecisionExplainer) ExplainDecision(prediction ClinicalPrediction) (*Explanation, error) {
-	log.Printf("🔍 [EXPLAINER] Gerando explicação para decisão: %s (paciente %d)", prediction.DecisionType, prediction.PatientID)
+	log.Printf("[EXPLAINER] Gerando explicacao para decisao: %s (paciente %d)", prediction.DecisionType, prediction.PatientID)
 
-	// 1. Calcular contribuições (SHAP-like)
+	// 1. Calcular contribuicoes (SHAP-like)
 	contributions := cde.calculateContributions(prediction.Features, prediction.PredictionScore)
 
-	// 2. Classificar features por importância
+	// 2. Classificar features por importancia
 	primaryFactors, secondaryFactors := cde.classifyFactors(prediction.Features, contributions)
 
-	// 3. Gerar recomendações
+	// 3. Gerar recomendacoes
 	recommendations := cde.generateRecommendations(prediction, primaryFactors)
 
-	// 4. Coletar evidências de suporte
+	// 4. Coletar evidencias de suporte
 	evidence := cde.collectSupportingEvidence(prediction.PatientID, prediction.Features)
 
-	// 5. Gerar explicação em linguagem natural
+	// 5. Gerar explicacao em linguagem natural
 	explanationText := cde.generateNaturalLanguageExplanation(prediction, primaryFactors, secondaryFactors)
 
-	// 6. Criar objeto de explicação
+	// 6. Criar objeto de explicacao
 	explanation := &Explanation{
 		PatientID:            prediction.PatientID,
 		DecisionType:         prediction.DecisionType,
@@ -117,19 +123,19 @@ func (cde *ClinicalDecisionExplainer) ExplainDecision(prediction ClinicalPredict
 	// 7. Salvar no banco
 	err := cde.saveExplanation(explanation, prediction)
 	if err != nil {
-		return nil, fmt.Errorf("erro ao salvar explicação: %w", err)
+		return nil, fmt.Errorf("erro ao salvar explicacao: %w", err)
 	}
 
-	log.Printf("✅ [EXPLAINER] Explicação gerada com sucesso: ID=%s", explanation.ID)
+	log.Printf("[EXPLAINER] Explicacao gerada com sucesso: ID=%s", explanation.ID)
 
 	return explanation, nil
 }
 
-// calculateContributions calcula contribuição de cada feature (SHAP-like)
+// calculateContributions calcula contribuicao de cada feature (SHAP-like)
 func (cde *ClinicalDecisionExplainer) calculateContributions(features map[string]Feature, predictionScore float64) map[string]float64 {
 	contributions := make(map[string]float64)
 
-	// Heurística simplificada: quanto a feature desvia da baseline, maior a contribuição
+	// Heuristica simplificada: quanto a feature desvia da baseline, maior a contribuicao
 	totalDeviation := 0.0
 	deviations := make(map[string]float64)
 
@@ -152,11 +158,11 @@ func (cde *ClinicalDecisionExplainer) calculateContributions(features map[string
 		weight := 1.0
 		switch {
 		case strings.Contains(strings.ToLower(name), "medication"):
-			weight = 1.5 // Medicação é muito importante
+			weight = 1.5 // Medicacao e muito importante
 		case strings.Contains(strings.ToLower(name), "voice"):
-			weight = 1.3 // Voz é bom indicador
+			weight = 1.3 // Voz e bom indicador
 		case strings.Contains(strings.ToLower(name), "phq") || strings.Contains(strings.ToLower(name), "gad"):
-			weight = 1.2 // Escalas clínicas
+			weight = 1.2 // Escalas clinicas
 		case strings.Contains(strings.ToLower(name), "sleep"):
 			weight = 1.1 // Sono importante
 		}
@@ -166,7 +172,7 @@ func (cde *ClinicalDecisionExplainer) calculateContributions(features map[string
 		totalDeviation += absDeviation
 	}
 
-	// Normalizar contribuições (soma = predictionScore)
+	// Normalizar contribuicoes (soma = predictionScore)
 	if totalDeviation > 0 {
 		for name, deviation := range deviations {
 			contributions[name] = (deviation / totalDeviation) * predictionScore
@@ -176,9 +182,9 @@ func (cde *ClinicalDecisionExplainer) calculateContributions(features map[string
 	return contributions
 }
 
-// classifyFactors classifica features em primários e secundários
+// classifyFactors classifica features em primarios e secundarios
 func (cde *ClinicalDecisionExplainer) classifyFactors(features map[string]Feature, contributions map[string]float64) ([]ExplanationFactor, []ExplanationFactor) {
-	// Criar slice de fatores com contribuições
+	// Criar slice de fatores com contribuicoes
 	type factorWithContrib struct {
 		name         string
 		feature      Feature
@@ -194,20 +200,20 @@ func (cde *ClinicalDecisionExplainer) classifyFactors(features map[string]Featur
 		})
 	}
 
-	// Ordenar por contribuição
+	// Ordenar por contribuicao
 	sort.Slice(factors, func(i, j int) bool {
 		return factors[i].contribution > factors[j].contribution
 	})
 
-	// Top 3 = primários, resto = secundários
+	// Top 3 = primarios, resto = secundarios
 	var primary, secondary []ExplanationFactor
 
 	for i, f := range factors {
 		factor := ExplanationFactor{
-			Factor:       f.name,
-			Contribution: f.contribution,
-			Status:       f.feature.Status,
-			Details:      cde.formatDetails(f.feature),
+			Factor:             f.name,
+			Contribution:       f.contribution,
+			Status:             f.feature.Status,
+			Details:            cde.formatDetails(f.feature),
 			BaselineComparison: cde.formatBaselineComparison(f.feature),
 			HumanReadable:      cde.generateHumanReadableExplanation(f.name, f.feature),
 		}
@@ -222,28 +228,28 @@ func (cde *ClinicalDecisionExplainer) classifyFactors(features map[string]Featur
 	return primary, secondary
 }
 
-// generateRecommendations gera recomendações baseadas nos fatores
+// generateRecommendations gera recomendacoes baseadas nos fatores
 func (cde *ClinicalDecisionExplainer) generateRecommendations(prediction ClinicalPrediction, primaryFactors []ExplanationFactor) []Recommendation {
 	var recommendations []Recommendation
 
-	// Recomendações baseadas na severidade
+	// Recomendacoes baseadas na severidade
 	if prediction.Severity == "critical" || prediction.Severity == "high" {
 		recommendations = append(recommendations, Recommendation{
 			Urgency:   "high",
-			Action:    "Contato telefônico urgente nas próximas 24 horas",
-			Rationale: fmt.Sprintf("Predição de %s com probabilidade %.0f%%", prediction.DecisionType, prediction.PredictionScore*100),
+			Action:    "Contato telefonico urgente nas proximas 24 horas",
+			Rationale: fmt.Sprintf("Predicao de %s com probabilidade %.0f%%", prediction.DecisionType, prediction.PredictionScore*100),
 			Timeframe: "24h",
 		})
 	}
 
-	// Recomendações específicas por fator principal
+	// Recomendacoes especificas por fator principal
 	for _, factor := range primaryFactors {
 		if strings.Contains(strings.ToLower(factor.Factor), "medication") {
 			if factor.Status == "critical" || factor.Status == "concerning" {
 				recommendations = append(recommendations, Recommendation{
 					Urgency:   "high",
-					Action:    "Investigar barreiras à adesão medicamentosa",
-					Rationale: "Adesão medicamentosa abaixo do esperado é principal fator de risco",
+					Action:    "Investigar barreiras a adesao medicamentosa",
+					Rationale: "Adesao medicamentosa abaixo do esperado e principal fator de risco",
 					Timeframe: "48h",
 				})
 			}
@@ -252,8 +258,8 @@ func (cde *ClinicalDecisionExplainer) generateRecommendations(prediction Clinica
 		if strings.Contains(strings.ToLower(factor.Factor), "voice") {
 			recommendations = append(recommendations, Recommendation{
 				Urgency:   "medium",
-				Action:    "Análise de áudio detalhada com especialista",
-				Rationale: "Biomarcadores vocais indicam mudança significativa no estado mental",
+				Action:    "Analise de audio detalhada com especialista",
+				Rationale: "Biomarcadores vocais indicam mudanca significativa no estado mental",
 				Timeframe: "3-5 dias",
 			})
 		}
@@ -261,7 +267,7 @@ func (cde *ClinicalDecisionExplainer) generateRecommendations(prediction Clinica
 		if strings.Contains(strings.ToLower(factor.Factor), "sleep") {
 			recommendations = append(recommendations, Recommendation{
 				Urgency:   "medium",
-				Action:    "Protocolo de higiene do sono + avaliação de insônia",
+				Action:    "Protocolo de higiene do sono + avaliacao de insonia",
 				Rationale: "Qualidade de sono deteriorada contribui para risco",
 				Timeframe: "1 semana",
 			})
@@ -271,13 +277,13 @@ func (cde *ClinicalDecisionExplainer) generateRecommendations(prediction Clinica
 			recommendations = append(recommendations, Recommendation{
 				Urgency:   "high",
 				Action:    "Considerar ajuste medicamentoso ou psicoterapia",
-				Rationale: "Score de depressão elevado ou em piora",
+				Rationale: "Score de depressao elevado ou em piora",
 				Timeframe: "1 semana",
 			})
 		}
 	}
 
-	// Limitar a 5 recomendações mais importantes
+	// Limitar a 5 recomendacoes mais importantes
 	if len(recommendations) > 5 {
 		recommendations = recommendations[:5]
 	}
@@ -285,7 +291,7 @@ func (cde *ClinicalDecisionExplainer) generateRecommendations(prediction Clinica
 	return recommendations
 }
 
-// collectSupportingEvidence coleta evidências de suporte
+// collectSupportingEvidence coleta evidencias de suporte
 func (cde *ClinicalDecisionExplainer) collectSupportingEvidence(patientID int64, features map[string]Feature) map[string]interface{} {
 	evidence := make(map[string]interface{})
 
@@ -295,7 +301,7 @@ func (cde *ClinicalDecisionExplainer) collectSupportingEvidence(patientID int64,
 		evidence["conversation_excerpts"] = conversations
 	}
 
-	// Buscar samples de áudio (se houver voice features)
+	// Buscar samples de audio (se houver voice features)
 	for name := range features {
 		if strings.Contains(strings.ToLower(name), "voice") {
 			audioSamples := cde.getRecentAudioSamples(patientID, 2)
@@ -306,16 +312,16 @@ func (cde *ClinicalDecisionExplainer) collectSupportingEvidence(patientID int64,
 		}
 	}
 
-	// Adicionar gráficos de tendências
+	// Adicionar graficos de tendencias
 	evidence["graph_data"] = map[string]interface{}{
-		"mood_trend_7d":           cde.getMoodTrend(patientID, 7),
+		"mood_trend_7d":            cde.getMoodTrend(patientID, 7),
 		"medication_adherence_30d": cde.getMedicationAdherenceTrend(patientID, 30),
 	}
 
 	return evidence
 }
 
-// generateNaturalLanguageExplanation gera explicação em português
+// generateNaturalLanguageExplanation gera explicacao em portugues
 func (cde *ClinicalDecisionExplainer) generateNaturalLanguageExplanation(
 	prediction ClinicalPrediction,
 	primaryFactors []ExplanationFactor,
@@ -323,30 +329,30 @@ func (cde *ClinicalDecisionExplainer) generateNaturalLanguageExplanation(
 ) string {
 	var sb strings.Builder
 
-	// Título
-	sb.WriteString(fmt.Sprintf("🚨 ALERTA: %s\n\n", cde.translateDecisionType(prediction.DecisionType)))
+	// Titulo
+	sb.WriteString(fmt.Sprintf("ALERTA: %s\n\n", cde.translateDecisionType(prediction.DecisionType)))
 
-	// Predição
+	// Predicao
 	sb.WriteString(fmt.Sprintf("Probabilidade: %.0f%% (%s)\n", prediction.PredictionScore*100, cde.translateSeverity(prediction.Severity)))
 	sb.WriteString(fmt.Sprintf("Janela temporal: %s\n\n", prediction.PredictionTimeframe))
 
 	// Fatores principais
-	sb.WriteString("📊 FATORES PRINCIPAIS (por ordem de importância):\n\n")
+	sb.WriteString("FATORES PRINCIPAIS (por ordem de importancia):\n\n")
 	for i, factor := range primaryFactors {
-		sb.WriteString(fmt.Sprintf("%d. %s (contribuição: %.0f%%)\n", i+1, cde.formatFactorName(factor.Factor), factor.Contribution*100))
+		sb.WriteString(fmt.Sprintf("%d. %s (contribuicao: %.0f%%)\n", i+1, cde.formatFactorName(factor.Factor), factor.Contribution*100))
 		sb.WriteString(fmt.Sprintf("   Status: %s\n", cde.translateStatus(factor.Status)))
 		sb.WriteString(fmt.Sprintf("   %s\n", factor.HumanReadable))
 		if factor.BaselineComparison != "" {
-			sb.WriteString(fmt.Sprintf("   Comparação: %s\n", factor.BaselineComparison))
+			sb.WriteString(fmt.Sprintf("   Comparacao: %s\n", factor.BaselineComparison))
 		}
 		sb.WriteString("\n")
 	}
 
-	// Fatores secundários (se houver)
+	// Fatores secundarios (se houver)
 	if len(secondaryFactors) > 0 {
-		sb.WriteString("📋 FATORES SECUNDÁRIOS:\n\n")
+		sb.WriteString("FATORES SECUNDARIOS:\n\n")
 		for _, factor := range secondaryFactors {
-			sb.WriteString(fmt.Sprintf("• %s: %s\n", cde.formatFactorName(factor.Factor), factor.HumanReadable))
+			sb.WriteString(fmt.Sprintf("- %s: %s\n", cde.formatFactorName(factor.Factor), factor.HumanReadable))
 		}
 		sb.WriteString("\n")
 	}
@@ -354,13 +360,13 @@ func (cde *ClinicalDecisionExplainer) generateNaturalLanguageExplanation(
 	return sb.String()
 }
 
-// saveExplanation salva explicação no banco
+// saveExplanation salva explicacao no banco
 func (cde *ClinicalDecisionExplainer) saveExplanation(explanation *Explanation, prediction ClinicalPrediction) error {
 	// Converter maps para JSON
 	contributionsJSON, _ := json.Marshal(explanation.FeatureContributions)
 	featuresSnapshotJSON, _ := json.Marshal(prediction.Features)
 
-	// Estruturar explicação
+	// Estruturar explicacao
 	primaryFactorsJSON, _ := json.Marshal(explanation.PrimaryFactors)
 	secondaryFactorsJSON, _ := json.Marshal(explanation.SecondaryFactors)
 	explanationStructured := map[string]interface{}{
@@ -372,44 +378,35 @@ func (cde *ClinicalDecisionExplainer) saveExplanation(explanation *Explanation, 
 	recommendationsJSON, _ := json.Marshal(explanation.Recommendations)
 	evidenceJSON, _ := json.Marshal(explanation.SupportingEvidence)
 
-	// Insert
-	query := `
-		INSERT INTO clinical_decision_explanations (
-			patient_id, decision_type, prediction_score, prediction_timeframe, severity,
-			feature_contributions, features_snapshot, explanation_text, explanation_structured,
-			recommendations, supporting_evidence, model_version
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-		RETURNING id
-	`
+	// Insert into NietzscheDB
+	content := map[string]interface{}{
+		"patient_id":              explanation.PatientID,
+		"decision_type":           explanation.DecisionType,
+		"prediction_score":        explanation.PredictionScore,
+		"prediction_timeframe":    explanation.Timeframe,
+		"severity":                explanation.Severity,
+		"feature_contributions":   string(contributionsJSON),
+		"features_snapshot":       string(featuresSnapshotJSON),
+		"explanation_text":        explanation.ExplanationText,
+		"explanation_structured":  string(explanationStructuredJSON),
+		"recommendations":         string(recommendationsJSON),
+		"supporting_evidence":     string(evidenceJSON),
+		"model_version":           prediction.ModelVersion,
+		"created_at":              time.Now().Format(time.RFC3339),
+	}
 
-	var explanationID string
-	err := cde.db.QueryRow(
-		query,
-		explanation.PatientID,
-		explanation.DecisionType,
-		explanation.PredictionScore,
-		explanation.Timeframe,
-		explanation.Severity,
-		contributionsJSON,
-		featuresSnapshotJSON,
-		explanation.ExplanationText,
-		explanationStructuredJSON,
-		recommendationsJSON,
-		evidenceJSON,
-		prediction.ModelVersion,
-	).Scan(&explanationID)
-
+	explanationID, err := cde.db.Insert(cde.ctx, "clinical_decision_explanations", content)
 	if err != nil {
 		return err
 	}
 
-	explanation.ID = explanationID
+	explanation.ID = fmt.Sprintf("%d", explanationID)
 
 	// Inserir fatores individuais
 	for _, factor := range append(explanation.PrimaryFactors, explanation.SecondaryFactors...) {
-		err = cde.saveDecisionFactor(explanationID, factor)
+		err = cde.saveDecisionFactor(explanation.ID, factor)
 		if err != nil {
-			log.Printf("⚠️ [EXPLAINER] Erro ao salvar fator: %v", err)
+			log.Printf("[EXPLAINER] Erro ao salvar fator: %v", err)
 		}
 	}
 
@@ -433,25 +430,19 @@ func (cde *ClinicalDecisionExplainer) saveDecisionFactor(explanationID string, f
 		category = "tertiary"
 	}
 
-	query := `
-		INSERT INTO decision_factors (
-			explanation_id, factor_name, factor_category, shap_value, contribution_percentage,
-			status, details, human_readable_explanation
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	`
+	content := map[string]interface{}{
+		"explanation_id":               explanationID,
+		"factor_name":                  factor.Factor,
+		"factor_category":             category,
+		"shap_value":                  factor.Contribution,
+		"contribution_percentage":     factor.Contribution * 100,
+		"status":                      factor.Status,
+		"details":                     string(detailsJSON),
+		"human_readable_explanation":  factor.HumanReadable,
+		"created_at":                  time.Now().Format(time.RFC3339),
+	}
 
-	_, err := cde.db.Exec(
-		query,
-		explanationID,
-		factor.Factor,
-		category,
-		factor.Contribution, // Simplificação: usando contribution como SHAP
-		factor.Contribution*100,
-		factor.Status,
-		detailsJSON,
-		factor.HumanReadable,
-	)
-
+	_, err := cde.db.Insert(cde.ctx, "decision_factors", content)
 	return err
 }
 
@@ -474,26 +465,26 @@ func (cde *ClinicalDecisionExplainer) formatBaselineComparison(feature Feature) 
 	changePercent := (change / feature.BaselineValue) * 100
 
 	if change > 0 {
-		return fmt.Sprintf("↑ %.1f%% acima da baseline (baseline: %.2f)", changePercent, feature.BaselineValue)
+		return fmt.Sprintf("%.1f%% acima da baseline (baseline: %.2f)", changePercent, feature.BaselineValue)
 	} else if change < 0 {
-		return fmt.Sprintf("↓ %.1f%% abaixo da baseline (baseline: %.2f)", -changePercent, feature.BaselineValue)
+		return fmt.Sprintf("%.1f%% abaixo da baseline (baseline: %.2f)", -changePercent, feature.BaselineValue)
 	}
 
-	return "Sem mudança em relação à baseline"
+	return "Sem mudanca em relacao a baseline"
 }
 
 func (cde *ClinicalDecisionExplainer) generateHumanReadableExplanation(name string, feature Feature) string {
-	// Gerar explicação humanizada baseada no tipo de feature
+	// Gerar explicacao humanizada baseada no tipo de feature
 	lowerName := strings.ToLower(name)
 
 	if strings.Contains(lowerName, "medication") {
 		adherence := feature.CurrentValue * 100
 		if adherence < 50 {
-			return fmt.Sprintf("Adesão medicamentosa crítica: apenas %.0f%% das doses tomadas", adherence)
+			return fmt.Sprintf("Adesao medicamentosa critica: apenas %.0f%% das doses tomadas", adherence)
 		} else if adherence < 70 {
-			return fmt.Sprintf("Adesão medicamentosa preocupante: %.0f%% das doses", adherence)
+			return fmt.Sprintf("Adesao medicamentosa preocupante: %.0f%% das doses", adherence)
 		}
-		return fmt.Sprintf("Adesão medicamentosa: %.0f%%", adherence)
+		return fmt.Sprintf("Adesao medicamentosa: %.0f%%", adherence)
 	}
 
 	if strings.Contains(lowerName, "voice") || strings.Contains(lowerName, "pitch") {
@@ -503,21 +494,21 @@ func (cde *ClinicalDecisionExplainer) generateHumanReadableExplanation(name stri
 	if strings.Contains(lowerName, "sleep") {
 		hours := feature.CurrentValue
 		if hours < 5 {
-			return fmt.Sprintf("Sono severamente comprometido: média de %.1f horas/noite", hours)
+			return fmt.Sprintf("Sono severamente comprometido: media de %.1f horas/noite", hours)
 		} else if hours < 6 {
 			return fmt.Sprintf("Qualidade de sono ruim: %.1f horas/noite", hours)
 		}
-		return fmt.Sprintf("Duração do sono: %.1f horas/noite", hours)
+		return fmt.Sprintf("Duracao do sono: %.1f horas/noite", hours)
 	}
 
 	if strings.Contains(lowerName, "phq9") || strings.Contains(lowerName, "depression") {
 		score := feature.CurrentValue
 		if score >= 20 {
-			return fmt.Sprintf("Depressão severa (PHQ-9: %.0f)", score)
+			return fmt.Sprintf("Depressao severa (PHQ-9: %.0f)", score)
 		} else if score >= 15 {
-			return fmt.Sprintf("Depressão moderadamente severa (PHQ-9: %.0f)", score)
+			return fmt.Sprintf("Depressao moderadamente severa (PHQ-9: %.0f)", score)
 		} else if score >= 10 {
-			return fmt.Sprintf("Depressão moderada (PHQ-9: %.0f)", score)
+			return fmt.Sprintf("Depressao moderada (PHQ-9: %.0f)", score)
 		}
 		return fmt.Sprintf("Score PHQ-9: %.0f", score)
 	}
@@ -527,13 +518,13 @@ func (cde *ClinicalDecisionExplainer) generateHumanReadableExplanation(name stri
 
 func (cde *ClinicalDecisionExplainer) translateDecisionType(decisionType string) string {
 	translations := map[string]string{
-		"crisis_prediction":     "Risco de Crise Mental",
-		"depression_alert":      "Alerta de Depressão",
-		"anxiety_alert":         "Alerta de Ansiedade",
-		"medication_alert":      "Alerta de Adesão Medicamentosa",
-		"suicide_risk":          "Risco de Suicídio",
-		"hospitalization_risk":  "Risco de Hospitalização",
-		"fall_risk":             "Risco de Queda",
+		"crisis_prediction":    "Risco de Crise Mental",
+		"depression_alert":     "Alerta de Depressao",
+		"anxiety_alert":        "Alerta de Ansiedade",
+		"medication_alert":     "Alerta de Adesao Medicamentosa",
+		"suicide_risk":         "Risco de Suicidio",
+		"hospitalization_risk": "Risco de Hospitalizacao",
+		"fall_risk":            "Risco de Queda",
 	}
 
 	if translated, ok := translations[decisionType]; ok {
@@ -545,9 +536,9 @@ func (cde *ClinicalDecisionExplainer) translateDecisionType(decisionType string)
 func (cde *ClinicalDecisionExplainer) translateSeverity(severity string) string {
 	translations := map[string]string{
 		"low":      "baixo",
-		"medium":   "médio",
+		"medium":   "medio",
 		"high":     "alto",
-		"critical": "crítico",
+		"critical": "critico",
 	}
 
 	if translated, ok := translations[severity]; ok {
@@ -558,10 +549,10 @@ func (cde *ClinicalDecisionExplainer) translateSeverity(severity string) string 
 
 func (cde *ClinicalDecisionExplainer) translateStatus(status string) string {
 	translations := map[string]string{
-		"normal":      "Normal",
-		"warning":     "⚠️ Atenção",
-		"concerning":  "⚠️ Preocupante",
-		"critical":    "🔴 Crítico",
+		"normal":     "Normal",
+		"warning":    "Atencao",
+		"concerning": "Preocupante",
+		"critical":   "Critico",
 	}
 
 	if translated, ok := translations[status]; ok {
@@ -571,7 +562,7 @@ func (cde *ClinicalDecisionExplainer) translateStatus(status string) string {
 }
 
 func (cde *ClinicalDecisionExplainer) formatFactorName(name string) string {
-	// Formatar nomes de features para exibição
+	// Formatar nomes de features para exibicao
 	formatted := strings.ReplaceAll(name, "_", " ")
 	formatted = strings.Title(formatted)
 	return formatted
@@ -579,26 +570,23 @@ func (cde *ClinicalDecisionExplainer) formatFactorName(name string) string {
 
 // Helper: buscar conversas recentes
 func (cde *ClinicalDecisionExplainer) getRecentConversations(patientID int64, limit int) []string {
-	query := `
-		SELECT CONCAT(DATE_PART('day', created_at), '/', DATE_PART('month', created_at), ' ',
-		              DATE_PART('hour', created_at), ':', LPAD(DATE_PART('minute', created_at)::TEXT, 2, '0'),
-		              ' - ', SUBSTRING(conversation_text, 1, 100))
-		FROM interaction_cognitive_load
-		WHERE patient_id = $1
-		ORDER BY created_at DESC
-		LIMIT $2
-	`
-
-	rows, err := cde.db.Query(query, patientID, limit)
-	if err != nil {
+	rows, err := cde.db.QueryByLabel(cde.ctx, "interaction_cognitive_load",
+		" AND n.patient_id = $pid",
+		map[string]interface{}{"pid": patientID},
+		limit,
+	)
+	if err != nil || len(rows) == 0 {
 		return []string{}
 	}
-	defer rows.Close()
 
 	var conversations []string
-	for rows.Next() {
-		var conv string
-		rows.Scan(&conv)
+	for _, m := range rows {
+		createdAt := database.GetString(m, "created_at")
+		text := database.GetString(m, "conversation_text")
+		if len(text) > 100 {
+			text = text[:100]
+		}
+		conv := fmt.Sprintf("%s - %s", createdAt, text)
 		conversations = append(conversations, conv)
 	}
 
@@ -607,22 +595,22 @@ func (cde *ClinicalDecisionExplainer) getRecentConversations(patientID int64, li
 
 // Helper: buscar audio samples
 func (cde *ClinicalDecisionExplainer) getRecentAudioSamples(patientID int64, limit int) []string {
-	// Placeholder: retornar paths de áudio se existirem
+	// Placeholder: retornar paths de audio se existirem
 	return []string{
 		fmt.Sprintf("s3://eva-audio/patient-%d/recent-1.wav", patientID),
 		fmt.Sprintf("s3://eva-audio/patient-%d/recent-2.wav", patientID),
 	}
 }
 
-// Helper: tendência de humor
+// Helper: tendencia de humor
 func (cde *ClinicalDecisionExplainer) getMoodTrend(patientID int64, days int) []int {
 	// Placeholder: retornar array de scores de humor
 	// TODO: implementar query real
 	return []int{6, 5, 4, 4, 3, 3, 2}
 }
 
-// Helper: tendência de adesão medicamentosa
+// Helper: tendencia de adesao medicamentosa
 func (cde *ClinicalDecisionExplainer) getMedicationAdherenceTrend(patientID int64, days int) string {
-	// Placeholder: retornar URL do gráfico
+	// Placeholder: retornar URL do grafico
 	return fmt.Sprintf("/api/graphs/medication-adherence/%d?days=%d", patientID, days)
 }

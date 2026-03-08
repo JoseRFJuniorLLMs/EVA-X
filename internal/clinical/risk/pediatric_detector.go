@@ -5,17 +5,19 @@ package risk
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
+	"sort"
 	"strings"
 	"time"
+
+	"eva/internal/brainstem/database"
 
 	"github.com/rs/zerolog/log"
 )
 
 // PediatricRiskDetector detects self-harm risk in children's natural language
 type PediatricRiskDetector struct {
-	db *sql.DB
+	db *database.DB
 
 	// Metaphor patterns by risk level
 	metaphors map[string]float64
@@ -25,7 +27,7 @@ type PediatricRiskDetector struct {
 }
 
 // NewPediatricRiskDetector creates a new pediatric risk detector
-func NewPediatricRiskDetector(db *sql.DB) *PediatricRiskDetector {
+func NewPediatricRiskDetector(db *database.DB) *PediatricRiskDetector {
 	return &PediatricRiskDetector{
 		db: db,
 		metaphors: map[string]float64{
@@ -155,28 +157,55 @@ func (p *PediatricRiskDetector) getContextualScore(ctx context.Context, patientI
 	factors := []string{}
 	score := 0.0
 
-	// Check recent conversation history
+	// Check recent conversation history: first get conversations for patient
 	var recentStatements []string
-	rows, err := p.db.QueryContext(ctx, `
-		SELECT content 
-		FROM messages 
-		WHERE conversation_id IN (
-			SELECT id FROM conversations WHERE patient_id = $1
-		)
-		ORDER BY created_at DESC 
-		LIMIT 20
-	`, patientID)
 
+	convRows, err := p.db.QueryByLabel(ctx, "conversations",
+		" AND n.patient_id = $pid", map[string]interface{}{
+			"pid": patientID,
+		}, 0)
 	if err != nil {
 		return 0.0, factors
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var content string
-		if err := rows.Scan(&content); err == nil {
-			recentStatements = append(recentStatements, strings.ToLower(content))
+	// Collect conversation IDs
+	convIDs := make(map[int64]bool)
+	for _, c := range convRows {
+		convIDs[database.GetInt64(c, "id")] = true
+	}
+
+	// Get messages from those conversations, sorted by created_at DESC, limit 20
+	msgRows, err := p.db.QueryByLabel(ctx, "messages", "", nil, 0)
+	if err != nil {
+		return 0.0, factors
+	}
+
+	// Filter messages belonging to patient's conversations
+	type msgEntry struct {
+		content   string
+		createdAt time.Time
+	}
+	var msgs []msgEntry
+	for _, m := range msgRows {
+		cid := database.GetInt64(m, "conversation_id")
+		if convIDs[cid] {
+			msgs = append(msgs, msgEntry{
+				content:   database.GetString(m, "content"),
+				createdAt: database.GetTime(m, "created_at"),
+			})
 		}
+	}
+
+	// Sort by created_at DESC and limit 20
+	sort.Slice(msgs, func(i, j int) bool {
+		return msgs[i].createdAt.After(msgs[j].createdAt)
+	})
+	if len(msgs) > 20 {
+		msgs = msgs[:20]
+	}
+
+	for _, m := range msgs {
+		recentStatements = append(recentStatements, strings.ToLower(m.content))
 	}
 
 	// Factor 1: Repeated themes of sadness
@@ -261,78 +290,110 @@ func (p *PediatricRiskDetector) storeAssessment(ctx context.Context, assessment 
 	metaphorsJSON, _ := json.Marshal(assessment.DetectedMetaphors)
 	factorsJSON, _ := json.Marshal(assessment.ContextualFactors)
 
-	return p.db.QueryRowContext(ctx, `
-		INSERT INTO risk_detections (
-			patient_id, session_id, statement, risk_level, risk_score,
-			detected_metaphors, contextual_factors, age, recommended_action, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		RETURNING id
-	`, assessment.PatientID, assessment.SessionID, assessment.Statement,
-		assessment.RiskLevel, assessment.RiskScore, metaphorsJSON, factorsJSON,
-		assessment.Age, assessment.RecommendedAction, assessment.CreatedAt,
-	).Scan(&assessment.ID)
+	id, err := p.db.Insert(ctx, "risk_detections", map[string]interface{}{
+		"patient_id":         assessment.PatientID,
+		"session_id":         assessment.SessionID,
+		"statement":          assessment.Statement,
+		"risk_level":         assessment.RiskLevel,
+		"risk_score":         assessment.RiskScore,
+		"detected_metaphors": string(metaphorsJSON),
+		"contextual_factors": string(factorsJSON),
+		"age":                assessment.Age,
+		"recommended_action": assessment.RecommendedAction,
+		"created_at":         assessment.CreatedAt.Format(time.RFC3339),
+	})
+	if err != nil {
+		return err
+	}
+	assessment.ID = id
+	return nil
 }
 
 // GetRecentAssessments retrieves recent risk assessments for a patient
 func (p *PediatricRiskDetector) GetRecentAssessments(ctx context.Context, patientID int64, limit int) ([]*RiskAssessment, error) {
-	rows, err := p.db.QueryContext(ctx, `
-		SELECT id, patient_id, session_id, statement, risk_level, risk_score,
-		       detected_metaphors, contextual_factors, age, recommended_action, created_at
-		FROM risk_detections
-		WHERE patient_id = $1
-		ORDER BY created_at DESC
-		LIMIT $2
-	`, patientID, limit)
-
+	rows, err := p.db.QueryByLabel(ctx, "risk_detections",
+		" AND n.patient_id = $pid", map[string]interface{}{
+			"pid": patientID,
+		}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	var assessments []*RiskAssessment
-	for rows.Next() {
-		var a RiskAssessment
-		var metaphorsJSON, factorsJSON []byte
-
-		err := rows.Scan(
-			&a.ID, &a.PatientID, &a.SessionID, &a.Statement, &a.RiskLevel, &a.RiskScore,
-			&metaphorsJSON, &factorsJSON, &a.Age, &a.RecommendedAction, &a.CreatedAt,
-		)
-		if err != nil {
-			continue
+	for _, m := range rows {
+		a := &RiskAssessment{
+			ID:                database.GetInt64(m, "id"),
+			PatientID:         database.GetInt64(m, "patient_id"),
+			SessionID:         database.GetInt64(m, "session_id"),
+			Statement:         database.GetString(m, "statement"),
+			RiskLevel:         database.GetString(m, "risk_level"),
+			RiskScore:         database.GetFloat64(m, "risk_score"),
+			Age:               int(database.GetInt64(m, "age")),
+			RecommendedAction: database.GetString(m, "recommended_action"),
+			CreatedAt:         database.GetTime(m, "created_at"),
 		}
 
-		json.Unmarshal(metaphorsJSON, &a.DetectedMetaphors)
-		json.Unmarshal(factorsJSON, &a.ContextualFactors)
+		var metaphors []string
+		json.Unmarshal([]byte(database.GetString(m, "detected_metaphors")), &metaphors)
+		a.DetectedMetaphors = metaphors
 
-		assessments = append(assessments, &a)
+		var factors []string
+		json.Unmarshal([]byte(database.GetString(m, "contextual_factors")), &factors)
+		a.ContextualFactors = factors
+
+		assessments = append(assessments, a)
 	}
 
-	return assessments, rows.Err()
+	// Sort by created_at DESC
+	sort.Slice(assessments, func(i, j int) bool {
+		return assessments[i].CreatedAt.After(assessments[j].CreatedAt)
+	})
+
+	// Apply limit
+	if limit > 0 && len(assessments) > limit {
+		assessments = assessments[:limit]
+	}
+
+	return assessments, nil
 }
 
 // GetRiskTrend analyzes risk trend over time
 func (p *PediatricRiskDetector) GetRiskTrend(ctx context.Context, patientID int64, days int) ([]float64, error) {
-	rows, err := p.db.QueryContext(ctx, `
-		SELECT risk_score
-		FROM risk_detections
-		WHERE patient_id = $1
-		AND created_at > NOW() - INTERVAL '$2 days'
-		ORDER BY created_at ASC
-	`, patientID, days)
-
+	rows, err := p.db.QueryByLabel(ctx, "risk_detections",
+		" AND n.patient_id = $pid", map[string]interface{}{
+			"pid": patientID,
+		}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	var scores []float64
-	for rows.Next() {
-		var score float64
-		if err := rows.Scan(&score); err == nil {
-			scores = append(scores, score)
+	cutoff := time.Now().AddDate(0, 0, -days)
+
+	// Filter by date range and collect with timestamps for sorting
+	type scored struct {
+		score     float64
+		createdAt time.Time
+	}
+	var filtered []scored
+	for _, m := range rows {
+		createdAt := database.GetTime(m, "created_at")
+		if createdAt.After(cutoff) {
+			filtered = append(filtered, scored{
+				score:     database.GetFloat64(m, "risk_score"),
+				createdAt: createdAt,
+			})
 		}
 	}
 
-	return scores, rows.Err()
+	// Sort by created_at ASC
+	sort.Slice(filtered, func(i, j int) bool {
+		return filtered[i].createdAt.Before(filtered[j].createdAt)
+	})
+
+	scores := make([]float64, len(filtered))
+	for i, f := range filtered {
+		scores[i] = f.score
+	}
+
+	return scores, nil
 }

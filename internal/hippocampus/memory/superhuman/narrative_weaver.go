@@ -5,23 +5,24 @@ package superhuman
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
+
+	"eva/internal/brainstem/database"
 )
 
 // NarrativeWeaver reconstructs objective narratives from patient data
 // Based on Schacter's "Searching for Memory" - memory as reconstruction
 // PRINCIPLE: Weaves data temporally WITHOUT interpretation
 type NarrativeWeaver struct {
-	db *sql.DB
+	db *database.DB
 }
 
 // NewNarrativeWeaver creates a new narrative reconstruction service
-func NewNarrativeWeaver(db *sql.DB) *NarrativeWeaver {
+func NewNarrativeWeaver(db *database.DB) *NarrativeWeaver {
 	return &NarrativeWeaver{db: db}
 }
 
@@ -90,112 +91,105 @@ func (w *NarrativeWeaver) WeaveNarrative(ctx context.Context, idosoID int64, cen
 		GeneratedQuestions: []string{},
 	}
 
-	// 1. Find correlated persons
-	personsQuery := `
-		SELECT DISTINCT jsonb_array_elements_text(correlated_persons) as person
-		FROM patient_somatic_correlations
-		WHERE idoso_id = $1 AND correlated_topic = $2
-		UNION
-		SELECT DISTINCT jsonb_array_elements_text(correlated_persons) as person
-		FROM patient_metaphors
-		WHERE idoso_id = $1 AND $2 = ANY(SELECT jsonb_array_elements_text(correlated_topics))
-		UNION
-		SELECT DISTINCT jsonb_array_elements_text(involved_persons) as person
-		FROM patient_persistent_memories
-		WHERE idoso_id = $1 AND persistent_topic ILIKE '%' || $2 || '%'
-	`
-	rows, err := w.db.QueryContext(ctx, personsQuery, idosoID, centralTopic)
+	// 1. Find correlated persons from somatic correlations
+	somaticRows, err := w.db.QueryByLabel(ctx, "patient_somatic_correlations",
+		" AND n.idoso_id = $idoso AND n.correlated_topic = $topic",
+		map[string]interface{}{"idoso": idosoID, "topic": centralTopic}, 0)
 	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var person string
-			if err := rows.Scan(&person); err == nil && person != "" {
-				thread.ConnectedElements.Persons = append(thread.ConnectedElements.Persons, person)
+		for _, m := range somaticRows {
+			if raw, ok := m["correlated_persons"]; ok && raw != nil {
+				var persons []string
+				parseJSONStringSlice(raw, &persons)
+				for _, p := range persons {
+					if p != "" {
+						thread.ConnectedElements.Persons = append(thread.ConnectedElements.Persons, p)
+					}
+				}
+			}
+		}
+	}
+
+	// Also find persons from persistent memories
+	persistentRows, _ := w.db.QueryByLabel(ctx, "patient_persistent_memories",
+		" AND n.idoso_id = $idoso",
+		map[string]interface{}{"idoso": idosoID}, 0)
+	for _, m := range persistentRows {
+		persistentTopic := strings.ToLower(database.GetString(m, "persistent_topic"))
+		if strings.Contains(persistentTopic, strings.ToLower(centralTopic)) {
+			if raw, ok := m["involved_persons"]; ok && raw != nil {
+				var persons []string
+				parseJSONStringSlice(raw, &persons)
+				for _, p := range persons {
+					if p != "" {
+						thread.ConnectedElements.Persons = append(thread.ConnectedElements.Persons, p)
+					}
+				}
 			}
 		}
 	}
 
 	// 2. Find correlated places
-	placesQuery := `
-		SELECT place_name, emotional_valence
-		FROM patient_world_places
-		WHERE idoso_id = $1
-		AND (
-			associated_emotions::text ILIKE '%' || $2 || '%'
-			OR place_name IN (
-				SELECT DISTINCT jsonb_array_elements_text(correlated_places)
-				FROM patient_body_memories
-				WHERE idoso_id = $1 AND strongest_correlation_topic = $2
-			)
-		)
-	`
-	placeRows, err := w.db.QueryContext(ctx, placesQuery, idosoID, centralTopic)
+	placeRows, err := w.db.QueryByLabel(ctx, "patient_world_places",
+		" AND n.idoso_id = $idoso",
+		map[string]interface{}{"idoso": idosoID}, 0)
 	if err == nil {
-		defer placeRows.Close()
-		for placeRows.Next() {
-			var place string
-			var valence sql.NullFloat64
-			if err := placeRows.Scan(&place, &valence); err == nil {
-				thread.ConnectedElements.Places = append(thread.ConnectedElements.Places, place)
+		for _, m := range placeRows {
+			// Check if place is associated with topic
+			content, _ := json.Marshal(m)
+			if strings.Contains(strings.ToLower(string(content)), strings.ToLower(centralTopic)) {
+				place := database.GetString(m, "place_name")
+				if place != "" {
+					thread.ConnectedElements.Places = append(thread.ConnectedElements.Places, place)
+				}
 			}
 		}
 	}
 
 	// 3. Find correlated body symptoms
-	symptomsQuery := `
-		SELECT physical_symptom, body_location, strongest_correlation_strength
-		FROM patient_body_memories
-		WHERE idoso_id = $1 AND strongest_correlation_topic = $2
-		ORDER BY strongest_correlation_strength DESC
-	`
-	symptomRows, err := w.db.QueryContext(ctx, symptomsQuery, idosoID, centralTopic)
+	bodyRows, err := w.db.QueryByLabel(ctx, "patient_body_memories",
+		" AND n.idoso_id = $idoso AND n.strongest_correlation_topic = $topic",
+		map[string]interface{}{"idoso": idosoID, "topic": centralTopic}, 0)
 	if err == nil {
-		defer symptomRows.Close()
-		for symptomRows.Next() {
-			var symptom, location string
-			var strength sql.NullFloat64
-			if err := symptomRows.Scan(&symptom, &location, &strength); err == nil {
-				symptomDesc := symptom
-				if location != "" {
-					symptomDesc = fmt.Sprintf("%s (%s)", symptom, location)
-				}
-				thread.ConnectedElements.Symptoms = append(thread.ConnectedElements.Symptoms, symptomDesc)
-				if strength.Valid {
-					thread.ConnectionStrength = max(thread.ConnectionStrength, strength.Float64)
-				}
+		for _, m := range bodyRows {
+			symptom := database.GetString(m, "physical_symptom")
+			location := database.GetString(m, "body_location")
+			strength := database.GetFloat64(m, "strongest_correlation_strength")
+
+			symptomDesc := symptom
+			if location != "" {
+				symptomDesc = fmt.Sprintf("%s (%s)", symptom, location)
+			}
+			thread.ConnectedElements.Symptoms = append(thread.ConnectedElements.Symptoms, symptomDesc)
+			if strength > thread.ConnectionStrength {
+				thread.ConnectionStrength = strength
 			}
 		}
 	}
 
 	// 4. Build timeline from life markers
-	markersQuery := `
-		SELECT marker_description, marker_year, marker_type, emotional_valence
-		FROM patient_life_markers
-		WHERE idoso_id = $1
-		AND (
-			described_impact ILIKE '%' || $2 || '%'
-			OR $2 = ANY(SELECT jsonb_array_elements_text(involved_persons))
-		)
-		ORDER BY marker_year
-	`
-	markerRows, err := w.db.QueryContext(ctx, markersQuery, idosoID, centralTopic)
+	markerRows, err := w.db.QueryByLabel(ctx, "patient_life_markers",
+		" AND n.idoso_id = $idoso",
+		map[string]interface{}{"idoso": idosoID}, 0)
 	if err == nil {
-		defer markerRows.Close()
-		for markerRows.Next() {
-			var desc, markerType string
-			var year sql.NullInt32
-			var valence sql.NullFloat64
-			if err := markerRows.Scan(&desc, &year, &markerType, &valence); err == nil {
+		for _, m := range markerRows {
+			// Check if marker is related to topic
+			impact := strings.ToLower(database.GetString(m, "described_impact"))
+			content, _ := json.Marshal(m)
+			isRelated := strings.Contains(impact, strings.ToLower(centralTopic)) ||
+				strings.Contains(strings.ToLower(string(content)), strings.ToLower(centralTopic))
+
+			if isRelated {
+				desc := database.GetString(m, "marker_description")
+				markerType := database.GetString(m, "marker_type")
+				year := int(database.GetInt64(m, "marker_year"))
+				valence := database.GetFloat64(m, "emotional_valence")
+
 				event := TimelineEvent{
 					Event:       desc,
 					ElementType: "life_marker",
 					ElementName: markerType,
-				}
-				if year.Valid {
-					event.Year = int(year.Int32)
-				}
-				if valence.Valid {
-					event.Valence = valence.Float64
+					Year:        year,
+					Valence:     valence,
 				}
 				thread.Timeline = append(thread.Timeline, event)
 			}
@@ -316,60 +310,34 @@ func (w *NarrativeWeaver) determineConnectionType(thread *NarrativeThread) strin
 
 // GetLifeMarkers retrieves significant life markers
 func (w *NarrativeWeaver) GetLifeMarkers(ctx context.Context, idosoID int64) ([]*LifeMarker, error) {
-	query := `
-		SELECT id, marker_description, marker_year, marker_age, marker_type,
-		       described_impact, emotional_valence, before_description,
-		       after_description, mention_count, involved_persons
-		FROM patient_life_markers
-		WHERE idoso_id = $1
-		ORDER BY marker_year NULLS LAST, mention_count DESC
-	`
-
-	rows, err := w.db.QueryContext(ctx, query, idosoID)
+	rows, err := w.db.QueryByLabel(ctx, "patient_life_markers",
+		" AND n.idoso_id = $idoso",
+		map[string]interface{}{"idoso": idosoID}, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	var markers []*LifeMarker
-	for rows.Next() {
-		m := &LifeMarker{IdosoID: idosoID}
-		var year, age sql.NullInt32
-		var impact, before, after sql.NullString
-		var valence sql.NullFloat64
-		var personsJSON []byte
-
-		err := rows.Scan(
-			&m.ID, &m.Description, &year, &age, &m.MarkerType,
-			&impact, &valence, &before, &after, &m.MentionCount, &personsJSON,
-		)
-		if err != nil {
-			continue
+	for _, m := range rows {
+		marker := &LifeMarker{
+			ID:                database.GetInt64(m, "id"),
+			IdosoID:           idosoID,
+			Description:       database.GetString(m, "marker_description"),
+			Year:              int(database.GetInt64(m, "marker_year")),
+			Age:               int(database.GetInt64(m, "marker_age")),
+			MarkerType:        database.GetString(m, "marker_type"),
+			DescribedImpact:   database.GetString(m, "described_impact"),
+			EmotionalValence:  database.GetFloat64(m, "emotional_valence"),
+			BeforeDescription: database.GetString(m, "before_description"),
+			AfterDescription:  database.GetString(m, "after_description"),
+			MentionCount:      int(database.GetInt64(m, "mention_count")),
 		}
 
-		if year.Valid {
-			m.Year = int(year.Int32)
-		}
-		if age.Valid {
-			m.Age = int(age.Int32)
-		}
-		if impact.Valid {
-			m.DescribedImpact = impact.String
-		}
-		if valence.Valid {
-			m.EmotionalValence = valence.Float64
-		}
-		if before.Valid {
-			m.BeforeDescription = before.String
-		}
-		if after.Valid {
-			m.AfterDescription = after.String
-		}
-		if len(personsJSON) > 0 {
-			json.Unmarshal(personsJSON, &m.InvolvedPersons)
+		if raw, ok := m["involved_persons"]; ok && raw != nil {
+			parseJSONStringSlice(raw, &marker.InvolvedPersons)
 		}
 
-		markers = append(markers, m)
+		markers = append(markers, marker)
 	}
 
 	return markers, nil

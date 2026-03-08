@@ -5,23 +5,26 @@ package spaced
 
 import (
 	"context"
-	"database/sql"
+	"eva/internal/brainstem/database"
 	"fmt"
 	"log"
 	"math"
+	"sort"
 	"strings"
 	"time"
 )
 
 // ============================================================================
-// SPACED REPETITION SERVICE - Consolidação de Memória para Idosos
+// SPACED REPETITION SERVICE - Consolidacao de Memoria para Idosos
 // ============================================================================
-// Baseado no algoritmo SM-2 (SuperMemo) adaptado para contexto de saúde
-// Intervalos: 1h -> 4h -> 1 dia -> 3 dias -> 1 semana -> 2 semanas -> 1 mês
+// Baseado no algoritmo SM-2 (SuperMemo) adaptado para contexto de saude
+// Intervalos: 1h -> 4h -> 1 dia -> 3 dias -> 1 semana -> 2 semanas -> 1 mes
 
-// SpacedRepetitionService gerencia reforços de memória
+const spacedLabel = "spaced_memory_items"
+
+// SpacedRepetitionService gerencia reforcos de memoria
 type SpacedRepetitionService struct {
-	db         *sql.DB
+	db         *database.DB
 	notifyFunc func(idosoID int64, msgType string, payload interface{})
 }
 
@@ -29,15 +32,15 @@ type SpacedRepetitionService struct {
 type MemoryItem struct {
 	ID              int64      `json:"id"`
 	IdosoID         int64      `json:"idoso_id"`
-	Content         string     `json:"content"`          // "Documento está na gaveta do escritório"
+	Content         string     `json:"content"`          // "Documento esta na gaveta do escritorio"
 	Category        string     `json:"category"`         // location, medication, person, event, routine
 	Trigger         string     `json:"trigger"`          // O que disparou (ex: "onde guardei o documento")
-	Importance      int        `json:"importance"`       // 1-5 (5 = crítico)
-	RepetitionCount int        `json:"repetition_count"` // Quantas vezes foi reforçado
+	Importance      int        `json:"importance"`       // 1-5 (5 = critico)
+	RepetitionCount int        `json:"repetition_count"` // Quantas vezes foi reforcado
 	EaseFactor      float64    `json:"ease_factor"`      // Fator de facilidade (SM-2)
 	IntervalDays    float64    `json:"interval_days"`    // Intervalo atual em dias
-	NextReview      time.Time  `json:"next_review"`      // Próximo reforço
-	LastReview      *time.Time `json:"last_review"`      // Último reforço
+	NextReview      time.Time  `json:"next_review"`      // Proximo reforco
+	LastReview      *time.Time `json:"last_review"`      // Ultimo reforco
 	SuccessCount    int        `json:"success_count"`    // Vezes que lembrou corretamente
 	FailCount       int        `json:"fail_count"`       // Vezes que esqueceu
 	Status          string     `json:"status"`           // active, paused, mastered, archived
@@ -45,29 +48,29 @@ type MemoryItem struct {
 	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
-// ReviewResult resultado de uma revisão
+// ReviewResult resultado de uma revisao
 type ReviewResult struct {
 	ItemID       int64   `json:"item_id"`
-	Quality      int     `json:"quality"`       // 0-5 (0=esqueceu, 5=fácil)
+	Quality      int     `json:"quality"`       // 0-5 (0=esqueceu, 5=facil)
 	ResponseTime float64 `json:"response_time"` // Tempo para responder (segundos)
-	Remembered   bool    `json:"remembered"`    // Se lembrou ou não
+	Remembered   bool    `json:"remembered"`    // Se lembrou ou nao
 }
 
 // Intervalos iniciais em horas (adaptados para idosos)
 var initialIntervals = []float64{
-	1,      // 1 hora
-	4,      // 4 horas
-	24,     // 1 dia
-	72,     // 3 dias
-	168,    // 1 semana
-	336,    // 2 semanas
-	720,    // 1 mês
+	1,   // 1 hora
+	4,   // 4 horas
+	24,  // 1 dia
+	72,  // 3 dias
+	168, // 1 semana
+	336, // 2 semanas
+	720, // 1 mes
 }
 
-// NewSpacedRepetitionService cria novo serviço
-func NewSpacedRepetitionService(db *sql.DB) *SpacedRepetitionService {
+// NewSpacedRepetitionService cria novo servico
+func NewSpacedRepetitionService(db *database.DB) *SpacedRepetitionService {
 	if db == nil {
-		log.Printf("⚠️ [SPACED] NietzscheDB unavailable — running in degraded mode")
+		log.Printf("[SPACED] NietzscheDB unavailable - running in degraded mode")
 		return &SpacedRepetitionService{}
 	}
 
@@ -75,33 +78,31 @@ func NewSpacedRepetitionService(db *sql.DB) *SpacedRepetitionService {
 		db: db,
 	}
 
-	// Criar tabela se não existir
-	if err := svc.createTable(); err != nil {
-		log.Printf("⚠️ [SPACED] Erro ao criar tabela: %v", err)
-	}
+	// NietzscheDB nao precisa de CREATE TABLE - apenas loga sucesso
+	svc.createTable()
 
-	// Iniciar goroutine para processar reforços pendentes
+	// Iniciar goroutine para processar reforcos pendentes
 	go svc.processRemindersLoop()
 
 	return svc
 }
 
-// SetNotifyFunc configura função de notificação
+// SetNotifyFunc configura funcao de notificacao
 func (s *SpacedRepetitionService) SetNotifyFunc(fn func(idosoID int64, msgType string, payload interface{})) {
 	s.notifyFunc = fn
 }
 
 // ============================================================================
-// MÉTODOS PÚBLICOS
+// METODOS PUBLICOS
 // ============================================================================
 
-// CaptureMemory captura um novo item para reforço de memória
+// CaptureMemory captura um novo item para reforco de memoria
 func (s *SpacedRepetitionService) CaptureMemory(ctx context.Context, idosoID int64, content, category, trigger string, importance int) (*MemoryItem, error) {
 	if s.db == nil {
 		return nil, fmt.Errorf("NietzscheDB unavailable")
 	}
 	if content == "" {
-		return nil, fmt.Errorf("conteúdo não pode ser vazio")
+		return nil, fmt.Errorf("conteudo nao pode ser vazio")
 	}
 
 	// Normalizar categoria
@@ -110,49 +111,65 @@ func (s *SpacedRepetitionService) CaptureMemory(ctx context.Context, idosoID int
 	}
 	category = strings.ToLower(category)
 
-	// Validar importância
+	// Validar importancia
 	if importance < 1 || importance > 5 {
-		importance = 3 // média
+		importance = 3 // media
 	}
 
-	// Calcular primeiro intervalo baseado na importância
+	// Calcular primeiro intervalo baseado na importancia
 	// Items mais importantes = intervalos iniciais menores
 	firstInterval := initialIntervals[0]
 	if importance >= 4 {
-		firstInterval = 0.5 // 30 minutos para itens críticos
+		firstInterval = 0.5 // 30 minutos para itens criticos
 	}
 
-	nextReview := time.Now().Add(time.Duration(firstInterval * float64(time.Hour)))
+	now := time.Now()
+	nextReview := now.Add(time.Duration(firstInterval * float64(time.Hour)))
 
-	query := `
-		INSERT INTO spaced_memory_items
-		(idoso_id, content, category, trigger_phrase, importance, ease_factor, interval_hours, next_review, status, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, 2.5, $6, $7, 'active', NOW(), NOW())
-		RETURNING id, created_at
-	`
+	contentMap := map[string]interface{}{
+		"idoso_id":         idosoID,
+		"content":          content,
+		"category":         category,
+		"trigger_phrase":   trigger,
+		"importance":       importance,
+		"ease_factor":      2.5,
+		"interval_hours":   firstInterval,
+		"next_review":      nextReview.Format(time.RFC3339),
+		"last_review":      nil,
+		"repetition_count": 0,
+		"success_count":    0,
+		"fail_count":       0,
+		"status":           "active",
+		"created_at":       now.Format(time.RFC3339),
+		"updated_at":       now.Format(time.RFC3339),
+	}
 
-	var item MemoryItem
-	err := s.db.QueryRowContext(ctx, query, idosoID, content, category, trigger, importance, firstInterval, nextReview).Scan(&item.ID, &item.CreatedAt)
+	id, err := s.db.Insert(ctx, spacedLabel, contentMap)
 	if err != nil {
-		return nil, fmt.Errorf("erro ao capturar memória: %w", err)
+		return nil, fmt.Errorf("erro ao capturar memoria: %w", err)
 	}
 
-	item.IdosoID = idosoID
-	item.Content = content
-	item.Category = category
-	item.Trigger = trigger
-	item.Importance = importance
-	item.EaseFactor = 2.5
-	item.IntervalDays = firstInterval / 24
-	item.NextReview = nextReview
-	item.Status = "active"
+	item := &MemoryItem{
+		ID:           id,
+		IdosoID:      idosoID,
+		Content:      content,
+		Category:     category,
+		Trigger:      trigger,
+		Importance:   importance,
+		EaseFactor:   2.5,
+		IntervalDays: firstInterval / 24,
+		NextReview:   nextReview,
+		Status:       "active",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
 
-	log.Printf("🧠 [SPACED] Nova memória capturada ID=%d: '%s' (próximo reforço em %.1fh)", item.ID, content, firstInterval)
+	log.Printf("[SPACED] Nova memoria capturada ID=%d: '%s' (proximo reforco em %.1fh)", item.ID, content, firstInterval)
 
-	return &item, nil
+	return item, nil
 }
 
-// RecordReview registra resultado de uma revisão
+// RecordReview registra resultado de uma revisao
 func (s *SpacedRepetitionService) RecordReview(ctx context.Context, itemID int64, quality int, remembered bool) (*MemoryItem, error) {
 	if s.db == nil {
 		return nil, fmt.Errorf("NietzscheDB unavailable")
@@ -167,15 +184,7 @@ func (s *SpacedRepetitionService) RecordReview(ctx context.Context, itemID int64
 	item = s.calculateNextInterval(item, quality, remembered)
 
 	// Atualizar no banco
-	query := `
-		UPDATE spaced_memory_items
-		SET ease_factor = $1, interval_hours = $2, next_review = $3,
-		    last_review = NOW(), repetition_count = repetition_count + 1,
-		    success_count = success_count + $4, fail_count = fail_count + $5,
-		    status = $6, updated_at = NOW()
-		WHERE id = $7
-	`
-
+	now := time.Now()
 	successInc := 0
 	failInc := 0
 	if remembered {
@@ -184,20 +193,30 @@ func (s *SpacedRepetitionService) RecordReview(ctx context.Context, itemID int64
 		failInc = 1
 	}
 
-	_, err = s.db.ExecContext(ctx, query,
-		item.EaseFactor, item.IntervalDays*24, item.NextReview,
-		successInc, failInc, item.Status, itemID)
-	if err != nil {
-		return nil, fmt.Errorf("erro ao atualizar revisão: %w", err)
+	updates := map[string]interface{}{
+		"ease_factor":      item.EaseFactor,
+		"interval_hours":   item.IntervalDays * 24,
+		"next_review":      item.NextReview.Format(time.RFC3339),
+		"last_review":      now.Format(time.RFC3339),
+		"repetition_count": item.RepetitionCount + 1,
+		"success_count":    item.SuccessCount + successInc,
+		"fail_count":       item.FailCount + failInc,
+		"status":           item.Status,
+		"updated_at":       now.Format(time.RFC3339),
 	}
 
-	log.Printf("🧠 [SPACED] Revisão registrada ID=%d: quality=%d, remembered=%v, próximo=%.1f dias",
+	err = s.db.Update(ctx, spacedLabel, map[string]interface{}{"id": float64(itemID)}, updates)
+	if err != nil {
+		return nil, fmt.Errorf("erro ao atualizar revisao: %w", err)
+	}
+
+	log.Printf("[SPACED] Revisao registrada ID=%d: quality=%d, remembered=%v, proximo=%.1f dias",
 		itemID, quality, remembered, item.IntervalDays)
 
 	return item, nil
 }
 
-// GetPendingReviews retorna itens pendentes de revisão
+// GetPendingReviews retorna itens pendentes de revisao
 func (s *SpacedRepetitionService) GetPendingReviews(ctx context.Context, idosoID int64, limit int) ([]MemoryItem, error) {
 	if s.db == nil {
 		return nil, fmt.Errorf("NietzscheDB unavailable")
@@ -206,107 +225,114 @@ func (s *SpacedRepetitionService) GetPendingReviews(ctx context.Context, idosoID
 		limit = 5
 	}
 
-	query := `
-		SELECT id, idoso_id, content, category, COALESCE(trigger_phrase, ''), importance,
-		       repetition_count, ease_factor, interval_hours, next_review, last_review,
-		       success_count, fail_count, status, created_at, updated_at
-		FROM spaced_memory_items
-		WHERE idoso_id = $1 AND status = 'active' AND next_review <= NOW()
-		ORDER BY importance DESC, next_review ASC
-		LIMIT $2
-	`
-
-	rows, err := s.db.QueryContext(ctx, query, idosoID, limit)
+	rows, err := s.db.QueryByLabel(ctx, spacedLabel,
+		" AND n.idoso_id = $idoso_id AND n.status = $status",
+		map[string]interface{}{
+			"idoso_id": idosoID,
+			"status":   "active",
+		}, 0)
 	if err != nil {
-		return nil, fmt.Errorf("erro ao buscar revisões: %w", err)
+		return nil, fmt.Errorf("erro ao buscar revisoes: %w", err)
 	}
-	defer rows.Close()
 
+	now := time.Now()
 	var items []MemoryItem
-	for rows.Next() {
-		var item MemoryItem
-		var intervalHours float64
-		var lastReview sql.NullTime
-
-		err := rows.Scan(
-			&item.ID, &item.IdosoID, &item.Content, &item.Category, &item.Trigger,
-			&item.Importance, &item.RepetitionCount, &item.EaseFactor, &intervalHours,
-			&item.NextReview, &lastReview, &item.SuccessCount, &item.FailCount,
-			&item.Status, &item.CreatedAt, &item.UpdatedAt,
-		)
-		if err != nil {
-			continue
+	for _, m := range rows {
+		item := contentToMemoryItem(m)
+		// Filter: next_review <= now
+		if !item.NextReview.After(now) {
+			items = append(items, item)
 		}
+	}
 
-		item.IntervalDays = intervalHours / 24
-		if lastReview.Valid {
-			item.LastReview = &lastReview.Time
+	// Sort by importance DESC, next_review ASC
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Importance != items[j].Importance {
+			return items[i].Importance > items[j].Importance
 		}
+		return items[i].NextReview.Before(items[j].NextReview)
+	})
 
-		items = append(items, item)
+	if len(items) > limit {
+		items = items[:limit]
 	}
 
 	return items, nil
 }
 
-// GetItem busca um item específico
+// GetItem busca um item especifico
 func (s *SpacedRepetitionService) GetItem(ctx context.Context, itemID int64) (*MemoryItem, error) {
 	if s.db == nil {
 		return nil, fmt.Errorf("NietzscheDB unavailable")
 	}
-	query := `
-		SELECT id, idoso_id, content, category, COALESCE(trigger_phrase, ''), importance,
-		       repetition_count, ease_factor, interval_hours, next_review, last_review,
-		       success_count, fail_count, status, created_at, updated_at
-		FROM spaced_memory_items
-		WHERE id = $1
-	`
 
-	var item MemoryItem
-	var intervalHours float64
-	var lastReview sql.NullTime
-
-	err := s.db.QueryRowContext(ctx, query, itemID).Scan(
-		&item.ID, &item.IdosoID, &item.Content, &item.Category, &item.Trigger,
-		&item.Importance, &item.RepetitionCount, &item.EaseFactor, &intervalHours,
-		&item.NextReview, &lastReview, &item.SuccessCount, &item.FailCount,
-		&item.Status, &item.CreatedAt, &item.UpdatedAt,
-	)
+	m, err := s.db.GetNodeByID(ctx, spacedLabel, itemID)
 	if err != nil {
-		return nil, fmt.Errorf("item não encontrado: %w", err)
+		return nil, fmt.Errorf("item nao encontrado: %w", err)
+	}
+	if m == nil {
+		return nil, fmt.Errorf("item nao encontrado: id=%d", itemID)
 	}
 
-	item.IntervalDays = intervalHours / 24
-	if lastReview.Valid {
-		item.LastReview = &lastReview.Time
-	}
-
+	item := contentToMemoryItem(m)
 	return &item, nil
 }
 
-// GetStats retorna estatísticas de memória do idoso
+// GetStats retorna estatisticas de memoria do idoso
 func (s *SpacedRepetitionService) GetStats(ctx context.Context, idosoID int64) (map[string]interface{}, error) {
 	if s.db == nil {
 		return nil, fmt.Errorf("NietzscheDB unavailable")
 	}
-	query := `
-		SELECT
-			COUNT(*) as total,
-			COUNT(*) FILTER (WHERE status = 'active') as active,
-			COUNT(*) FILTER (WHERE status = 'mastered') as mastered,
-			COUNT(*) FILTER (WHERE next_review <= NOW() AND status = 'active') as pending,
-			COALESCE(AVG(success_count::float / NULLIF(repetition_count, 0)), 0) as avg_success_rate,
-			COALESCE(AVG(ease_factor), 2.5) as avg_ease
-		FROM spaced_memory_items
-		WHERE idoso_id = $1
-	`
 
-	var total, active, mastered, pending int
-	var avgSuccessRate, avgEase float64
-
-	err := s.db.QueryRowContext(ctx, query, idosoID).Scan(&total, &active, &mastered, &pending, &avgSuccessRate, &avgEase)
+	rows, err := s.db.QueryByLabel(ctx, spacedLabel,
+		" AND n.idoso_id = $idoso_id",
+		map[string]interface{}{
+			"idoso_id": idosoID,
+		}, 0)
 	if err != nil {
 		return nil, err
+	}
+
+	now := time.Now()
+	total := len(rows)
+	active := 0
+	mastered := 0
+	pending := 0
+	easeSum := 0.0
+	successRateSum := 0.0
+	successRateCount := 0
+
+	for _, m := range rows {
+		status := database.GetString(m, "status")
+		switch status {
+		case "active":
+			active++
+			nextReview := database.GetTime(m, "next_review")
+			if !nextReview.After(now) {
+				pending++
+			}
+		case "mastered":
+			mastered++
+		}
+
+		easeSum += database.GetFloat64(m, "ease_factor")
+
+		repCount := database.GetInt64(m, "repetition_count")
+		if repCount > 0 {
+			succCount := database.GetFloat64(m, "success_count")
+			successRateSum += succCount / float64(repCount)
+			successRateCount++
+		}
+	}
+
+	avgEase := 2.5
+	if total > 0 {
+		avgEase = easeSum / float64(total)
+	}
+
+	avgSuccessRate := 0.0
+	if successRateCount > 0 {
+		avgSuccessRate = successRateSum / float64(successRateCount)
 	}
 
 	return map[string]interface{}{
@@ -319,22 +345,32 @@ func (s *SpacedRepetitionService) GetStats(ctx context.Context, idosoID int64) (
 	}, nil
 }
 
-// PauseItem pausa reforços de um item
+// PauseItem pausa reforcos de um item
 func (s *SpacedRepetitionService) PauseItem(ctx context.Context, itemID int64) error {
 	if s.db == nil {
 		return fmt.Errorf("NietzscheDB unavailable")
 	}
-	_, err := s.db.ExecContext(ctx, "UPDATE spaced_memory_items SET status = 'paused', updated_at = NOW() WHERE id = $1", itemID)
-	return err
+	return s.db.Update(ctx, spacedLabel,
+		map[string]interface{}{"id": float64(itemID)},
+		map[string]interface{}{
+			"status":     "paused",
+			"updated_at": time.Now().Format(time.RFC3339),
+		})
 }
 
-// ResumeItem retoma reforços de um item
+// ResumeItem retoma reforcos de um item
 func (s *SpacedRepetitionService) ResumeItem(ctx context.Context, itemID int64) error {
 	if s.db == nil {
 		return fmt.Errorf("NietzscheDB unavailable")
 	}
-	_, err := s.db.ExecContext(ctx, "UPDATE spaced_memory_items SET status = 'active', next_review = NOW(), updated_at = NOW() WHERE id = $1", itemID)
-	return err
+	now := time.Now()
+	return s.db.Update(ctx, spacedLabel,
+		map[string]interface{}{"id": float64(itemID)},
+		map[string]interface{}{
+			"status":      "active",
+			"next_review": now.Format(time.RFC3339),
+			"updated_at":  now.Format(time.RFC3339),
+		})
 }
 
 // ============================================================================
@@ -352,10 +388,10 @@ func (s *SpacedRepetitionService) calculateNextInterval(item *MemoryItem, qualit
 
 	// Se esqueceu (quality < 3), resetar intervalo
 	if quality < 3 || !remembered {
-		// Voltar para intervalo inicial, mas não menor que 30 min
+		// Voltar para intervalo inicial, mas nao menor que 30 min
 		item.IntervalDays = initialIntervals[0] / 24 // 1 hora
 		if item.Importance >= 4 {
-			item.IntervalDays = 0.5 / 24 // 30 minutos para itens críticos
+			item.IntervalDays = 0.5 / 24 // 30 minutos para itens criticos
 		}
 		item.RepetitionCount = 0 // Reset repetition count
 
@@ -364,10 +400,10 @@ func (s *SpacedRepetitionService) calculateNextInterval(item *MemoryItem, qualit
 	} else {
 		// Lembrou corretamente
 		if item.RepetitionCount == 0 {
-			// Primeira repetição bem-sucedida
+			// Primeira repeticao bem-sucedida
 			item.IntervalDays = initialIntervals[1] / 24 // 4 horas
 		} else if item.RepetitionCount == 1 {
-			// Segunda repetição
+			// Segunda repeticao
 			item.IntervalDays = 1.0 // 1 dia
 		} else {
 			// Aplicar SM-2
@@ -383,19 +419,19 @@ func (s *SpacedRepetitionService) calculateNextInterval(item *MemoryItem, qualit
 		item.RepetitionCount++
 	}
 
-	// Limitar intervalo máximo baseado na importância
+	// Limitar intervalo maximo baseado na importancia
 	maxInterval := 30.0 // 30 dias para itens normais
 	if item.Importance >= 4 {
-		maxInterval = 14.0 // 2 semanas para itens críticos
+		maxInterval = 14.0 // 2 semanas para itens criticos
 	}
 	if item.IntervalDays > maxInterval {
 		item.IntervalDays = maxInterval
 	}
 
-	// Calcular próxima revisão
+	// Calcular proxima revisao
 	item.NextReview = time.Now().Add(time.Duration(item.IntervalDays * 24 * float64(time.Hour)))
 
-	// Verificar se foi "dominado" (10+ revisões com sucesso e intervalo > 2 semanas)
+	// Verificar se foi "dominado" (10+ revisoes com sucesso e intervalo > 2 semanas)
 	if item.RepetitionCount >= 10 && item.IntervalDays >= 14 && item.SuccessCount > item.FailCount*3 {
 		item.Status = "mastered"
 	}
@@ -404,7 +440,7 @@ func (s *SpacedRepetitionService) calculateNextInterval(item *MemoryItem, qualit
 }
 
 // ============================================================================
-// PROCESSAMENTO AUTOMÁTICO DE LEMBRETES
+// PROCESSAMENTO AUTOMATICO DE LEMBRETES
 // ============================================================================
 
 func (s *SpacedRepetitionService) processRemindersLoop() {
@@ -424,33 +460,36 @@ func (s *SpacedRepetitionService) sendPendingReminders() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Buscar todos os idosos com revisões pendentes
-	query := `
-		SELECT DISTINCT idoso_id
-		FROM spaced_memory_items
-		WHERE status = 'active' AND next_review <= NOW()
-	`
-
-	rows, err := s.db.QueryContext(ctx, query)
+	// Buscar todos os itens ativos
+	rows, err := s.db.QueryByLabel(ctx, spacedLabel,
+		" AND n.status = $status",
+		map[string]interface{}{
+			"status": "active",
+		}, 0)
 	if err != nil {
-		log.Printf("⚠️ [SPACED] Erro ao buscar idosos: %v", err)
+		log.Printf("[SPACED] Erro ao buscar itens pendentes: %v", err)
 		return
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var idosoID int64
-		if err := rows.Scan(&idosoID); err != nil {
-			continue
+	// Filtrar por next_review <= now e coletar idoso_ids distintos
+	now := time.Now()
+	idosoSet := make(map[int64]bool)
+	for _, m := range rows {
+		nextReview := database.GetTime(m, "next_review")
+		if !nextReview.After(now) {
+			idosoID := database.GetInt64(m, "idoso_id")
+			idosoSet[idosoID] = true
 		}
+	}
 
+	for idosoID := range idosoSet {
 		// Buscar itens pendentes para este idoso
 		items, err := s.GetPendingReviews(ctx, idosoID, 3)
 		if err != nil || len(items) == 0 {
 			continue
 		}
 
-		// Enviar notificação
+		// Enviar notificacao
 		for _, item := range items {
 			s.notifyFunc(idosoID, "memory_reinforcement", map[string]interface{}{
 				"item_id":    item.ID,
@@ -460,7 +499,7 @@ func (s *SpacedRepetitionService) sendPendingReminders() {
 				"message":    s.buildReminderMessage(item),
 			})
 
-			log.Printf("🧠 [SPACED] Reforço enviado para idoso %d: '%s'", idosoID, item.Content)
+			log.Printf("[SPACED] Reforco enviado para idoso %d: '%s'", idosoID, item.Content)
 		}
 	}
 }
@@ -469,56 +508,50 @@ func (s *SpacedRepetitionService) buildReminderMessage(item MemoryItem) string {
 	// Mensagens contextuais baseadas na categoria
 	switch item.Category {
 	case "location":
-		return fmt.Sprintf("Lembra onde você guardou? %s", item.Content)
+		return fmt.Sprintf("Lembra onde voce guardou? %s", item.Content)
 	case "medication":
 		return fmt.Sprintf("Importante lembrar: %s", item.Content)
 	case "person":
-		return fmt.Sprintf("Você lembra? %s", item.Content)
+		return fmt.Sprintf("Voce lembra? %s", item.Content)
 	case "event":
-		return fmt.Sprintf("Não esqueça: %s", item.Content)
+		return fmt.Sprintf("Nao esqueca: %s", item.Content)
 	case "routine":
 		return fmt.Sprintf("Sua rotina: %s", item.Content)
 	default:
-		return fmt.Sprintf("Reforço de memória: %s", item.Content)
+		return fmt.Sprintf("Reforco de memoria: %s", item.Content)
 	}
 }
 
 // ============================================================================
-// CRIAÇÃO DE TABELA
+// CRIACAO DE TABELA (NO-OP para NietzscheDB)
 // ============================================================================
 
-func (s *SpacedRepetitionService) createTable() error {
-	query := `
-		CREATE TABLE IF NOT EXISTS spaced_memory_items (
-			id SERIAL PRIMARY KEY,
-			idoso_id BIGINT NOT NULL REFERENCES idosos(id),
-			content TEXT NOT NULL,
-			category VARCHAR(50) DEFAULT 'general',
-			trigger_phrase TEXT,
-			importance INT DEFAULT 3 CHECK (importance >= 1 AND importance <= 5),
-			repetition_count INT DEFAULT 0,
-			ease_factor DECIMAL(4,2) DEFAULT 2.5,
-			interval_hours DECIMAL(10,2) DEFAULT 1,
-			next_review TIMESTAMP NOT NULL,
-			last_review TIMESTAMP,
-			success_count INT DEFAULT 0,
-			fail_count INT DEFAULT 0,
-			status VARCHAR(20) DEFAULT 'active',
-			created_at TIMESTAMP DEFAULT NOW(),
-			updated_at TIMESTAMP DEFAULT NOW()
-		);
+func (s *SpacedRepetitionService) createTable() {
+	log.Println("[SPACED] NietzscheDB label 'spaced_memory_items' ready (no CREATE TABLE needed)")
+}
 
-		CREATE INDEX IF NOT EXISTS idx_spaced_idoso ON spaced_memory_items(idoso_id);
-		CREATE INDEX IF NOT EXISTS idx_spaced_next_review ON spaced_memory_items(next_review) WHERE status = 'active';
-		CREATE INDEX IF NOT EXISTS idx_spaced_status ON spaced_memory_items(status);
-		CREATE INDEX IF NOT EXISTS idx_spaced_category ON spaced_memory_items(category);
-	`
+// ============================================================================
+// HELPER: content map -> MemoryItem
+// ============================================================================
 
-	_, err := s.db.Exec(query)
-	if err != nil && !strings.Contains(err.Error(), "already exists") {
-		return err
+func contentToMemoryItem(m map[string]interface{}) MemoryItem {
+	intervalHours := database.GetFloat64(m, "interval_hours")
+	return MemoryItem{
+		ID:              database.GetInt64(m, "id"),
+		IdosoID:         database.GetInt64(m, "idoso_id"),
+		Content:         database.GetString(m, "content"),
+		Category:        database.GetString(m, "category"),
+		Trigger:         database.GetString(m, "trigger_phrase"),
+		Importance:      int(database.GetInt64(m, "importance")),
+		RepetitionCount: int(database.GetInt64(m, "repetition_count")),
+		EaseFactor:      database.GetFloat64(m, "ease_factor"),
+		IntervalDays:    intervalHours / 24,
+		NextReview:      database.GetTime(m, "next_review"),
+		LastReview:      database.GetTimePtr(m, "last_review"),
+		SuccessCount:    int(database.GetInt64(m, "success_count")),
+		FailCount:       int(database.GetInt64(m, "fail_count")),
+		Status:          database.GetString(m, "status"),
+		CreatedAt:       database.GetTime(m, "created_at"),
+		UpdatedAt:       database.GetTime(m, "updated_at"),
 	}
-
-	log.Println("✅ [SPACED] Tabela 'spaced_memory_items' verificada/criada")
-	return nil
 }

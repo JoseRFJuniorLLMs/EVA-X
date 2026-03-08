@@ -5,18 +5,20 @@ package explainability
 
 import (
 	"bytes"
-	"database/sql"
+	"context"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"time"
+
+	"eva/internal/brainstem/database"
 )
 
 // PDFGenerator gera relatórios PDF para médicos
 type PDFGenerator struct {
-	db       *sql.DB
+	db       *database.DB
 	explainer *ClinicalDecisionExplainer
 }
 
@@ -44,7 +46,7 @@ type PatientInfo struct {
 }
 
 // NewPDFGenerator cria novo gerador de PDF
-func NewPDFGenerator(db *sql.DB, explainer *ClinicalDecisionExplainer) *PDFGenerator {
+func NewPDFGenerator(db *database.DB, explainer *ClinicalDecisionExplainer) *PDFGenerator {
 	return &PDFGenerator{
 		db:       db,
 		explainer: explainer,
@@ -437,31 +439,31 @@ func (pg *PDFGenerator) uploadToS3(pdfBytes []byte, filename string) (string, er
 	return gcsURL, nil
 }
 
-// getPatientInfo busca informações do paciente
+// getPatientInfo busca informações do paciente via NietzscheDB
 func (pg *PDFGenerator) getPatientInfo(patientID int64) (*PatientInfo, error) {
-	query := `
-		SELECT id, nome, cpf, data_nascimento, telefone
-		FROM idosos
-		WHERE id = $1
-	`
+	ctx := context.Background()
 
-	var patient PatientInfo
-	var birthDate time.Time
-
-	err := pg.db.QueryRow(query, patientID).Scan(
-		&patient.ID,
-		&patient.Name,
-		&patient.CPF,
-		&birthDate,
-		&patient.Phone,
-	)
-
+	row, err := pg.db.GetNodeByID(ctx, "Idoso", patientID)
 	if err != nil {
 		return nil, err
 	}
+	if row == nil {
+		return nil, fmt.Errorf("paciente %d não encontrado", patientID)
+	}
+
+	patient := &PatientInfo{
+		ID:    patientID,
+		Name:  database.GetString(row, "nome"),
+		CPF:   database.GetString(row, "cpf"),
+		Phone: database.GetString(row, "telefone"),
+	}
 
 	// Calcular idade
-	patient.Age = int(time.Since(birthDate).Hours() / 24 / 365)
+	birthDate := database.GetTime(row, "data_nascimento")
+	if !birthDate.IsZero() {
+		patient.Age = int(time.Since(birthDate).Hours() / 24 / 365)
+		patient.BirthDate = birthDate.Format("02/01/2006")
+	}
 
 	// Mascarar CPF
 	if len(patient.CPF) >= 11 {
@@ -469,34 +471,46 @@ func (pg *PDFGenerator) getPatientInfo(patientID int64) (*PatientInfo, error) {
 	}
 
 	// Buscar médico responsável
-	patient.Doctor = pg.getResponsibleDoctor(patientID)
+	patient.Doctor = pg.getResponsibleDoctor(ctx, patientID, row)
 
-	return &patient, nil
+	return patient, nil
 }
 
 // getResponsibleDoctor busca médico responsável
-func (pg *PDFGenerator) getResponsibleDoctor(patientID int64) string {
-	query := `SELECT nome FROM medicos WHERE id = (SELECT medico_id FROM idosos WHERE id = $1)`
-
-	var doctor string
-	err := pg.db.QueryRow(query, patientID).Scan(&doctor)
-	if err != nil {
+func (pg *PDFGenerator) getResponsibleDoctor(ctx context.Context, patientID int64, patientRow map[string]interface{}) string {
+	medicoID := database.GetInt64(patientRow, "medico_id")
+	if medicoID == 0 {
 		return "Não atribuído"
 	}
-	return doctor
+
+	medico, err := pg.db.GetNodeByID(ctx, "Medico", medicoID)
+	if err != nil || medico == nil {
+		return "Não atribuído"
+	}
+
+	return database.GetString(medico, "nome")
 }
 
 // getWeeklyMetrics busca métricas da semana
 func (pg *PDFGenerator) getWeeklyMetrics(patientID int64) map[string]interface{} {
+	ctx := context.Background()
 	metrics := make(map[string]interface{})
 
-	// Contar interações
-	var count int
-	pg.db.QueryRow(`
-		SELECT COUNT(*) FROM interaction_cognitive_load
-		WHERE patient_id = $1 AND timestamp > NOW() - INTERVAL '7 days'
-	`, patientID).Scan(&count)
-	metrics["interactions_count"] = count
+	// Contar interações na última semana
+	weekAgo := time.Now().AddDate(0, 0, -7)
+	cogLoads, err := pg.db.QueryByLabel(ctx, "InteractionCognitiveLoad",
+		" AND n.patient_id = $patient_id",
+		map[string]interface{}{"patient_id": patientID}, 0)
+	if err == nil {
+		count := 0
+		for _, row := range cogLoads {
+			ts := database.GetTime(row, "timestamp")
+			if !ts.Before(weekAgo) {
+				count++
+			}
+		}
+		metrics["interactions_count"] = count
+	}
 
 	// Humor médio (placeholder)
 	metrics["avg_mood"] = 6.5
@@ -509,26 +523,30 @@ func (pg *PDFGenerator) getWeeklyMetrics(patientID int64) map[string]interface{}
 
 // getWeeklyAlerts busca alertas da semana
 func (pg *PDFGenerator) getWeeklyAlerts(patientID int64) []map[string]interface{} {
+	ctx := context.Background()
 	var alerts []map[string]interface{}
 
-	rows, err := pg.db.Query(`
-		SELECT decision_type, severity, created_at
-		FROM clinical_decision_explanations
-		WHERE patient_id = $1
-		  AND created_at > NOW() - INTERVAL '7 days'
-		  AND severity IN ('high', 'critical')
-		ORDER BY created_at DESC
-	`, patientID)
+	weekAgo := time.Now().AddDate(0, 0, -7)
 
+	rows, err := pg.db.QueryByLabel(ctx, "ClinicalDecisionExplanation",
+		" AND n.patient_id = $patient_id",
+		map[string]interface{}{"patient_id": patientID}, 0)
 	if err != nil {
 		return alerts
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var decisionType, severity string
-		var createdAt time.Time
-		rows.Scan(&decisionType, &severity, &createdAt)
+	for _, row := range rows {
+		createdAt := database.GetTime(row, "created_at")
+		if createdAt.Before(weekAgo) {
+			continue
+		}
+
+		severity := database.GetString(row, "severity")
+		if severity != "high" && severity != "critical" {
+			continue
+		}
+
+		decisionType := database.GetString(row, "decision_type")
 
 		alerts = append(alerts, map[string]interface{}{
 			"type":        pg.translateDecisionType(decisionType),
@@ -540,15 +558,17 @@ func (pg *PDFGenerator) getWeeklyAlerts(patientID int64) []map[string]interface{
 	return alerts
 }
 
-// saveReport salva relatório no banco
+// saveReport salva relatório no NietzscheDB
 func (pg *PDFGenerator) saveReport(report *PDFReport, explanationID string) error {
-	query := `
-		UPDATE clinical_decision_explanations
-		SET explanation_pdf_url = $1, report_generated_at = NOW()
-		WHERE id = $2
-	`
+	ctx := context.Background()
 
-	_, err := pg.db.Exec(query, report.S3URL, explanationID)
+	// Update the explanation with PDF URL
+	err := pg.db.Update(ctx, "ClinicalDecisionExplanation",
+		map[string]interface{}{"id": explanationID},
+		map[string]interface{}{
+			"explanation_pdf_url":  report.S3URL,
+			"report_generated_at": time.Now(),
+		})
 	if err != nil {
 		return err
 	}
@@ -559,7 +579,7 @@ func (pg *PDFGenerator) saveReport(report *PDFReport, explanationID string) erro
 
 // saveWeeklyReport salva relatório semanal
 func (pg *PDFGenerator) saveWeeklyReport(report *PDFReport) error {
-	// TODO: Criar tabela para relatórios semanais se necessário
+	// TODO: Criar label para relatórios semanais se necessário
 	report.ID = fmt.Sprintf("weekly-%d-%s", report.PatientID, time.Now().Format("20060102"))
 	return nil
 }

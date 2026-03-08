@@ -5,72 +5,68 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
+	"sort"
 	"time"
+
+	"eva/internal/brainstem/database"
 
 	"firebase.google.com/go/v4/messaging"
 )
 
-// handleVideoCascade gerencia a cascata de notificações para chamada de vídeo
-// Prioridades: 1=Família, 2=Cuidador, 3=Médico
-// Tenta 5x cada nível antes de escalar
-// ctx controls the goroutine lifetime — returns early if the context is cancelled.
+// handleVideoCascade gerencia a cascata de notificacoes para chamada de video
+// Prioridades: 1=Familia, 2=Cuidador, 3=Medico
+// Tenta 5x cada nivel antes de escalar
+// ctx controls the goroutine lifetime - returns early if the context is cancelled.
 func (s *SignalingServer) handleVideoCascade(ctx context.Context, idosoID int64, sessionID string) {
-	log.Printf("🌊 Iniciando cascata de vídeo para idoso %d, sessão %s", idosoID, sessionID)
-
-	// Buscar todos os cuidadores ativos ordenados por prioridade
-	query := `
-		SELECT device_token, prioridade, nome, telefone
-		FROM cuidadores
-		WHERE idoso_id = $1 AND ativo = true
-		ORDER BY prioridade ASC
-	`
+	log.Printf("Iniciando cascata de video para idoso %d, sessao %s", idosoID, sessionID)
 
 	if s.db == nil {
-		log.Printf("❌ Database não inicializada")
-		s.escalateToEmergency(idosoID, sessionID, "Database não inicializada")
-		return
-	}
-	conn := s.db.GetConnection()
-	if conn == nil {
-		log.Printf("❌ Conexão com banco indisponível")
-		s.escalateToEmergency(idosoID, sessionID, "Conexão com banco indisponível")
+		log.Printf("Database nao inicializada")
+		s.escalateToEmergency(ctx, idosoID, sessionID, "Database nao inicializada")
 		return
 	}
 
-	rows, err := conn.Query(query, idosoID)
+	// Buscar todos os cuidadores ativos via NietzscheDB
+	rows, err := s.db.QueryByLabel(ctx, "cuidadores",
+		" AND n.idoso_id = $idoso_id AND n.ativo = $ativo",
+		map[string]interface{}{
+			"idoso_id": idosoID,
+			"ativo":    true,
+		}, 0)
 	if err != nil {
-		log.Printf("❌ Erro ao buscar cuidadores: %v", err)
-		s.escalateToEmergency(idosoID, sessionID, "Erro ao buscar cuidadores")
+		log.Printf("Erro ao buscar cuidadores: %v", err)
+		s.escalateToEmergency(ctx, idosoID, sessionID, "Erro ao buscar cuidadores")
 		return
 	}
-	defer rows.Close()
 
 	type Caregiver struct {
-		Token    sql.NullString
+		Token    string
 		Priority int
 		Name     string
-		Phone    sql.NullString
+		Phone    string
 	}
 
 	var caregivers []Caregiver
-	for rows.Next() {
-		var cg Caregiver
-		if err := rows.Scan(&cg.Token, &cg.Priority, &cg.Name, &cg.Phone); err != nil {
-			log.Printf("❌ Erro ao ler cuidador: %v", err)
-			continue
+	for _, m := range rows {
+		cg := Caregiver{
+			Token:    database.GetString(m, "device_token"),
+			Priority: int(database.GetInt64(m, "prioridade")),
+			Name:     database.GetString(m, "nome"),
+			Phone:    database.GetString(m, "telefone"),
 		}
 		caregivers = append(caregivers, cg)
 	}
-	if err := rows.Err(); err != nil {
-		log.Printf("❌ Erro na iteração de cuidadores: %v", err)
-	}
+
+	// Ordenar por prioridade ASC
+	sort.Slice(caregivers, func(i, j int) bool {
+		return caregivers[i].Priority < caregivers[j].Priority
+	})
 
 	if len(caregivers) == 0 {
-		log.Printf("⚠️ Nenhum cuidador encontrado, escalando para emergência")
-		s.escalateToEmergency(idosoID, sessionID, "Sem cuidadores cadastrados")
+		log.Printf("Nenhum cuidador encontrado, escalando para emergencia")
+		s.escalateToEmergency(ctx, idosoID, sessionID, "Sem cuidadores cadastrados")
 		return
 	}
 
@@ -80,77 +76,77 @@ func (s *SignalingServer) handleVideoCascade(ctx context.Context, idosoID int64,
 		priorityGroups[cg.Priority] = append(priorityGroups[cg.Priority], cg)
 	}
 
-	// Tentar cada nível de prioridade
-	priorities := []int{1, 2, 3} // Família, Cuidador, Médico
+	// Tentar cada nivel de prioridade
+	priorities := []int{1, 2, 3} // Familia, Cuidador, Medico
 	priorityNames := map[int]string{
-		1: "Família",
+		1: "Familia",
 		2: "Cuidador",
-		3: "Médico",
+		3: "Medico",
 	}
 
 	for _, priority := range priorities {
 		group, exists := priorityGroups[priority]
 		if !exists || len(group) == 0 {
-			log.Printf("⏭️ Prioridade %d (%s) não tem contatos, pulando", priority, priorityNames[priority])
+			log.Printf("Prioridade %d (%s) nao tem contatos, pulando", priority, priorityNames[priority])
 			continue
 		}
 
-		log.Printf("📞 Tentando prioridade %d (%s) - %d contato(s)", priority, priorityNames[priority], len(group))
+		log.Printf("Tentando prioridade %d (%s) - %d contato(s)", priority, priorityNames[priority], len(group))
 
-		// Tentar 5 vezes para este nível
+		// Tentar 5 vezes para este nivel
 		for attempt := 1; attempt <= 5; attempt++ {
-			log.Printf("🔔 Tentativa %d/5 para %s", attempt, priorityNames[priority])
+			log.Printf("Tentativa %d/5 para %s", attempt, priorityNames[priority])
 
-			// Enviar notificação para todos os contatos deste nível
+			// Enviar notificacao para todos os contatos deste nivel
 			for _, cg := range group {
-				if !cg.Token.Valid || cg.Token.String == "" {
-					log.Printf("⚠️ %s (%s) sem token FCM", cg.Name, priorityNames[priority])
+				if cg.Token == "" {
+					log.Printf("%s (%s) sem token FCM", cg.Name, priorityNames[priority])
 					continue
 				}
 
-				err := s.sendVideoCallNotification(cg.Token.String, sessionID, cg.Name, priorityNames[priority])
+				err := s.sendVideoCallNotification(cg.Token, sessionID, cg.Name, priorityNames[priority])
 				if err != nil {
-					log.Printf("❌ Erro ao enviar notificação para %s: %v", cg.Name, err)
+					log.Printf("Erro ao enviar notificacao para %s: %v", cg.Name, err)
 				} else {
-					log.Printf("✅ Notificação enviada para %s (%s)", cg.Name, priorityNames[priority])
+					log.Printf("Notificacao enviada para %s (%s)", cg.Name, priorityNames[priority])
 				}
 			}
 
-			// Aguardar 30 segundos antes de verificar se alguém atendeu
+			// Aguardar 30 segundos antes de verificar se alguem atendeu
 			select {
 			case <-ctx.Done():
-				log.Printf("⚠️ Cascade cancelled for session %s: %v", sessionID, ctx.Err())
+				log.Printf("Cascade cancelled for session %s: %v", sessionID, ctx.Err())
 				return
 			case <-time.After(30 * time.Second):
 			}
 
-			// Verificar se a sessão foi aceita (status mudou para 'active')
+			// Verificar se a sessao foi aceita (status mudou para 'active')
 			session, err := s.db.GetVideoSession(sessionID)
 			if err == nil && session.Status == "active" {
-				log.Printf("✅ Chamada aceita por %s! Cascata finalizada.", priorityNames[priority])
+				log.Printf("Chamada aceita por %s! Cascata finalizada.", priorityNames[priority])
 				return
 			}
 		}
 
-		log.Printf("⏭️ %s não atendeu após 5 tentativas, escalando...", priorityNames[priority])
+		log.Printf("%s nao atendeu apos 5 tentativas, escalando...", priorityNames[priority])
 	}
 
-	// Se chegou aqui, ninguém atendeu
-	log.Printf("🚨 NENHUM CONTATO ATENDEU - Escalando para EMERGÊNCIA")
-	s.escalateToEmergency(idosoID, sessionID, "Nenhum contato atendeu após 5 tentativas em cada nível")
+	// Se chegou aqui, ninguem atendeu
+	log.Printf("NENHUM CONTATO ATENDEU - Escalando para EMERGENCIA")
+	s.escalateToEmergency(ctx, idosoID, sessionID, "Nenhum contato atendeu apos 5 tentativas em cada nivel")
 }
 
-// sendVideoCallNotification envia notificação push para chamada de vídeo
+// sendVideoCallNotification envia notificacao push para chamada de video
 func (s *SignalingServer) sendVideoCallNotification(token, sessionID, caregiverName, priority string) error {
 	if s.pushService == nil {
-		return fmt.Errorf("push service não inicializado")
+		return fmt.Errorf("push service nao inicializado")
 	}
 
 	message := &messaging.Message{
 		Token: token,
 		Notification: &messaging.Notification{
-			Title: "🎥 Chamada de Vídeo - EVA",
-			Body:  "Chamada de emergência! Toque para atender.",
+			Title: "Chamada de Video - EVA",
+			Body:  "Chamada de emergencia! Toque para atender.",
 		},
 		Data: map[string]string{
 			"type":       "video_call",
@@ -174,32 +170,31 @@ func (s *SignalingServer) sendVideoCallNotification(token, sessionID, caregiverN
 }
 
 // escalateToEmergency envia alerta para a equipe EVA-Mind
-func (s *SignalingServer) escalateToEmergency(idosoID int64, sessionID, reason string) {
-	log.Printf("🚨🚨🚨 EMERGÊNCIA ESCALADA 🚨🚨🚨")
+func (s *SignalingServer) escalateToEmergency(ctx context.Context, idosoID int64, sessionID, reason string) {
+	log.Printf("EMERGENCIA ESCALADA")
 	log.Printf("Idoso ID: %d", idosoID)
-	log.Printf("Sessão: %s", sessionID)
+	log.Printf("Sessao: %s", sessionID)
 	log.Printf("Motivo: %s", reason)
 
-	// Registrar no banco de dados
+	// Registrar alerta via NietzscheDB
 	if s.db == nil {
-		log.Printf("❌ Database nil — não é possível registrar alerta de emergência")
+		log.Printf("Database nil - nao e possivel registrar alerta de emergencia")
 		return
-	}
-	conn := s.db.GetConnection()
-	if conn == nil {
-		log.Printf("❌ Conexão nil — não é possível registrar alerta de emergência")
-		return
-	}
-	alertQuery := `
-		INSERT INTO alertas (idoso_id, tipo, severidade, mensagem, destinatarios, criado_em)
-		VALUES ($1, 'video_emergency', 'critica', $2, '[]', NOW())
-	`
-	_, err := conn.Exec(alertQuery, idosoID, fmt.Sprintf("Emergência de vídeo: %s (Sessão: %s)", reason, sessionID))
-	if err != nil {
-		log.Printf("❌ Erro ao registrar alerta de emergência: %v", err)
 	}
 
-	// TODO: Enviar notificação para equipe EVA-Mind
-	// Pode ser email, SMS, ou notificação push para dashboard de emergência
-	log.Printf("📧 Notificação de emergência enviada para equipe EVA-Mind")
+	_, err := s.db.Insert(ctx, "alertas", map[string]interface{}{
+		"idoso_id":      idosoID,
+		"tipo":          "video_emergency",
+		"severidade":    "critica",
+		"mensagem":      fmt.Sprintf("Emergencia de video: %s (Sessao: %s)", reason, sessionID),
+		"destinatarios": "[]",
+		"criado_em":     time.Now().Format(time.RFC3339),
+	})
+	if err != nil {
+		log.Printf("Erro ao registrar alerta de emergencia: %v", err)
+	}
+
+	// TODO: Enviar notificacao para equipe EVA-Mind
+	// Pode ser email, SMS, ou notificacao push para dashboard de emergencia
+	log.Printf("Notificacao de emergencia enviada para equipe EVA-Mind")
 }
