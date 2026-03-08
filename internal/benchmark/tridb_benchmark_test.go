@@ -20,101 +20,6 @@ import (
 // MOCK ADAPTERS (usados em testes unitários, sem dependência de infra)
 // ============================================================================
 
-// mockNietzscheDBAdapter simula NietzscheDB com busca por keywords em propriedades
-type mockNietzscheDBAdapter struct {
-	memories []SyntheticMemory
-	latency  time.Duration
-}
-
-func (a *mockNietzscheDBAdapter) Name() BackendType { return BackendNietzscheDB }
-
-func (a *mockNietzscheDBAdapter) Setup(ctx context.Context, memories []SyntheticMemory) error {
-	a.memories = memories
-	return nil
-}
-
-func (a *mockNietzscheDBAdapter) Search(ctx context.Context, query string, k int) ([]RetrievedItem, error) {
-	time.Sleep(a.latency) // simular latência de rede
-
-	queryLower := strings.ToLower(query)
-	type scored struct {
-		id    string
-		score float64
-	}
-	var results []scored
-
-	for _, m := range a.memories {
-		score := 0.0
-		contentLower := strings.ToLower(m.Content)
-
-		// NietzscheDB: busca por propriedades (CONTAINS) — simula full-text index
-		words := strings.Fields(queryLower)
-		for _, word := range words {
-			if len(word) < 3 {
-				continue
-			}
-			if strings.Contains(contentLower, word) {
-				score += 0.3
-			}
-		}
-
-		// Boost por match de topics
-		for _, topic := range m.Topics {
-			if strings.Contains(queryLower, topic) {
-				score += 0.4
-			}
-		}
-
-		// Boost por match de emoção
-		if m.Emotion != "" && strings.Contains(queryLower, m.Emotion) {
-			score += 0.3
-		}
-
-		// Boost temporal (NietzscheDB é bom com grafos temporais)
-		daysSince := time.Since(m.Timestamp).Hours() / 24
-		if strings.Contains(queryLower, "ontem") || strings.Contains(queryLower, "yesterday") {
-			if daysSince <= 2 {
-				score += 0.5
-			}
-		}
-		if strings.Contains(queryLower, "hoje") || strings.Contains(queryLower, "today") {
-			if daysSince <= 1 {
-				score += 0.5
-			}
-		}
-		if strings.Contains(queryLower, "semana") || strings.Contains(queryLower, "week") {
-			if daysSince <= 7 {
-				score += 0.3
-			}
-		}
-
-		if score > 0 {
-			results = append(results, scored{id: m.ID, score: score})
-		}
-	}
-
-	// Sort by score desc
-	for i := 0; i < len(results)-1; i++ {
-		for j := i + 1; j < len(results); j++ {
-			if results[j].score > results[i].score {
-				results[i], results[j] = results[j], results[i]
-			}
-		}
-	}
-
-	var items []RetrievedItem
-	for i, r := range results {
-		if i >= k {
-			break
-		}
-		items = append(items, RetrievedItem{ID: r.id, Similarity: r.score})
-	}
-
-	return items, nil
-}
-
-func (a *mockNietzscheDBAdapter) Cleanup(ctx context.Context) error { return nil }
-
 // mockNietzscheDBAdapter simula NietzscheDB com busca vetorial (cosine similarity)
 type mockNietzscheDBAdapter struct {
 	memories   []SyntheticMemory
@@ -473,11 +378,6 @@ func TestTriDBRanking(t *testing.T) {
 	results := map[BackendType]*BackendResult{
 		BackendNietzscheDB: {
 			Available: true,
-			Metrics:   GlobalMetrics{RecallAt5: 0.6, RecallAt10: 0.75, MRR: 0.5},
-			Latency:   LatencyStats{P50: 5 * time.Millisecond},
-		},
-		BackendNietzscheDB: {
-			Available: true,
 			Metrics:   GlobalMetrics{RecallAt5: 0.8, RecallAt10: 0.9, MRR: 0.7},
 			Latency:   LatencyStats{P50: 2 * time.Millisecond},
 		},
@@ -490,7 +390,7 @@ func TestTriDBRanking(t *testing.T) {
 
 	ranking := calculateRanking(results)
 
-	assert.Equal(t, 3, len(ranking))
+	assert.Equal(t, 2, len(ranking))
 	// O primeiro deve ter o maior score
 	assert.GreaterOrEqual(t, ranking[0].CompositeScore, ranking[1].CompositeScore)
 	assert.GreaterOrEqual(t, ranking[1].CompositeScore, ranking[2].CompositeScore)
@@ -534,19 +434,6 @@ func TestTriDBBenchmark_Integration(t *testing.T) {
 // ============================================================================
 // GO BENCHMARKS (performance measurement)
 // ============================================================================
-
-func BenchmarkNietzscheDBSearch(b *testing.B) {
-	adapter := &mockNietzscheDBAdapter{latency: 0}
-	memories, queries := GenerateSyntheticDataset()
-	ctx := context.Background()
-	_ = adapter.Setup(ctx, memories)
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		q := queries[i%len(queries)]
-		adapter.Search(ctx, q.Query, 10)
-	}
-}
 
 func BenchmarkNietzscheDBSearch(b *testing.B) {
 	adapter := &mockNietzscheDBAdapter{latency: 0}

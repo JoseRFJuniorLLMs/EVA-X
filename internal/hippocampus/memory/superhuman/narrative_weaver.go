@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"time"
@@ -110,9 +111,13 @@ func (w *NarrativeWeaver) WeaveNarrative(ctx context.Context, idosoID int64, cen
 	}
 
 	// Also find persons from persistent memories
-	persistentRows, _ := w.db.QueryByLabel(ctx, "patient_persistent_memories",
+	persistentRows, err := w.db.QueryByLabel(ctx, "patient_persistent_memories",
 		" AND n.idoso_id = $idoso",
 		map[string]interface{}{"idoso": idosoID}, 0)
+	if err != nil {
+		log.Printf("[NarrativeWeaver] QueryByLabel patient_persistent_memories failed: %v", err)
+		return nil, err
+	}
 	for _, m := range persistentRows {
 		persistentTopic := strings.ToLower(database.GetString(m, "persistent_topic"))
 		if strings.Contains(persistentTopic, strings.ToLower(centralTopic)) {
@@ -135,7 +140,11 @@ func (w *NarrativeWeaver) WeaveNarrative(ctx context.Context, idosoID int64, cen
 	if err == nil {
 		for _, m := range placeRows {
 			// Check if place is associated with topic
-			content, _ := json.Marshal(m)
+			content, err := json.Marshal(m)
+			if err != nil {
+				log.Printf("[NarrativeWeaver] json.Marshal place row failed: %v", err)
+				continue
+			}
 			if strings.Contains(strings.ToLower(string(content)), strings.ToLower(centralTopic)) {
 				place := database.GetString(m, "place_name")
 				if place != "" {
@@ -174,7 +183,11 @@ func (w *NarrativeWeaver) WeaveNarrative(ctx context.Context, idosoID int64, cen
 		for _, m := range markerRows {
 			// Check if marker is related to topic
 			impact := strings.ToLower(database.GetString(m, "described_impact"))
-			content, _ := json.Marshal(m)
+			content, err := json.Marshal(m)
+			if err != nil {
+				log.Printf("[NarrativeWeaver] json.Marshal marker row failed: %v", err)
+				continue
+			}
 			isRelated := strings.Contains(impact, strings.ToLower(centralTopic)) ||
 				strings.Contains(strings.ToLower(string(content)), strings.ToLower(centralTopic))
 

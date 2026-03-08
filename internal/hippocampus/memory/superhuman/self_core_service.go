@@ -126,9 +126,13 @@ func (s *SelfCoreService) addSelfDescription(ctx context.Context, idosoID int64,
 	}
 
 	// Get or create self_core record
-	rows, _ := s.db.QueryByLabel(ctx, "patient_self_core",
+	rows, err2 := s.db.QueryByLabel(ctx, "patient_self_core",
 		" AND n.idoso_id = $idoso",
 		map[string]interface{}{"idoso": idosoID}, 1)
+	if err2 != nil {
+		log.Printf("Error querying patient_self_core for idoso %d: %v", idosoID, err2)
+		return err2
+	}
 
 	if len(rows) > 0 {
 		m := rows[0]
@@ -137,14 +141,26 @@ func (s *SelfCoreService) addSelfDescription(ctx context.Context, idosoID int64,
 		if raw, ok := m["self_descriptions"]; ok && raw != nil {
 			switch v := raw.(type) {
 			case string:
-				json.Unmarshal([]byte(v), &existing)
+				if err := json.Unmarshal([]byte(v), &existing); err != nil {
+					log.Printf("Error unmarshaling self_descriptions string for idoso %d: %v", idosoID, err)
+				}
 			case []interface{}:
-				b, _ := json.Marshal(v)
-				json.Unmarshal(b, &existing)
+				b, err := json.Marshal(v)
+				if err != nil {
+					log.Printf("Error marshaling self_descriptions slice for idoso %d: %v", idosoID, err)
+				} else {
+					if err := json.Unmarshal(b, &existing); err != nil {
+						log.Printf("Error unmarshaling self_descriptions slice for idoso %d: %v", idosoID, err)
+					}
+				}
 			}
 		}
 		existing = append(existing, description)
-		allDescsJSON, _ := json.Marshal(existing)
+		allDescsJSON, err3 := json.Marshal(existing)
+		if err3 != nil {
+			log.Printf("Error marshaling updated self_descriptions for idoso %d: %v", idosoID, err3)
+			allDescsJSON = descJSON // fallback to just the new description
+		}
 
 		return s.db.Update(ctx, "patient_self_core",
 			map[string]interface{}{"idoso_id": idosoID},
@@ -169,9 +185,13 @@ func (s *SelfCoreService) addRole(ctx context.Context, idosoID int64, role strin
 	role = strings.ToLower(strings.TrimSpace(role))
 	now := time.Now().Format(time.RFC3339)
 
-	rows, _ := s.db.QueryByLabel(ctx, "patient_self_core",
+	rows, err := s.db.QueryByLabel(ctx, "patient_self_core",
 		" AND n.idoso_id = $idoso",
 		map[string]interface{}{"idoso": idosoID}, 1)
+	if err != nil {
+		log.Printf("Error querying patient_self_core for role, idoso %d: %v", idosoID, err)
+		return err
+	}
 
 	if len(rows) > 0 {
 		m := rows[0]
@@ -193,7 +213,11 @@ func (s *SelfCoreService) addRole(ctx context.Context, idosoID int64, role strin
 			existingRoles = append(existingRoles, role)
 		}
 
-		rolesJSON, _ := json.Marshal(existingRoles)
+		rolesJSON, err := json.Marshal(existingRoles)
+		if err != nil {
+			log.Printf("Error marshaling existingRoles for idoso %d: %v", idosoID, err)
+			rolesJSON = []byte("[]")
+		}
 		return s.db.Update(ctx, "patient_self_core",
 			map[string]interface{}{"idoso_id": idosoID},
 			map[string]interface{}{
@@ -203,8 +227,12 @@ func (s *SelfCoreService) addRole(ctx context.Context, idosoID int64, role strin
 	}
 
 	// Create new record
-	rolesJSON, _ := json.Marshal([]string{role})
-	_, err := s.db.Insert(ctx, "patient_self_core", map[string]interface{}{
+	rolesJSON, err := json.Marshal([]string{role})
+	if err != nil {
+		log.Printf("Error marshaling new role for idoso %d: %v", idosoID, err)
+		rolesJSON = []byte("[]")
+	}
+	_, err = s.db.Insert(ctx, "patient_self_core", map[string]interface{}{
 		"idoso_id":             idosoID,
 		"self_attributed_roles": string(rolesJSON),
 		"created_at":           now,
@@ -243,9 +271,13 @@ func (s *SelfCoreService) upsertSignifier(ctx context.Context, idosoID int64, si
 	period := timestamp.Format("2006-01") // Year-Month
 	now := timestamp.Format(time.RFC3339)
 
-	rows, _ := s.db.QueryByLabel(ctx, "patient_master_signifiers",
+	rows, err := s.db.QueryByLabel(ctx, "patient_master_signifiers",
 		" AND n.idoso_id = $idoso AND n.signifier = $sig",
 		map[string]interface{}{"idoso": idosoID, "sig": signifier}, 1)
+	if err != nil {
+		log.Printf("Error querying patient_master_signifiers for idoso %d, signifier %s: %v", idosoID, signifier, err)
+		return err
+	}
 
 	if len(rows) > 0 {
 		m := rows[0]
@@ -256,7 +288,9 @@ func (s *SelfCoreService) upsertSignifier(ctx context.Context, idosoID int64, si
 		if raw, ok := m["frequency_by_period"]; ok && raw != nil {
 			switch v := raw.(type) {
 			case string:
-				json.Unmarshal([]byte(v), &freqByPeriod)
+				if err := json.Unmarshal([]byte(v), &freqByPeriod); err != nil {
+					log.Printf("Error unmarshaling frequency_by_period string for signifier %s: %v", signifier, err)
+				}
 			case map[string]interface{}:
 				for k, val := range v {
 					if f, ok := val.(float64); ok {
@@ -266,7 +300,11 @@ func (s *SelfCoreService) upsertSignifier(ctx context.Context, idosoID int64, si
 			}
 		}
 		freqByPeriod[period]++
-		freqJSON, _ := json.Marshal(freqByPeriod)
+		freqJSON, err2 := json.Marshal(freqByPeriod)
+		if err2 != nil {
+			log.Printf("Error marshaling frequency_by_period for signifier %s: %v", signifier, err2)
+			freqJSON = []byte("{}")
+		}
 
 		return s.db.Update(ctx, "patient_master_signifiers",
 			map[string]interface{}{"idoso_id": idosoID, "signifier": signifier},
@@ -280,9 +318,13 @@ func (s *SelfCoreService) upsertSignifier(ctx context.Context, idosoID int64, si
 
 	// Insert new
 	freqByPeriod := map[string]int{period: 1}
-	freqJSON, _ := json.Marshal(freqByPeriod)
+	freqJSON, err := json.Marshal(freqByPeriod)
+	if err != nil {
+		log.Printf("Error marshaling new frequency_by_period for signifier %s: %v", signifier, err)
+		freqJSON = []byte("{}")
+	}
 
-	_, err := s.db.Insert(ctx, "patient_master_signifiers", map[string]interface{}{
+	_, err = s.db.Insert(ctx, "patient_master_signifiers", map[string]interface{}{
 		"idoso_id":            idosoID,
 		"signifier":           signifier,
 		"context_type":        contextType,
@@ -320,10 +362,18 @@ func (s *SelfCoreService) GetSelfCore(ctx context.Context, idosoID int64) (*Pati
 	if raw, ok := m["self_descriptions"]; ok && raw != nil {
 		switch v := raw.(type) {
 		case string:
-			json.Unmarshal([]byte(v), &psc.SelfDescriptions)
+			if err := json.Unmarshal([]byte(v), &psc.SelfDescriptions); err != nil {
+				log.Printf("Error unmarshaling self_descriptions string for idoso %d: %v", idosoID, err)
+			}
 		case []interface{}:
-			b, _ := json.Marshal(v)
-			json.Unmarshal(b, &psc.SelfDescriptions)
+			b, err := json.Marshal(v)
+			if err != nil {
+				log.Printf("Error marshaling self_descriptions slice for idoso %d: %v", idosoID, err)
+			} else {
+				if err := json.Unmarshal(b, &psc.SelfDescriptions); err != nil {
+					log.Printf("Error unmarshaling self_descriptions slice for idoso %d: %v", idosoID, err)
+				}
+			}
 		}
 	}
 
@@ -361,7 +411,9 @@ func (s *SelfCoreService) GetTopSignifiers(ctx context.Context, idosoID int64, l
 			ms.FrequencyByPeriod = make(map[string]int)
 			switch v := raw.(type) {
 			case string:
-				json.Unmarshal([]byte(v), &ms.FrequencyByPeriod)
+				if err := json.Unmarshal([]byte(v), &ms.FrequencyByPeriod); err != nil {
+					log.Printf("Error unmarshaling frequency_by_period for signifier %s: %v", ms.Signifier, err)
+				}
 			case map[string]interface{}:
 				for k, val := range v {
 					if f, ok := val.(float64); ok {

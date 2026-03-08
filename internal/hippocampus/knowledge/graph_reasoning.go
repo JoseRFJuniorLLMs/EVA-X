@@ -7,6 +7,7 @@ import (
 	"context"
 	"eva/internal/brainstem/config"
 	"eva/internal/cortex/gemini"
+	"eva/internal/util"
 	"fmt"
 
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
@@ -106,7 +107,7 @@ func (s *GraphReasoningService) fetchPatientContext(ctx context.Context, idosoID
 		}
 
 		// Filter by timestamp (last 30 days)
-		timestamp := toFloat64GraphReasoning(node.Content["timestamp"])
+		timestamp := util.ToFloat64(node.Content["timestamp"])
 		if timestamp > 0 && timestamp < thirtyDaysAgo {
 			continue
 		}
@@ -129,21 +130,3 @@ func (s *GraphReasoningService) fetchPatientContext(ctx context.Context, idosoID
 	return contextStr, nil
 }
 
-// Helper type conversion
-func toFloat64GraphReasoning(v interface{}) float64 {
-	if v == nil {
-		return 0
-	}
-	switch val := v.(type) {
-	case float64:
-		return val
-	case float32:
-		return float64(val)
-	case int:
-		return float64(val)
-	case int64:
-		return float64(val)
-	default:
-		return 0
-	}
-}

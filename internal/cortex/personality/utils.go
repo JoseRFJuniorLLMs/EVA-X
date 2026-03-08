@@ -5,16 +5,6 @@ package personality
 
 // Shared utility functions for personality modules
 
-// containsString checks if a slice contains a specific string
-func containsString(slice []string, item string) bool {
-	for _, s := range slice {
-		if s == item {
-			return true
-		}
-	}
-	return false
-}
-
 // containsKeyword checks if text contains any of the keywords
 func containsKeyword(text string, keywords []string) bool {
 	for _, keyword := range keywords {

@@ -194,7 +194,7 @@ func main() {
 
 	// Legacy PostgreSQL connection REMOVED — all data lives in NietzscheDB.
 	// Primary DB: NietzscheDB (no SQL fallback)
-	db := database.NewNietzscheDB(nzClient.SDK(), nil)
+	db := database.NewNietzscheDB(nzClient.SDK())
 	defer db.Close()
 
 	// Ensure indexes for eva_mind collection
@@ -228,14 +228,22 @@ func main() {
 
 	wiederkehrAdapter := nietzscheInfra.NewWiederkehrAdapter(nzClient)
 
+	// Application-level context for graceful shutdown (created early so all goroutines can use it)
+	appCtx, appStop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer appStop()
+
 	// Register default daemons (Sprint 11.2)
 	go func() {
-		time.Sleep(10 * time.Second) // Wait for server to be fully ready
-		ctx := context.Background()
+		// Wait for server to be fully ready, but respect shutdown
+		select {
+		case <-time.After(10 * time.Second):
+		case <-appCtx.Done():
+			return
+		}
 		// Energy Guard: prevent hotspots
-		_ = wiederkehrAdapter.CreateEnergyGuard(ctx, "patient_graph", 0.85, "1h")
+		_ = wiederkehrAdapter.CreateEnergyGuard(appCtx, "patient_graph", 0.85, "1h")
 		// Decay Reaper: implement natural forgetting
-		_ = wiederkehrAdapter.CreateDecayReaper(ctx, "patient_graph", 0.05, "24h")
+		_ = wiederkehrAdapter.CreateDecayReaper(appCtx, "patient_graph", 0.05, "24h")
 		log.Info().Msg("NietzscheDB Wiederkehr daemons registered (EnergyGuard, DecayReaper)")
 	}()
 
@@ -332,6 +340,8 @@ func main() {
 	}
 
 	// 7.5 Tools Handler (120+ tools — medicamentos, alarmes, jogos, GTD, etc)
+	// NOTE: pushService and emailSvc may be nil when not configured;
+	// ToolsHandler must nil-check before using them.
 	toolsHandler := tools.NewToolsHandler(db, pushService, emailSvc)
 	toolsHandler.SetNietzscheClient(nzClient)
 	toolsHandler.SetManifoldAdapter(manifoldAdapter)
@@ -348,11 +358,19 @@ func main() {
 	log.Info().Str("environment", cfg.Environment).Bool("debug_tools", cfg.Environment == "development").Msg("🔒 Debug mode para novas ferramentas")
 
 	// EscalationService (escalation de alertas: push → email → SMS)
+	// NOTE: pushService and emailSvc may be nil when not configured;
+	// EscalationService must handle nil channels gracefully (skip that tier).
 	escalationSvc := alert.NewEscalationService(alert.EscalationConfig{
 		Firebase: pushService,
 		Email:    emailSvc,
 		DB:       db,
 	})
+	if pushService == nil {
+		log.Warn().Msg("EscalationService: push tier disabled (Firebase not configured)")
+	}
+	if emailSvc == nil {
+		log.Warn().Msg("EscalationService: email tier disabled (SMTP not configured)")
+	}
 	toolsHandler.SetEscalationService(escalationSvc)
 
 	// ✅ OAuth Service (Google APIs: Gmail, YouTube, Calendar, Drive)
@@ -505,11 +523,15 @@ func main() {
 		Nietzsche:    nzClient,
 		Graph:        graphAdapter,
 		Vector:       vectorAdapter,
-		Push:         pushService,
+		Push:         pushService, // may be nil when Firebase not configured; swarm agents must nil-check
 		Config:       cfg,
 		GoogleAPIKey: cfg.GoogleAPIKey,
 		Krylov:       krylovMgr,
 		AlertFamily: func(ctx context.Context, userID int64, reason, severity string) error {
+			if pushService == nil && emailSvc == nil {
+				log.Warn().Int64("userID", userID).Str("reason", reason).Msg("AlertFamily skipped — pushService and emailSvc both nil")
+				return nil
+			}
 			return actions.AlertFamilyWithSeverity(db, pushService, emailSvc, userID, reason, severity)
 		},
 	}
@@ -757,8 +779,8 @@ func main() {
 	log.Info().Msg("🔬 Research Engine rotas REST registradas em /api/v1/research/*")
 
 	// 7. Scheduler (Background Jobs)
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	// Reuse appCtx created earlier (signal.NotifyContext for graceful shutdown)
+	ctx := appCtx
 
 	go func() {
 		defer func() {
@@ -766,7 +788,12 @@ func main() {
 				log.Error().Interface("panic", r).Msg("CRITICO: Scheduler panic - background jobs parados")
 			}
 		}()
-		scheduler.Start(ctx, db, cfg, log.Logger, alertService, pushService)
+		if pushService != nil {
+			scheduler.Start(ctx, db, cfg, log.Logger, alertService, pushService)
+		} else {
+			log.Warn().Msg("Scheduler started without push notifications (pushService nil)")
+			scheduler.Start(ctx, db, cfg, log.Logger, alertService, nil)
+		}
 	}()
 
 	// Autonomous Learner (background — estuda a cada 6h)

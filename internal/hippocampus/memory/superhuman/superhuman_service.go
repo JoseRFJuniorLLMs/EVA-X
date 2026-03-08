@@ -370,23 +370,30 @@ func (s *SuperhumanMemoryService) processMetaphors(ctx context.Context, idosoID 
 			metaphorType := s.classifyMetaphor(match)
 
 			// Check if metaphor already exists
-			rows, _ := s.db.QueryByLabel(ctx, "patient_metaphors",
+			rows, err := s.db.QueryByLabel(ctx, "patient_metaphors",
 				" AND n.idoso_id = $idoso AND n.metaphor = $metaphor",
 				map[string]interface{}{"idoso": idosoID, "metaphor": match}, 1)
+			if err != nil {
+				log.Printf("⚠️ [METAPHOR] QueryByLabel error: %v", err)
+				return fmt.Errorf("query patient_metaphors: %w", err)
+			}
 
 			if len(rows) > 0 {
 				// Update existing
 				count := database.GetInt64(rows[0], "usage_count")
-				s.db.Update(ctx, "patient_metaphors",
+				if err := s.db.Update(ctx, "patient_metaphors",
 					map[string]interface{}{"idoso_id": idosoID, "metaphor": match},
 					map[string]interface{}{
 						"usage_count": count + 1,
 						"last_used":   timestamp.Format(time.RFC3339),
 						"updated_at":  time.Now().Format(time.RFC3339),
-					})
+					}); err != nil {
+					log.Printf("[superhuman] update patient_metaphors failed: %v", err)
+					return fmt.Errorf("update patient_metaphors: %w", err)
+				}
 			} else {
 				// Insert new
-				s.db.Insert(ctx, "patient_metaphors", map[string]interface{}{
+				if _, err := s.db.Insert(ctx, "patient_metaphors", map[string]interface{}{
 					"idoso_id":      idosoID,
 					"metaphor":      match,
 					"metaphor_type": metaphorType,
@@ -394,7 +401,10 @@ func (s *SuperhumanMemoryService) processMetaphors(ctx context.Context, idosoID 
 					"first_used":    timestamp.Format(time.RFC3339),
 					"last_used":     timestamp.Format(time.RFC3339),
 					"contexts":      "[]",
-				})
+				}); err != nil {
+					log.Printf("[superhuman] insert patient_metaphors failed: %v", err)
+					return fmt.Errorf("insert patient_metaphors: %w", err)
+				}
 			}
 		}
 	}
@@ -440,27 +450,37 @@ func (s *SuperhumanMemoryService) processCounterfactuals(ctx context.Context, id
 		matches := pattern.FindAllString(text, -1)
 		for _, match := range matches {
 			// Check if counterfactual already exists
-			rows, _ := s.db.QueryByLabel(ctx, "patient_counterfactuals",
+			rows, err := s.db.QueryByLabel(ctx, "patient_counterfactuals",
 				" AND n.idoso_id = $idoso AND n.verbatim = $verbatim",
 				map[string]interface{}{"idoso": idosoID, "verbatim": match}, 1)
+			if err != nil {
+				log.Printf("⚠️ [COUNTERFACTUAL] QueryByLabel error: %v", err)
+				return fmt.Errorf("query patient_counterfactuals: %w", err)
+			}
 
 			if len(rows) > 0 {
 				count := database.GetInt64(rows[0], "mention_count")
-				s.db.Update(ctx, "patient_counterfactuals",
+				if err := s.db.Update(ctx, "patient_counterfactuals",
 					map[string]interface{}{"idoso_id": idosoID, "verbatim": match},
 					map[string]interface{}{
 						"mention_count":  count + 1,
 						"last_mentioned": timestamp.Format(time.RFC3339),
 						"updated_at":     time.Now().Format(time.RFC3339),
-					})
+					}); err != nil {
+					log.Printf("[superhuman] update patient_counterfactuals failed: %v", err)
+					return fmt.Errorf("update patient_counterfactuals: %w", err)
+				}
 			} else {
-				s.db.Insert(ctx, "patient_counterfactuals", map[string]interface{}{
+				if _, err := s.db.Insert(ctx, "patient_counterfactuals", map[string]interface{}{
 					"idoso_id":        idosoID,
 					"verbatim":        match,
 					"mention_count":   1,
 					"first_mentioned": timestamp.Format(time.RFC3339),
 					"last_mentioned":  timestamp.Format(time.RFC3339),
-				})
+				}); err != nil {
+					log.Printf("[superhuman] insert patient_counterfactuals failed: %v", err)
+					return fmt.Errorf("insert patient_counterfactuals: %w", err)
+				}
 			}
 		}
 	}
@@ -476,24 +496,35 @@ func (s *SuperhumanMemoryService) processFamilyPatterns(ctx context.Context, ido
 			patternType := s.classifyFamilyPattern(match)
 			generations := s.extractGenerations(match)
 
-			genJSON, _ := json.Marshal(generations)
+			genJSON, err := json.Marshal(generations)
+			if err != nil {
+				log.Printf("⚠️ [FAMILY] json.Marshal generations error: %v", err)
+				genJSON = []byte("[]")
+			}
 
 			// Check if family pattern already exists
-			rows, _ := s.db.QueryByLabel(ctx, "patient_family_patterns",
+			rows, err := s.db.QueryByLabel(ctx, "patient_family_patterns",
 				" AND n.idoso_id = $idoso AND n.pattern_verbatim = $verbatim",
 				map[string]interface{}{"idoso": idosoID, "verbatim": match}, 1)
+			if err != nil {
+				log.Printf("⚠️ [FAMILY] QueryByLabel error: %v", err)
+				return fmt.Errorf("query patient_family_patterns: %w", err)
+			}
 
 			if len(rows) > 0 {
 				count := database.GetInt64(rows[0], "mention_count")
-				s.db.Update(ctx, "patient_family_patterns",
+				if err := s.db.Update(ctx, "patient_family_patterns",
 					map[string]interface{}{"idoso_id": idosoID, "pattern_verbatim": match},
 					map[string]interface{}{
 						"mention_count":  count + 1,
 						"last_mentioned": timestamp.Format(time.RFC3339),
 						"updated_at":     time.Now().Format(time.RFC3339),
-					})
+					}); err != nil {
+					log.Printf("[superhuman] update patient_family_patterns failed: %v", err)
+					return fmt.Errorf("update patient_family_patterns: %w", err)
+				}
 			} else {
-				s.db.Insert(ctx, "patient_family_patterns", map[string]interface{}{
+				if _, err := s.db.Insert(ctx, "patient_family_patterns", map[string]interface{}{
 					"idoso_id":              idosoID,
 					"pattern_verbatim":      match,
 					"pattern_type":          patternType,
@@ -501,7 +532,10 @@ func (s *SuperhumanMemoryService) processFamilyPatterns(ctx context.Context, ido
 					"mention_count":         1,
 					"first_mentioned":       timestamp.Format(time.RFC3339),
 					"last_mentioned":        timestamp.Format(time.RFC3339),
-				})
+				}); err != nil {
+					log.Printf("[superhuman] insert patient_family_patterns failed: %v", err)
+					return fmt.Errorf("insert patient_family_patterns: %w", err)
+				}
 			}
 		}
 	}
@@ -566,9 +600,13 @@ func (s *SuperhumanMemoryService) processIntentions(ctx context.Context, idosoID
 			category := s.classifyIntention(intention)
 
 			// Check if intention already exists (case-insensitive partial match)
-			rows, _ := s.db.QueryByLabel(ctx, "patient_intentions",
+			rows, err := s.db.QueryByLabel(ctx, "patient_intentions",
 				" AND n.idoso_id = $idoso",
 				map[string]interface{}{"idoso": idosoID}, 0)
+			if err != nil {
+				log.Printf("⚠️ [INTENTION] QueryByLabel error: %v", err)
+				return fmt.Errorf("query patient_intentions: %w", err)
+			}
 
 			found := false
 			for _, r := range rows {
@@ -579,20 +617,23 @@ func (s *SuperhumanMemoryService) processIntentions(ctx context.Context, idosoID
 				}
 				if strings.Contains(existing, prefix) {
 					count := database.GetInt64(r, "declaration_count")
-					s.db.Update(ctx, "patient_intentions",
+					if err := s.db.Update(ctx, "patient_intentions",
 						map[string]interface{}{"idoso_id": idosoID, "intention_verbatim": database.GetString(r, "intention_verbatim")},
 						map[string]interface{}{
 							"declaration_count": count + 1,
 							"last_declared":     timestamp.Format(time.RFC3339),
 							"updated_at":        time.Now().Format(time.RFC3339),
-						})
+						}); err != nil {
+						log.Printf("[superhuman] update patient_intentions failed: %v", err)
+						return fmt.Errorf("update patient_intentions: %w", err)
+					}
 					found = true
 					break
 				}
 			}
 
 			if !found {
-				s.db.Insert(ctx, "patient_intentions", map[string]interface{}{
+				if _, err := s.db.Insert(ctx, "patient_intentions", map[string]interface{}{
 					"idoso_id":            idosoID,
 					"intention_verbatim":  intention,
 					"category":            category,
@@ -601,7 +642,10 @@ func (s *SuperhumanMemoryService) processIntentions(ctx context.Context, idosoID
 					"declaration_count":   1,
 					"first_declared":      timestamp.Format(time.RFC3339),
 					"last_declared":       timestamp.Format(time.RFC3339),
-				})
+				}); err != nil {
+					log.Printf("[superhuman] insert patient_intentions failed: %v", err)
+					return fmt.Errorf("insert patient_intentions: %w", err)
+				}
 			}
 		}
 	}
@@ -664,28 +708,38 @@ func (s *SuperhumanMemoryService) processWorldMapping(ctx context.Context, idoso
 			personName = strings.Title(strings.ToLower(personName))
 
 			// Check if person already exists
-			rows, _ := s.db.QueryByLabel(ctx, "patient_world_persons",
+			rows, err := s.db.QueryByLabel(ctx, "patient_world_persons",
 				" AND n.idoso_id = $idoso AND n.person_name = $name",
 				map[string]interface{}{"idoso": idosoID, "name": personName}, 1)
+			if err != nil {
+				log.Printf("⚠️ [WORLD] QueryByLabel error: %v", err)
+				return fmt.Errorf("query patient_world_persons: %w", err)
+			}
 
 			if len(rows) > 0 {
 				count := database.GetInt64(rows[0], "mention_count")
-				s.db.Update(ctx, "patient_world_persons",
+				if err := s.db.Update(ctx, "patient_world_persons",
 					map[string]interface{}{"idoso_id": idosoID, "person_name": personName},
 					map[string]interface{}{
 						"mention_count":  count + 1,
 						"last_mentioned": timestamp.Format(time.RFC3339),
 						"updated_at":     time.Now().Format(time.RFC3339),
-					})
+					}); err != nil {
+					log.Printf("[superhuman] update patient_world_persons failed: %v", err)
+					return fmt.Errorf("update patient_world_persons: %w", err)
+				}
 			} else {
-				s.db.Insert(ctx, "patient_world_persons", map[string]interface{}{
+				if _, err := s.db.Insert(ctx, "patient_world_persons", map[string]interface{}{
 					"idoso_id":        idosoID,
 					"person_name":     personName,
 					"role":            pp.role,
 					"mention_count":   1,
 					"first_mentioned": timestamp.Format(time.RFC3339),
 					"last_mentioned":  timestamp.Format(time.RFC3339),
-				})
+				}); err != nil {
+					log.Printf("[superhuman] insert patient_world_persons failed: %v", err)
+					return fmt.Errorf("insert patient_world_persons: %w", err)
+				}
 			}
 		}
 	}
@@ -717,9 +771,13 @@ func (s *SuperhumanMemoryService) processSomaticCorrelations(ctx context.Context
 
 			for _, topic := range topics {
 				// Check if somatic correlation already exists
-				rows, _ := s.db.QueryByLabel(ctx, "patient_somatic_correlations",
+				rows, err := s.db.QueryByLabel(ctx, "patient_somatic_correlations",
 					" AND n.idoso_id = $idoso AND n.somatic_type = $stype AND n.condition_range = $cond AND n.correlated_topic = $topic",
 					map[string]interface{}{"idoso": idosoID, "stype": somaticType, "cond": condition, "topic": topic}, 1)
+				if err != nil {
+					log.Printf("⚠️ [SOMATIC] QueryByLabel error: %v", err)
+					return fmt.Errorf("query patient_somatic_correlations: %w", err)
+				}
 
 				now := time.Now().Format(time.RFC3339)
 				if len(rows) > 0 {
@@ -729,7 +787,7 @@ func (s *SuperhumanMemoryService) processSomaticCorrelations(ctx context.Context
 					if newStrength > 1.0 {
 						newStrength = 1.0
 					}
-					s.db.Update(ctx, "patient_somatic_correlations",
+					if err := s.db.Update(ctx, "patient_somatic_correlations",
 						map[string]interface{}{
 							"idoso_id":         idosoID,
 							"somatic_type":     somaticType,
@@ -741,9 +799,12 @@ func (s *SuperhumanMemoryService) processSomaticCorrelations(ctx context.Context
 							"correlation_strength": newStrength,
 							"last_observed":        now,
 							"updated_at":           now,
-						})
+						}); err != nil {
+						log.Printf("[superhuman] update somatic_correlations failed: %v", err)
+						return fmt.Errorf("update somatic_correlations: %w", err)
+					}
 				} else {
-					s.db.Insert(ctx, "patient_somatic_correlations", map[string]interface{}{
+					if _, err := s.db.Insert(ctx, "patient_somatic_correlations", map[string]interface{}{
 						"idoso_id":              idosoID,
 						"somatic_type":          somaticType,
 						"condition_range":       condition,
@@ -752,7 +813,10 @@ func (s *SuperhumanMemoryService) processSomaticCorrelations(ctx context.Context
 						"observation_count":     1,
 						"first_observed":        now,
 						"last_observed":         now,
-					})
+					}); err != nil {
+						log.Printf("[superhuman] insert somatic_correlations failed: %v", err)
+						return fmt.Errorf("insert somatic_correlations: %w", err)
+					}
 				}
 			}
 		}
@@ -830,9 +894,13 @@ func (s *SuperhumanMemoryService) updateRiskScore(ctx context.Context, idosoID i
 	riskScore := 0.0
 
 	// Check counterfactual frequency (rumination indicator)
-	cfRows, _ := s.db.QueryByLabel(ctx, "patient_counterfactuals",
+	cfRows, err := s.db.QueryByLabel(ctx, "patient_counterfactuals",
 		" AND n.idoso_id = $idoso",
 		map[string]interface{}{"idoso": idosoID}, 0)
+	if err != nil {
+		log.Printf("⚠️ [RISK] QueryByLabel patient_counterfactuals error: %v", err)
+		return fmt.Errorf("query patient_counterfactuals: %w", err)
+	}
 	totalMentions := 0
 	for _, r := range cfRows {
 		totalMentions += int(database.GetInt64(r, "mention_count"))
@@ -844,9 +912,13 @@ func (s *SuperhumanMemoryService) updateRiskScore(ctx context.Context, idosoID i
 	}
 
 	// Check somatic correlations strength
-	somaticRows, _ := s.db.QueryByLabel(ctx, "patient_somatic_correlations",
+	somaticRows, err := s.db.QueryByLabel(ctx, "patient_somatic_correlations",
 		" AND n.idoso_id = $idoso",
 		map[string]interface{}{"idoso": idosoID}, 0)
+	if err != nil {
+		log.Printf("⚠️ [RISK] QueryByLabel patient_somatic_correlations error: %v", err)
+		return fmt.Errorf("query patient_somatic_correlations: %w", err)
+	}
 	for _, r := range somaticRows {
 		strength := database.GetFloat64(r, "correlation_strength")
 		if strength > 0.8 {
@@ -855,9 +927,13 @@ func (s *SuperhumanMemoryService) updateRiskScore(ctx context.Context, idosoID i
 	}
 
 	// Check persistent memories (trauma indicators)
-	persistentRows, _ := s.db.QueryByLabel(ctx, "patient_persistent_memories",
+	persistentRows, err := s.db.QueryByLabel(ctx, "patient_persistent_memories",
 		" AND n.idoso_id = $idoso",
 		map[string]interface{}{"idoso": idosoID}, 0)
+	if err != nil {
+		log.Printf("⚠️ [RISK] QueryByLabel patient_persistent_memories error: %v", err)
+		return fmt.Errorf("query patient_persistent_memories: %w", err)
+	}
 	for _, r := range persistentRows {
 		if database.GetFloat64(r, "avoidance_count") > 3 {
 			riskScore += 0.15
@@ -870,25 +946,35 @@ func (s *SuperhumanMemoryService) updateRiskScore(ctx context.Context, idosoID i
 	}
 
 	// Store risk score
-	rows, _ := s.db.QueryByLabel(ctx, "patient_risk_scores",
+	rows, err := s.db.QueryByLabel(ctx, "patient_risk_scores",
 		" AND n.idoso_id = $idoso",
 		map[string]interface{}{"idoso": idosoID}, 1)
+	if err != nil {
+		log.Printf("⚠️ [RISK] QueryByLabel patient_risk_scores error: %v", err)
+		return fmt.Errorf("query patient_risk_scores: %w", err)
+	}
 
 	now := time.Now().Format(time.RFC3339)
 	if len(rows) > 0 {
-		s.db.Update(ctx, "patient_risk_scores",
+		if err := s.db.Update(ctx, "patient_risk_scores",
 			map[string]interface{}{"idoso_id": idosoID},
 			map[string]interface{}{
 				"risk_score":  riskScore,
 				"updated_at":  now,
-			})
+			}); err != nil {
+			log.Printf("[superhuman] update patient_risk_scores failed: %v", err)
+			return fmt.Errorf("update patient_risk_scores: %w", err)
+		}
 	} else {
-		s.db.Insert(ctx, "patient_risk_scores", map[string]interface{}{
+		if _, err := s.db.Insert(ctx, "patient_risk_scores", map[string]interface{}{
 			"idoso_id":    idosoID,
 			"risk_score":  riskScore,
 			"created_at":  now,
 			"updated_at":  now,
-		})
+		}); err != nil {
+			log.Printf("[superhuman] insert patient_risk_scores failed: %v", err)
+			return fmt.Errorf("insert patient_risk_scores: %w", err)
+		}
 	}
 
 	return nil
@@ -917,9 +1003,13 @@ func (s *SuperhumanMemoryService) updateCircadianPattern(ctx context.Context, id
 	topics := s.extractTopics(text)
 
 	// Check if circadian pattern already exists for this time period
-	rows, _ := s.db.QueryByLabel(ctx, "patient_circadian_patterns",
+	rows, err := s.db.QueryByLabel(ctx, "patient_circadian_patterns",
 		" AND n.idoso_id = $idoso AND n.time_period = $period",
 		map[string]interface{}{"idoso": idosoID, "period": timePeriod}, 1)
+	if err != nil {
+		log.Printf("⚠️ [CIRCADIAN] QueryByLabel error: %v", err)
+		return fmt.Errorf("query patient_circadian_patterns: %w", err)
+	}
 
 	now := time.Now().Format(time.RFC3339)
 	if len(rows) > 0 {
@@ -937,24 +1027,38 @@ func (s *SuperhumanMemoryService) updateCircadianPattern(ctx context.Context, id
 				seen[t] = true
 			}
 		}
-		themesJSON, _ := json.Marshal(existingThemes)
+		themesJSON, marshalErr := json.Marshal(existingThemes)
+		if marshalErr != nil {
+			log.Printf("⚠️ [CIRCADIAN] json.Marshal existingThemes error: %v", marshalErr)
+			themesJSON = []byte("[]")
+		}
 
 		count := database.GetInt64(rows[0], "observation_count")
-		s.db.Update(ctx, "patient_circadian_patterns",
+		if err := s.db.Update(ctx, "patient_circadian_patterns",
 			map[string]interface{}{"idoso_id": idosoID, "time_period": timePeriod},
 			map[string]interface{}{
 				"recurring_themes":  string(themesJSON),
 				"observation_count": count + 1,
 				"updated_at":        now,
-			})
+			}); err != nil {
+			log.Printf("[superhuman] update circadian_patterns failed: %v", err)
+			return fmt.Errorf("update circadian_patterns: %w", err)
+		}
 	} else {
-		themesJSON, _ := json.Marshal(topics)
-		s.db.Insert(ctx, "patient_circadian_patterns", map[string]interface{}{
+		themesJSON, marshalErr := json.Marshal(topics)
+		if marshalErr != nil {
+			log.Printf("[superhuman] json.Marshal topics error: %v", marshalErr)
+			themesJSON = []byte("[]")
+		}
+		if _, err := s.db.Insert(ctx, "patient_circadian_patterns", map[string]interface{}{
 			"idoso_id":          idosoID,
 			"time_period":       timePeriod,
 			"recurring_themes":  string(themesJSON),
 			"observation_count": 1,
-		})
+		}); err != nil {
+			log.Printf("[superhuman] insert circadian_patterns failed: %v", err)
+			return fmt.Errorf("insert circadian_patterns: %w", err)
+		}
 	}
 
 	return nil
@@ -1340,9 +1444,13 @@ func (s *SuperhumanMemoryService) processLifeMarkers(ctx context.Context, idosoI
 			}
 
 			// Check if marker already exists (case-insensitive partial match)
-			rows, _ := s.db.QueryByLabel(ctx, "patient_life_markers",
+			rows, err := s.db.QueryByLabel(ctx, "patient_life_markers",
 				" AND n.idoso_id = $idoso",
 				map[string]interface{}{"idoso": idosoID}, 0)
+			if err != nil {
+				log.Printf("⚠️ [LIFE_MARKERS] QueryByLabel error: %v", err)
+				return fmt.Errorf("query patient_life_markers: %w", err)
+			}
 
 			found := false
 			prefix := strings.ToLower(match)
@@ -1353,13 +1461,16 @@ func (s *SuperhumanMemoryService) processLifeMarkers(ctx context.Context, idosoI
 				desc := strings.ToLower(database.GetString(r, "marker_description"))
 				if strings.Contains(desc, prefix) {
 					count := database.GetInt64(r, "mention_count")
-					s.db.Update(ctx, "patient_life_markers",
+					if err := s.db.Update(ctx, "patient_life_markers",
 						map[string]interface{}{"idoso_id": idosoID, "marker_description": database.GetString(r, "marker_description")},
 						map[string]interface{}{
 							"mention_count":  count + 1,
 							"last_mentioned": timestamp.Format(time.RFC3339),
 							"updated_at":     time.Now().Format(time.RFC3339),
-						})
+						}); err != nil {
+						log.Printf("[superhuman] update patient_life_markers failed: %v", err)
+						return fmt.Errorf("update patient_life_markers: %w", err)
+					}
 					found = true
 					break
 				}
@@ -1380,7 +1491,10 @@ func (s *SuperhumanMemoryService) processLifeMarkers(ctx context.Context, idosoI
 				if age > 0 {
 					content["marker_age"] = age
 				}
-				s.db.Insert(ctx, "patient_life_markers", content)
+				if _, err := s.db.Insert(ctx, "patient_life_markers", content); err != nil {
+					log.Printf("[superhuman] insert patient_life_markers failed: %v", err)
+					return fmt.Errorf("insert patient_life_markers: %w", err)
+				}
 			}
 		}
 	}

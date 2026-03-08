@@ -10,6 +10,7 @@ import (
 	"time"
 
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
+	"eva/internal/util"
 
 	nietzsche "nietzsche-sdk"
 )
@@ -228,13 +229,13 @@ func (e *CoreMemoryEngine) GetIdentityContext(ctx context.Context) (string, erro
 	}
 
 	// 4. Construir contexto
-	totalSessions := toInt(selfProps["total_sessions"])
-	crisesHandled := toInt(selfProps["crises_handled"])
-	breakthroughs := toInt(selfProps["breakthroughs"])
-	agreeableness := toFloat64(selfProps["agreeableness"])
-	openness := toFloat64(selfProps["openness"])
-	neuroticism := toFloat64(selfProps["neuroticism"])
-	selfDescription := toString(selfProps["self_description"])
+	totalSessions := util.ToInt(selfProps["total_sessions"])
+	crisesHandled := util.ToInt(selfProps["crises_handled"])
+	breakthroughs := util.ToInt(selfProps["breakthroughs"])
+	agreeableness := util.ToFloat64(selfProps["agreeableness"])
+	openness := util.ToFloat64(selfProps["openness"])
+	neuroticism := util.ToFloat64(selfProps["neuroticism"])
+	selfDescription := util.ToString(selfProps["self_description"])
 
 	contextStr := fmt.Sprintf(`## MINHA IDENTIDADE
 
@@ -425,8 +426,8 @@ func (e *CoreMemoryEngine) reinforceMemory(ctx context.Context, memoryID string)
 		return fmt.Errorf("failed to get memory node: %w", err)
 	}
 
-	currentCount := toInt(node.Content["reinforcement_count"])
-	currentWeight := toFloat64(node.Content["importance_weight"])
+	currentCount := util.ToInt(node.Content["reinforcement_count"])
+	currentWeight := util.ToFloat64(node.Content["importance_weight"])
 
 	newCount := currentCount + 1
 	newWeight := currentWeight + 0.05
@@ -509,17 +510,17 @@ func (e *CoreMemoryEngine) getEvaSelf(ctx context.Context) (*EvaSelf, error) {
 
 	self := &EvaSelf{
 		ID:                "eva_self",
-		Openness:          toFloat64(props["openness"]),
-		Conscientiousness: toFloat64(props["conscientiousness"]),
-		Extraversion:      toFloat64(props["extraversion"]),
-		Agreeableness:     toFloat64(props["agreeableness"]),
-		Neuroticism:       toFloat64(props["neuroticism"]),
-		PrimaryType:       toInt(props["primary_type"]),
-		Wing:              toInt(props["wing"]),
-		TotalSessions:     toInt(props["total_sessions"]),
-		CrisesHandled:     toInt(props["crises_handled"]),
-		Breakthroughs:     toInt(props["breakthroughs"]),
-		SelfDescription:   toString(props["self_description"]),
+		Openness:          util.ToFloat64(props["openness"]),
+		Conscientiousness: util.ToFloat64(props["conscientiousness"]),
+		Extraversion:      util.ToFloat64(props["extraversion"]),
+		Agreeableness:     util.ToFloat64(props["agreeableness"]),
+		Neuroticism:       util.ToFloat64(props["neuroticism"]),
+		PrimaryType:       util.ToInt(props["primary_type"]),
+		Wing:              util.ToInt(props["wing"]),
+		TotalSessions:     util.ToInt(props["total_sessions"]),
+		CrisesHandled:     util.ToInt(props["crises_handled"]),
+		Breakthroughs:     util.ToInt(props["breakthroughs"]),
+		SelfDescription:   util.ToString(props["self_description"]),
 	}
 
 	return self, nil
@@ -726,54 +727,3 @@ func boolToInt(b bool) int {
 	return 0
 }
 
-// Type conversion helpers for NietzscheDB content maps
-
-func toFloat64(v interface{}) float64 {
-	if v == nil {
-		return 0
-	}
-	switch val := v.(type) {
-	case float64:
-		return val
-	case float32:
-		return float64(val)
-	case int:
-		return float64(val)
-	case int64:
-		return float64(val)
-	case int32:
-		return float64(val)
-	default:
-		return 0
-	}
-}
-
-func toInt(v interface{}) int {
-	if v == nil {
-		return 0
-	}
-	switch val := v.(type) {
-	case int:
-		return val
-	case int64:
-		return int(val)
-	case int32:
-		return int(val)
-	case float64:
-		return int(val)
-	case float32:
-		return int(val)
-	default:
-		return 0
-	}
-}
-
-func toString(v interface{}) string {
-	if v == nil {
-		return ""
-	}
-	if s, ok := v.(string); ok {
-		return s
-	}
-	return fmt.Sprintf("%v", v)
-}

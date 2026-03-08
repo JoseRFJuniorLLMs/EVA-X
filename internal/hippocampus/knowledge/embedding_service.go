@@ -69,14 +69,6 @@ func (e *EmbeddingService) SetCacheAdapter(adapter *nietzscheInfra.CacheAdapter)
 	log.Printf("[EMBEDDING] NietzscheDB CacheAdapter enabled (collection: %s)", adapter.Collection())
 }
 
-// SetNietzscheDBClient is deprecated. Use SetCacheAdapter instead.
-// Kept for backward compatibility; this is a no-op (NietzscheDB replaced NietzscheDB).
-func (e *EmbeddingService) SetNietzscheDBClient(NietzscheDBClient interface{}) {
-	// DEPRECATED: NietzscheDB has been replaced by NietzscheDB CacheAdapter.
-	// Use SetCacheAdapter() instead.
-	log.Printf("[EMBEDDING] SetNietzscheDBClient called (deprecated no-op) — use SetCacheAdapter()")
-}
-
 // ensureCollection is no longer needed - NietzscheDB handles collection management.
 // Kept as no-op for backward compatibility of any callers.
 func (e *EmbeddingService) ensureCollection(ctx context.Context) error {

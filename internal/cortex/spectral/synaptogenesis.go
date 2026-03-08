@@ -11,6 +11,7 @@ import (
 	"time"
 
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
+	"eva/internal/util"
 
 	nietzsche "nietzsche-sdk"
 )
@@ -193,12 +194,12 @@ func (s *SynaptogenesisEngine) detectCoActivations(ctx context.Context, patientI
 			if err != nil {
 				continue
 			}
-			lastSeen := toFloat64Synaptogenesis(node.Content["last_seen"])
+			lastSeen := util.ToFloat64(node.Content["last_seen"])
 			if lastSeen > 0 && lastSeen < sevenDaysAgo {
 				continue
 			}
 
-			freq := toIntSynaptogenesis(node.Content["frequency"])
+			freq := util.ToInt(node.Content["frequency"])
 			if freq == 0 {
 				freq = 1
 			}
@@ -357,39 +358,3 @@ func (s *SynaptogenesisEngine) GetStatistics() map[string]interface{} {
 	}
 }
 
-// Helper type conversions for this package
-func toFloat64Synaptogenesis(v interface{}) float64 {
-	if v == nil {
-		return 0
-	}
-	switch val := v.(type) {
-	case float64:
-		return val
-	case float32:
-		return float64(val)
-	case int:
-		return float64(val)
-	case int64:
-		return float64(val)
-	default:
-		return 0
-	}
-}
-
-func toIntSynaptogenesis(v interface{}) int {
-	if v == nil {
-		return 0
-	}
-	switch val := v.(type) {
-	case int:
-		return val
-	case int64:
-		return int(val)
-	case float64:
-		return int(val)
-	case float32:
-		return int(val)
-	default:
-		return 0
-	}
-}

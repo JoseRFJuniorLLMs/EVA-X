@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"eva/internal/brainstem/logger"
+	"eva/internal/util"
 
 	nietzsche "nietzsche-sdk"
 )
@@ -392,30 +393,16 @@ func parseNarrativeText(rows []map[string]interface{}) *NarrativeSummary {
 		}
 	}
 	if v, ok := row["total_nodes"]; ok {
-		summary.TotalNodes = toInt64(v)
+		summary.TotalNodes = util.ToInt64(v)
 	}
 	if v, ok := row["total_edges"]; ok {
-		summary.TotalEdges = toInt64(v)
+		summary.TotalEdges = util.ToInt64(v)
 	}
 	if v, ok := row["events"]; ok {
-		summary.EventCount = toInt64(v)
+		summary.EventCount = util.ToInt64(v)
 	}
 
 	return summary
-}
-
-// toInt64 safely converts various numeric types to int64.
-func toInt64(v interface{}) int64 {
-	switch val := v.(type) {
-	case int64:
-		return val
-	case float64:
-		return int64(val)
-	case int:
-		return int64(val)
-	default:
-		return 0
-	}
 }
 
 // topScoredNodes extracts the top N scored nodes from an algorithm result.

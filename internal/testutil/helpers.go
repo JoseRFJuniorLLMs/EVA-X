@@ -34,7 +34,7 @@ func SetupTestDB(t *testing.T) *TestDB {
 		t.Skipf("NietzscheDB de teste não disponível: %v", err)
 	}
 
-	db := database.NewNietzscheDB(client.SDK(), nil)
+	db := database.NewNietzscheDB(client.SDK())
 
 	return &TestDB{DB: db}
 }

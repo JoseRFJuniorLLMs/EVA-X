@@ -8,15 +8,20 @@ import (
 	"time"
 )
 
-// TestNietzscheConnection verifica se a conexão com NietzscheDB está funcionando
-func TestNietzscheConnection(t *testing.T) {
-	cfg := &config.Config{
-		NietzscheGRPCAddr: "localhost:50051",
-	}
-
-	adapter, err := nietzscheInfra.NewGraphAdapter(cfg)
+func setupAdapter(t *testing.T) *nietzscheInfra.GraphAdapter {
+	t.Helper()
+	client, err := nietzscheInfra.NewClient("localhost:50051")
 	if err != nil {
 		t.Skip("Skipping NietzscheDB test: server not reachable")
+		return nil
+	}
+	return nietzscheInfra.NewGraphAdapter(client, "patient_graph")
+}
+
+// TestNietzscheConnection verifica se a conexão com NietzscheDB está funcionando
+func TestNietzscheConnection(t *testing.T) {
+	adapter := setupAdapter(t)
+	if adapter == nil {
 		return
 	}
 	defer adapter.Client().Close()
@@ -26,13 +31,8 @@ func TestNietzscheConnection(t *testing.T) {
 
 // TestCountAllNodes conta todos os nós no banco
 func TestCountAllNodes(t *testing.T) {
-	cfg := &config.Config{
-		NietzscheGRPCAddr: "localhost:50051",
-	}
-
-	adapter, err := nietzscheInfra.NewGraphAdapter(cfg)
-	if err != nil {
-		t.Skip("Skipping test")
+	adapter := setupAdapter(t)
+	if adapter == nil {
 		return
 	}
 	defer adapter.Client().Close()
@@ -53,18 +53,13 @@ func TestCountAllNodes(t *testing.T) {
 
 // TestCreateSampleData cria dados de teste
 func TestCreateSampleData(t *testing.T) {
-	cfg := &config.Config{
-		NietzscheGRPCAddr: "localhost:50051",
-	}
-
-	adapter, err := nietzscheInfra.NewGraphAdapter(cfg)
-	if err != nil {
-		t.Skip("Skipping test")
+	adapter := setupAdapter(t)
+	if adapter == nil {
 		return
 	}
 	defer adapter.Client().Close()
 
-	store := NewGraphStore(adapter, cfg)
+	store := NewGraphStore(adapter, &config.Config{NietzscheGRPCAddr: "localhost:50051"})
 
 	// Criar memória de teste
 	testMemory := &Memory{
@@ -78,7 +73,7 @@ func TestCreateSampleData(t *testing.T) {
 		Topics:     []string{"teste", "nietzschedb"},
 	}
 
-	err = store.AddEpisodicMemory(context.Background(), testMemory)
+	err := store.AddEpisodicMemory(context.Background(), testMemory)
 	if err != nil {
 		t.Fatalf("Erro ao salvar memória: %v", err)
 	}

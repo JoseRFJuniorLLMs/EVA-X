@@ -94,6 +94,10 @@ type WebSocketSession struct {
 	lastActivity time.Time
 	mu           sync.RWMutex
 
+	// ✅ B7 FIX: Mutex para serializar todas as escritas no WebSocket
+	// gorilla/websocket suporta apenas 1 writer concorrente
+	writeMu sync.Mutex
+
 	// ✅ NOVO: Buffer de áudio para envio em chunks maiores
 	audioBuffer []byte
 	audioMutex  sync.Mutex
@@ -114,6 +118,21 @@ type WebSocketSession struct {
 
 	// ✅ NOVO: Máquina de Estados para Ducking (Supressão Inteligente)
 	State vdefs.ConversationState
+}
+
+// ✅ B7 FIX: Thread-safe write methods for WebSocket connection
+// gorilla/websocket does NOT support concurrent writers, so all writes must be serialized.
+
+func (s *WebSocketSession) SafeWriteJSON(v interface{}) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.WSConn.WriteJSON(v)
+}
+
+func (s *WebSocketSession) SafeWriteMessage(messageType int, data []byte) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.WSConn.WriteMessage(messageType, data)
 }
 
 // ✅ NOVO MÉTODO: Thread-safe setter para o GraphReasoning usar
@@ -278,14 +297,20 @@ func NewSignalingServer(
 	server.tools.NotifyFunc = func(idosoID int64, msgType string, payload interface{}) {
 		// Enviar para sessao WebRTC (app mobile)
 		server.sessions.Range(func(key, value interface{}) bool {
-			session := value.(*WebSocketSession)
+			session, ok := value.(*WebSocketSession)
+			if !ok {
+				return true // continue ranging
+			}
 			if session.IdosoID == idosoID {
 				msg := ControlMessage{
 					Type:    msgType,
 					Success: true,
 					Payload: payload,
 				}
-				session.WSConn.WriteJSON(msg)
+				if err := session.SafeWriteJSON(msg); err != nil {
+					log.Printf("[websocket] WriteJSON failed for session %s: %v", session.ID, err)
+					return true
+				}
 				log.Printf("📡 [CORTEX-SIGNAL] Enviado '%s' para Idoso %d", msgType, idosoID)
 				return false
 			}
@@ -325,12 +350,17 @@ func NewSignalingServer(
 	server.ethicsBoundary = ethics.NewEthicalBoundaryEngine(db, nil, func(idosoID int64, msgType string, payload interface{}) {
 		// Notify via WebSocket
 		server.sessions.Range(func(key, value interface{}) bool {
-			session := value.(*WebSocketSession)
+			session, ok := value.(*WebSocketSession)
+			if !ok {
+				return true // continue ranging
+			}
 			if session.IdosoID == idosoID {
-				session.WSConn.WriteJSON(map[string]interface{}{
+				if err := session.SafeWriteJSON(map[string]interface{}{
 					"type":    msgType,
 					"payload": payload,
-				})
+				}); err != nil {
+					log.Printf("[websocket] WriteJSON failed for session %s: %v", session.ID, err)
+				}
 			}
 			return true
 		})
@@ -1151,7 +1181,7 @@ func (s *SignalingServer) handleGeminiResponse(session *WebSocketSession, respon
 		interruptMsg := ControlMessage{
 			Type: "clear_buffer",
 		}
-		if err := session.WSConn.WriteJSON(interruptMsg); err != nil {
+		if err := session.SafeWriteJSON(interruptMsg); err != nil {
 			log.Printf("⚠️ Erro ao enviar interrupt: %v", err)
 		}
 
@@ -1244,7 +1274,7 @@ func (s *SignalingServer) bufferAudio(session *WebSocketSession, audioData []byt
 
 		log.Printf("🎶 [AUDIO] Enviando %d bytes PCM16 @ 24kHz para cliente", len(chunk))
 
-		err := session.WSConn.WriteMessage(websocket.BinaryMessage, chunk)
+		err := session.SafeWriteMessage(websocket.BinaryMessage, chunk)
 		if err != nil {
 			log.Printf("❌ [AUDIO] Erro ao enviar: %v", err)
 		} else {
@@ -1301,7 +1331,9 @@ func (s *SignalingServer) flushAudioBuffer(session *WebSocketSession) {
 
 	if len(session.audioBuffer) > 0 {
 		log.Printf("🔊 [AUDIO] Enviando buffer restante: %d bytes PCM16", len(session.audioBuffer))
-		session.WSConn.WriteMessage(websocket.BinaryMessage, session.audioBuffer)
+		if err := session.SafeWriteMessage(websocket.BinaryMessage, session.audioBuffer); err != nil {
+			log.Printf("[websocket] WriteMessage failed during flush for session %s: %v", session.ID, err)
+		}
 		session.audioBuffer = nil
 	}
 }
@@ -1457,7 +1489,11 @@ func (s *SignalingServer) cleanupSession(sessionID string) {
 		return
 	}
 
-	session := val.(*WebSocketSession)
+	session, ok2 := val.(*WebSocketSession)
+	if !ok2 {
+		log.Printf("[websocket] cleanupSession: unexpected type for session %s", sessionID)
+		return
+	}
 
 	// ✅ NOVO: Enviar buffer restante antes de limpar
 	s.flushAudioBuffer(session)
@@ -1642,8 +1678,14 @@ func (s *SignalingServer) cleanupDeadSessions() {
 		var toDelete []string
 
 		s.sessions.Range(func(key, value interface{}) bool {
-			sessionID := key.(string)
-			session := value.(*WebSocketSession)
+			sessionID, ok := key.(string)
+			if !ok {
+				return true
+			}
+			session, ok := value.(*WebSocketSession)
+			if !ok {
+				return true // continue ranging
+			}
 
 			session.mu.RLock()
 			inactive := now.Sub(session.lastActivity)
@@ -1692,8 +1734,14 @@ func (s *SignalingServer) getIdosoByCPF(cpf string) (*Idoso, error) {
 }
 
 func (s *SignalingServer) sendMessage(conn *websocket.Conn, msg ControlMessage) {
-	data, _ := json.Marshal(msg)
-	conn.WriteMessage(websocket.TextMessage, data)
+	data, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("[websocket] json.Marshal failed: %v", err)
+		return
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		log.Printf("[websocket] WriteMessage failed: %v", err)
+	}
 }
 
 func (s *SignalingServer) sendError(conn *websocket.Conn, errMsg string) {
