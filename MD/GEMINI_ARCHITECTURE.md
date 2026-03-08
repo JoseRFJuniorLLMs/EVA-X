@@ -168,7 +168,7 @@ Response: {"response":"Artesunato EV 2.4 mg/kg...", "cpf":"12345678900"}
 ### Fluxo
 
 1. Frontend faz POST `/api/chat` com mensagem e CPF opcional
-2. Handler busca dados do paciente no PostgreSQL (se CPF fornecido)
+2. Handler busca dados do paciente no NietzscheDB (se CPF fornecido)
 3. Monta system prompt com contexto de malaria + dados do paciente
 4. Chama `gemini.AnalyzeText()` (REST API v1beta, nao WebSocket)
 5. Retorna resposta completa em JSON
@@ -264,14 +264,14 @@ internal/cortex/gemini/
 
 ---
 
-## Memoria Meta-Cognitiva (Neo4j)
+## Memoria Meta-Cognitiva (NietzscheDB)
 
 ### Pacote: `internal/cortex/eva_memory/`
 
-A EVA possui memoria meta-cognitiva via Neo4j. Ela sabe o que sabe,
+A EVA possui memoria meta-cognitiva via NietzscheDB. Ela sabe o que sabe,
 lembra conversas passadas e reconhece padroes.
 
-### Grafo Neo4j
+### Grafo NietzscheDB
 
 ```
 (:EvaSession {id, started_at, ended_at, turn_count, status})
@@ -315,7 +315,7 @@ lembra conversas passadas e reconhece padroes.
 
 ```
 1. Usuario conecta → /ws/eva
-2. EvaMemory.StartSession() → cria :EvaSession no Neo4j
+2. EvaMemory.StartSession() → cria :EvaSession no NietzscheDB
 3. EvaMemory.LoadMetaCognition() → carrega ultimas sessoes, topicos frequentes, insights
 4. Memorias injetadas no system_instruction via SendSetup(memories)
 5. A cada mensagem do usuario → EvaMemory.StoreTurn("user", texto)
@@ -360,9 +360,9 @@ tratamento, diagnostico, especies
 ## Evolucao Planejada
 
 ### geminiWeb (proximos passos)
-- [x] Memoria meta-cognitiva via Neo4j
+- [x] Memoria meta-cognitiva via NietzscheDB
 - [x] Memorias injetadas no system_instruction
-- [x] Historico de conversas persistido no Neo4j
+- [x] Historico de conversas persistido no NietzscheDB
 - [x] Deteccao automatica de padroes
 - [ ] Ativar tools de malaria (consulta de dados, prescricoes)
 - [ ] Adicionar `response_modalities: ["TEXT"]` para respostas puramente texto

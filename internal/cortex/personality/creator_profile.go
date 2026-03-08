@@ -114,7 +114,7 @@ func (s *CreatorProfileService) LoadCreatorProfile(ctx context.Context) (*Creato
 	return profile, nil
 }
 
-// loadPersonality carrega os traits de personalidade do PostgreSQL
+// loadPersonality carrega os traits de personalidade do NietzscheDB
 func (s *CreatorProfileService) loadPersonality(ctx context.Context, profile *CreatorProfile) error {
 	query := `
 		SELECT aspecto, valor, contexto, prioridade

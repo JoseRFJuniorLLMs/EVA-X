@@ -151,7 +151,7 @@ func (c *LacanDBConfig) LoadAll(ctx context.Context) error {
 	}
 
 	c.cache.loadedAt = time.Now()
-	log.Printf("✅ [LacanDBConfig] Configurações carregadas do PostgreSQL")
+	log.Printf("✅ [LacanDBConfig] Configurações carregadas do NietzscheDB")
 
 	return nil
 }

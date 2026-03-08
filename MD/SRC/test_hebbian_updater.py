@@ -1,7 +1,7 @@
 """
 EVA — Testes do HebbianUpdater
 ════════════════════════════════════════════════════════════════════
-Testa a lógica pseudo-Hebb sem precisar de um Neo4j real.
+Testa a lógica pseudo-Hebb sem precisar de um NietzscheDB real.
 Execute com:  pytest test_hebbian_updater.py -v
 ════════════════════════════════════════════════════════════════════
 """
@@ -133,7 +133,7 @@ class TestZoneClassification:
 
 
 # ─────────────────────────────────────────────
-# TESTES DE SESSÃO (com mock do Neo4j)
+# TESTES DE SESSÃO (com mock do NietzscheDB)
 # ─────────────────────────────────────────────
 
 class TestProcessSession:

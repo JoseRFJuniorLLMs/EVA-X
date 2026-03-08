@@ -229,7 +229,7 @@ func NewUnifiedRetrieval(
 	// Inicializar modo debug para o Criador
 	debugMode := NewDebugMode(db)
 
-	// Inicializar servico de perfil do Criador (carrega do PostgreSQL)
+	// Inicializar servico de perfil do Criador (carrega do NietzscheDB)
 	creatorProfile := personality.NewCreatorProfileService(db)
 
 	// Inicializar servico de Sabedoria (busca semantica em historias/fabulas/ensinamentos)
@@ -981,7 +981,7 @@ func (u *UnifiedRetrieval) buildIntegratedPrompt(unified *UnifiedContext) string
 		builder.WriteString("🔴     DIRETIVA 01 - MODO CRIADOR ATIVADO                              🔴\n")
 		builder.WriteString("🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴\n\n")
 
-		// Carregar perfil dinâmico do Criador do PostgreSQL
+		// Carregar perfil dinâmico do Criador do NietzscheDB
 		if u.creatorProfile != nil {
 			ctx := context.Background()
 			profile, err := u.creatorProfile.LoadCreatorProfile(ctx)
@@ -1013,7 +1013,7 @@ func (u *UnifiedRetrieval) buildIntegratedPrompt(unified *UnifiedContext) string
 
 		builder.WriteString("═══════════════════════════════════════════════════════════════════════════════\n\n")
 
-		log.Printf("🔴🔴🔴 [DIRETIVA 01] PROMPT DO CRIADOR CONSTRUÍDO COM SUCESSO (do PostgreSQL)!")
+		log.Printf("🔴🔴🔴 [DIRETIVA 01] PROMPT DO CRIADOR CONSTRUÍDO COM SUCESSO (do NietzscheDB)!")
 	} else {
 		log.Printf("👤 [MODO NORMAL] Usuário comum: %s", unified.IdosoNome)
 	}

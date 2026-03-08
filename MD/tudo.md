@@ -39,7 +39,7 @@ Cada diretorio mapeia para uma regiao cerebral:
 
 ### brainstem/ — Tronco Cerebral
 - `config/` — Configuracao (Load(), Config struct com todos os campos)
-- `database/` — PostgreSQL (NewDB, queries, connection pooling 25 max open)
+- `database/` — NietzscheDB (NewDB, queries, connection pooling 25 max open)
 - `auth/` — JWT (tokens 15min access, 7 dias refresh), bcrypt cost 14
 - `push/` — Firebase Cloud Messaging (CallKit, alertas criticos)
 - `infrastructure/nietzsche/` — NietzscheDB client (gRPC, NQL, Poincaré, Diffuse)
@@ -73,12 +73,12 @@ Cada diretorio mapeia para uma regiao cerebral:
 - `kids/` — Modo infantil (conversacao adaptada)
 - `situation/` — Modulador situacional (personalidade por contexto)
 - `orchestration/` — Orquestrador de conversacao
-- `eva_memory/` — Memoria meta-cognitiva da EVA (Neo4j: EvaSession, EvaTurn, EvaTopic, EvaInsight)
+- `eva_memory/` — Memoria meta-cognitiva da EVA (NietzscheDB: EvaSession, EvaTurn, EvaTopic, EvaInsight)
 - `selfawareness/` — Servico de autoconhecimento (busca codigo, consulta bancos, indexa codebase)
 - `brain/` — Servico central cognitivo (sistema de prompt unificado)
 
 ### hippocampus/ — Hipocampo (Memoria)
-- `memory/` — MemoryStore multi-backend (PostgreSQL + Neo4j + Qdrant)
+- `memory/` — MemoryStore multi-backend (NietzscheDB + NietzscheDB + NietzscheDB)
 - `memory/superhuman/` — 12 subsistemas de memoria super-humana
 - `habits/` — Rastreamento de habitos
 - `knowledge/` — WisdomService (busca semantica terapeutica), EmbeddingService (Gemini 3072-dim)
@@ -122,7 +122,7 @@ Cada diretorio mapeia para uma regiao cerebral:
 ### Bancos de Dados
 | Banco | Versao | Uso | Porta |
 |-------|--------|-----|-------|
-| **PostgreSQL** (Cloud SQL) | 15+ | Dados estruturados, memorias episodicas, escalas clinicas | 5432 |
+| **NietzscheDB** (Cloud SQL) | 15+ | Dados estruturados, memorias episodicas, escalas clinicas | 5432 |
 | **NietzscheDB** | latest | Substrato unificado (Grafo, Vetor, Cache), Poincaré, Diffuse | 50051/8080 |
 
 ### Dependencias Diretas (go.mod)
@@ -134,12 +134,12 @@ Cada diretorio mapeia para uma regiao cerebral:
 | github.com/gorilla/mux | v1.8.1 | HTTP router |
 | github.com/gorilla/websocket | v1.5.3 | WebSocket |
 | github.com/joho/godotenv | v1.5.1 | Variaveis de ambiente |
-| github.com/lib/pq | v1.10.9 | Driver PostgreSQL |
-| github.com/neo4j/neo4j-go-driver/v5 | v5.24.4 | (Legado) Driver Neo4j |
-| github.com/pgvector/pgvector-go | v0.3.0 | Extensao vetorial PostgreSQL |
+| github.com/lib/pq | v1.10.9 | Driver NietzscheDB |
+| github.com/NietzscheDB/NietzscheDB-go-driver/v5 | v5.24.4 | (Legado) Driver NietzscheDB |
+| github.com/pgvector/pgvector-go | v0.3.0 | Extensao vetorial NietzscheDB |
 | github.com/prometheus/client_golang | v1.23.2 | Metricas Prometheus |
-| github.com/qdrant/go-client | v1.12.2 | (Legado) Client Qdrant gRPC |
-| github.com/redis/go-redis/v9 | v9.16.2 | (Legado) Client Redis |
+| github.com/NietzscheDB/go-client | v1.12.2 | (Legado) Client NietzscheDB gRPC |
+| github.com/NietzscheDB/go-NietzscheDB/v9 | v9.16.2 | (Legado) Client NietzscheDB |
 | github.com/rs/zerolog | v1.34.0 | Logging estruturado |
 | github.com/twilio/twilio-go | v1.29.0 | SMS/Voz Twilio |
 | golang.org/x/crypto | v0.47.0 | Criptografia (bcrypt) |
@@ -160,15 +160,15 @@ Cada diretorio mapeia para uma regiao cerebral:
 ### Protocolos
 - **HTTP/REST** — API principal (Gorilla Mux)
 - **WebSocket** — Voz, video, chat, logs (Gorilla WebSocket)
-- **gRPC** — Qdrant (6334), Krylov (50051)
-- **Bolt** — Neo4j (7687)
+- **gRPC** — NietzscheDB (6334), Krylov (50051)
+- **Bolt** — NietzscheDB (7687)
 - **SMTP** — Email (Gmail 587)
 - **WebRTC** — Video chamadas
 
 ### Infraestrutura Docker
-- Neo4j 5-community (APOC, 256-512MB heap)
-- Qdrant latest (storage persistente)
-- Redis 7-alpine (AOF, 256MB max, LRU eviction)
+- NietzscheDB 5-community (APOC, 256-512MB heap)
+- NietzscheDB latest (storage persistente)
+- NietzscheDB 7-alpine (AOF, 256MB max, LRU eviction)
 - Prometheus v2.48.0 (retencao 30 dias)
 - Grafana 10.2.2 (dashboards)
 
@@ -192,7 +192,7 @@ Cada diretorio mapeia para uma regiao cerebral:
 
 ### cmd/ (Utilitarios CLI)
 - `cmd/migrate/main.go` — Executa migrations SQL
-- `cmd/index_code/main.go` — Indexa .go (AST) e .md no Qdrant
+- `cmd/index_code/main.go` — Indexa .go (AST) e .md no NietzscheDB
 - `cmd/seed_knowledge/main.go` — Semeia 36 entries de conhecimento
 - `cmd/seed_wisdom/main.go` — Semeia sabedoria terapeutica
 - `cmd/benchmark-memory/main.go` — Benchmark do sistema de memoria
@@ -203,7 +203,7 @@ Cada diretorio mapeia para uma regiao cerebral:
 
 ### A. Memoria Episodica (Registros Historicos)
 - **Arquivo**: `internal/hippocampus/memory/storage.go`
-- **Storage**: PostgreSQL + Neo4j + Qdrant
+- **Storage**: NietzscheDB + NietzscheDB + NietzscheDB
 - **Campos**: IdosoID, speaker, content, emotion, importance (0-1), topics, timestamp
 - **Seguranca**: CREATOR_CPF = "64525430249" (apenas Jose R F Junior)
 
@@ -247,7 +247,7 @@ Cada diretorio mapeia para uma regiao cerebral:
 
 ### M. Core Memory (Identidade da EVA)
 - **Arquivo**: `internal/cortex/self/core_memory_engine.go`
-- **Storage**: Neo4j
+- **Storage**: NietzscheDB
 - **Tipos**: SessionInsight, EmotionalPattern, CrisisLearning, PersonalityEvolution, TeachingReceived
 
 ### N. Memoria Meta-Cognitiva da EVA
@@ -279,7 +279,7 @@ Cada diretorio mapeia para uma regiao cerebral:
 - **Mecanismo**: Keywords → subgrafo ativado, profundidade max 3
 - **Decay**: 0.85 por hop (15% perda por nivel)
 - **Threshold**: ativacao minima 0.3
-- **Cache**: sync.Map local + Redis distribuido
+- **Cache**: sync.Map local + NietzscheDB distribuido
 
 ### Global Workspace Theory (Baars 1988)
 - **Arquivo**: `internal/cortex/consciousness/global_workspace.go`
@@ -401,9 +401,9 @@ EVA e Tipo 2 (Ajudante), Wing 1, Integracao→4, Desintegracao→8.
 - study_topic, add_to_curriculum, list_curriculum, search_knowledge
 
 ### Agente 10: Self-Awareness (Prioridade MEDIA)
-- search_my_code — Busca semantica no codigo Go (Qdrant eva_codebase)
-- query_my_database — SELECT read-only no PostgreSQL
-- list_my_collections — Lista colecoes Qdrant
+- search_my_code — Busca semantica no codigo Go (NietzscheDB eva_codebase)
+- query_my_database — SELECT read-only no NietzscheDB
+- list_my_collections — Lista colecoes NietzscheDB
 - system_stats — Stats dos sistemas
 - update_self_knowledge — Atualiza conhecimento proprio
 - search_self_knowledge — Busca no conhecimento interno
@@ -455,7 +455,7 @@ WS     /video/ws
 
 ## 10. BANCO DE DADOS — 130+ TABELAS
 
-### PostgreSQL (41 migrations)
+### NietzscheDB (41 migrations)
 **Pacientes**: idosos, cuidadores, contatos_emergencia, device_tokens
 **Clinico**: phq9_assessments, gad7_assessments, cssrs_assessments, clinical_decision_explanations, vital_signs, historico_medicamentos
 **Memoria**: episodic_memories, spaced_repetition_items, atomic_facts
@@ -469,13 +469,13 @@ WS     /video/ws
 **Voz**: speaker_profiles, speaker_identifications
 **Multi-tenant**: organizations, org_members
 
-### Neo4j (Grafos)
+### NietzscheDB (Grafos)
 - Person, Memory, Significante, Event → EVOCA, EXPERIENCED
 - EvaSession → HAS_TURN → EvaTurn → ABOUT → EvaTopic
 - CoreMemory, SessionInsight, EmotionalPattern
 - Hebbian edges com fast_weight/slow_weight
 
-### Qdrant (Colecoes Vetoriais)
+### NietzscheDB (Colecoes Vetoriais)
 | Colecao | Pontos | Dimensoes | Uso |
 |---------|--------|-----------|-----|
 | eva_codebase | 347 | 3072 | Codigo Go indexado via AST |
@@ -538,7 +538,7 @@ WS     /video/ws
 2. Browser/App captura PCM 16kHz
 3. WebSocket envia para /ws/browser
 4. EVA-Mind recebe audio
-5. FDPN prime: streaming keywords → ativacao de subgrafo Neo4j
+5. FDPN prime: streaming keywords → ativacao de subgrafo NietzscheDB
 6. Audio enviado para Gemini Live API via WebSocket
 7. Gemini processa com contexto:
    - Perfil do paciente (nome, idade, medicamentos)
@@ -602,9 +602,9 @@ go run cmd/seed_wisdom/main.go     # Semeia sabedoria terapeutica
 | Linhas de codigo | ~80.000+ |
 | Dependencias diretas | 24 |
 | Dependencias totais | 95+ |
-| Tabelas PostgreSQL | 130+ |
+| Tabelas NietzscheDB | 130+ |
 | Migrations SQL | 41 |
-| Colecoes Qdrant | 6 |
+| Colecoes NietzscheDB | 6 |
 | Agentes Swarm | 12 |
 | Tools registradas | 111+ |
 | Sistemas de memoria | 12+ |

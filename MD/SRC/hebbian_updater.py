@@ -2,7 +2,7 @@
 EVA — Hebbian Updater Module
 ════════════════════════════════════════════════════════════════════
 Implementa a regra pseudo-Hebb para atualização dinâmica de pesos
-de arestas no grafo Neo4j da Memória Episódica do EVA.
+de arestas no grafo NietzscheDB da Memória Episódica do EVA.
 
 Inspirado em:
   - Hebb (1949): "Neurons that fire together, wire together"
@@ -23,7 +23,7 @@ from itertools import combinations
 from dataclasses import dataclass, field
 from typing import Optional
 
-from neo4j import AsyncGraphDatabase, AsyncDriver
+from NietzscheDB import AsyncGraphDatabase, AsyncDriver
 
 logger = logging.getLogger("eva.hebbian")
 
@@ -147,7 +147,7 @@ class HebbianUpdater:
         updater = HebbianUpdater(driver, config)
         zones   = await updater.process_session(["node_uuid_1", "node_uuid_2", "node_uuid_3"])
 
-    Cada vez que uma query Neo4j ativa um conjunto de nós juntos,
+    Cada vez que uma query NietzscheDB ativa um conjunto de nós juntos,
     chame process_session() com os IDs desses nós.
     """
 
@@ -155,7 +155,7 @@ class HebbianUpdater:
         self,
         driver: AsyncDriver,
         config: Optional[HebbianConfig] = None,
-        db_name: str = "neo4j",
+        db_name: str = "NietzscheDB",
     ):
         self.driver = driver
         self.cfg = config or HebbianConfig()
@@ -222,7 +222,7 @@ class HebbianUpdater:
             # 2. Calcula Δw pela regra pseudo-Hebb
             delta = self._compute_delta(current_weight, last_activated)
 
-            # 3. Aplica no Neo4j (MERGE — cria ou atualiza)
+            # 3. Aplica no NietzscheDB (MERGE — cria ou atualiza)
             now_ms = int(time.time() * 1000)
             result = await session.run(
                 CYPHER_UPSERT_EDGE,
@@ -354,9 +354,9 @@ _updater_instance: Optional[HebbianUpdater] = None
 
 
 def create_hebbian_updater(
-    neo4j_uri: str,
-    neo4j_user: str,
-    neo4j_password: str,
+    NietzscheDB_uri: str,
+    NietzscheDB_user: str,
+    NietzscheDB_password: str,
     config: Optional[HebbianConfig] = None,
 ) -> HebbianUpdater:
     """
@@ -366,11 +366,11 @@ def create_hebbian_updater(
     global _updater_instance
     if _updater_instance is None:
         driver = AsyncGraphDatabase.driver(
-            neo4j_uri,
-            auth=(neo4j_user, neo4j_password),
+            NietzscheDB_uri,
+            auth=(NietzscheDB_user, NietzscheDB_password),
         )
         _updater_instance = HebbianUpdater(driver, config)
-        logger.info("HebbianUpdater inicializado → %s", neo4j_uri)
+        logger.info("HebbianUpdater inicializado → %s", NietzscheDB_uri)
     return _updater_instance
 
 

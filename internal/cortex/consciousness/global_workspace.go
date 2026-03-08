@@ -119,10 +119,11 @@ func (gw *GlobalWorkspace) ProcessConsciously(ctx context.Context, input Convers
 	}
 	gw.mu.RUnlock()
 
-	// 2. Coletar todas as interpretacoes (com timeout)
+	// 2. Coletar todas as interpretacoes (com timeout via context)
 	var interpretations []*Interpretation
 	var bids []float64
-	timeout := time.After(5 * time.Second)
+	collectCtx, collectCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer collectCancel()
 
 	collected := 0
 	for collected < moduleCount {
@@ -133,11 +134,9 @@ func (gw *GlobalWorkspace) ProcessConsciously(ctx context.Context, input Convers
 				bids = append(bids, res.bid)
 			}
 			collected++
-		case <-timeout:
+		case <-collectCtx.Done():
 			log.Printf("[CONSCIOUSNESS] Timeout: %d/%d modulos responderam", collected, moduleCount)
 			goto competition
-		case <-ctx.Done():
-			return nil, ctx.Err()
 		}
 	}
 

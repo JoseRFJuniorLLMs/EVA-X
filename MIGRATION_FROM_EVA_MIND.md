@@ -8,7 +8,7 @@
 
 ## Resumo Executivo
 
-O EVA foi forkado do EVA-Mind em 2026-02-20 e migrado de Neo4j+Qdrant+Redis para NietzscheDB.
+O EVA foi forkado do EVA-Mind em 2026-02-20 e migrado de NietzscheDB+NietzscheDB+NietzscheDB para NietzscheDB.
 Desde o fork, o EVA-Mind recebeu **11 commits** com features e fixes criticos que o EVA ainda nao tem.
 
 **Total de mudancas a portar:** 11 commits, ~15 arquivos, ~700 linhas novas
@@ -57,14 +57,14 @@ Desde o fork, o EVA-Mind recebeu **11 commits** com features e fixes criticos qu
 - **Impacto:** EVA para de dizer que "so sabe fazer coisas basicas"
 - **ADAPTACAO NietzscheDB:**
   ```
-  EVA-Mind (Neo4j Cypher):
+  EVA-Mind (NietzscheDB Cypher):
     MATCH (m:CoreMemory) WHERE m.memory_type = 'capability' RETURN m.content ORDER BY m.id
 
   EVA (NietzscheDB NQL):
     u.graph.ExecuteNQL(ctx, "MATCH (m:CoreMemory) WHERE m.memory_type = 'capability' RETURN m", nil, "eva_core")
   ```
-  - Trocar `u.neo4j.ExecuteRead()` por `u.graph.ExecuteNQL()`
-  - Extrair `content` do resultado NQL (formato diferente do Neo4j records)
+  - Trocar `u.NietzscheDB.ExecuteRead()` por `u.graph.ExecuteNQL()`
+  - Extrair `content` do resultado NQL (formato diferente do NietzscheDB records)
 
 #### 5. control_ui tool + media cards + identity injection (`e18431e`)
 - **Arquivos:**
@@ -81,7 +81,7 @@ Desde o fork, o EVA-Mind recebeu **11 commits** com features e fixes criticos qu
   - `internal/cortex/lacan/unified_retrieval.go` (+55, -10) - ler e injetar no prompt
   - `migrations/044_creator_profile_update.sql` (novo, 12 linhas)
 - **Mudanca:** Ler `nivel_cognitivo` e `tom_voz` do banco e adaptar linguagem do prompt
-- **NietzscheDB:** Nenhuma adaptacao (dados vem do PostgreSQL, nao do grafo)
+- **NietzscheDB:** Nenhuma adaptacao (dados vem do NietzscheDB, nao do grafo)
 
 #### 7. Google OAuth2 full access + Gmail watcher (`39772fd`)
 - **Arquivos:**
@@ -93,7 +93,7 @@ Desde o fork, o EVA-Mind recebeu **11 commits** com features e fixes criticos qu
   - `main.go` (+28 linhas - rotas OAuth + Gmail watcher)
   - `migrations/045_google_email_column.sql` (NOVO, 9 linhas)
 - **Mudanca:** OAuth expandido (Gmail, Drive, Calendar, Contacts), state HMAC com CPF, Gmail watcher polling 2min
-- **NietzscheDB:** Nenhuma adaptacao (tudo PostgreSQL + Google APIs)
+- **NietzscheDB:** Nenhuma adaptacao (tudo NietzscheDB + Google APIs)
 
 ---
 
@@ -125,18 +125,18 @@ Desde o fork, o EVA-Mind recebeu **11 commits** com features e fixes criticos qu
 
 ---
 
-## Mapeamento Neo4j -> NietzscheDB
+## Mapeamento NietzscheDB -> NietzscheDB
 
 Apenas **1 funcao** precisa de adaptacao real:
 
 ### `getCapabilities()` em `unified_retrieval.go`
 
-**EVA-Mind (Neo4j):**
+**EVA-Mind (NietzscheDB):**
 ```go
 func (u *UnifiedRetrieval) getCapabilities(ctx context.Context) string {
-    if u.neo4j == nil { return "" }
+    if u.NietzscheDB == nil { return "" }
     query := `MATCH (m:CoreMemory) WHERE m.memory_type = 'capability' RETURN m.content AS content ORDER BY m.id`
-    records, err := u.neo4j.ExecuteRead(ctx, query, nil)
+    records, err := u.NietzscheDB.ExecuteRead(ctx, query, nil)
     // ...iterate records, record.Get("content")
 }
 ```
@@ -152,7 +152,7 @@ func (u *UnifiedRetrieval) getCapabilities(ctx context.Context) string {
 ```
 
 **Mudancas:**
-1. `u.neo4j` -> `u.graph` (ja existe no struct do EVA)
+1. `u.NietzscheDB` -> `u.graph` (ja existe no struct do EVA)
 2. `ExecuteRead()` -> `ExecuteNQL()` com collection `"eva_core"`
 3. Parsing de resultado: `record.Get("content")` -> extrair de `node.Properties["content"]`
 
@@ -163,8 +163,8 @@ func (u *UnifiedRetrieval) getCapabilities(ctx context.Context) string {
 | Arquivo | Origem | Linhas | Adaptacao |
 |---------|--------|--------|-----------|
 | `internal/motor/gmail/watcher.go` | EVA-Mind | 188 | Nenhuma (nao toca DB de grafo) |
-| `migrations/044_creator_profile_update.sql` | EVA-Mind | 12 | Nenhuma (PostgreSQL puro) |
-| `migrations/045_google_email_column.sql` | EVA-Mind | 9 | Nenhuma (PostgreSQL puro) |
+| `migrations/044_creator_profile_update.sql` | EVA-Mind | 12 | Nenhuma (NietzscheDB puro) |
+| `migrations/045_google_email_column.sql` | EVA-Mind | 9 | Nenhuma (NietzscheDB puro) |
 
 ---
 

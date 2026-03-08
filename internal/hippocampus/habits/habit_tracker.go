@@ -93,6 +93,11 @@ var dayNames = map[int]string{
 func NewHabitTracker(db *sql.DB) *HabitTracker {
 	tracker := &HabitTracker{db: db}
 
+	if db == nil {
+		log.Printf("⚠️ [HABITS] NietzscheDB unavailable — HabitTracker running in degraded mode")
+		return tracker
+	}
+
 	if err := tracker.createTables(); err != nil {
 		log.Printf("⚠️ [HABITS] Erro ao criar tabelas: %v", err)
 	}

@@ -58,7 +58,7 @@ ARCHITECTURE
 	Each directory maps to a brain region:
 
 	brainstem/     - Configuration, database, auth, push notifications,
-	                 infrastructure (NietzscheDB, PostgreSQL, worker pools)
+	                 infrastructure (NietzscheDB, NietzscheDB, worker pools)
 
 	cortex/        - Higher-order processing:
 	  gemini/        - Gemini Live API client (v1beta, thread-safe,
@@ -272,7 +272,7 @@ MEMORY SYSTEM
 	5. REM Consolidation
 	   - Sleep-inspired memory consolidation pipeline
 	   - Hot episodic memories -> selective replay -> spectral
-	     clustering -> Krylov centroid -> semantic Neo4j node
+	     clustering -> Krylov centroid -> semantic NietzscheDB node
 	   - Prunes redundant memories, creates abstractions
 	   - Science: Rasch & Born (2013), Tadros et al. (2022)
 
@@ -282,7 +282,7 @@ MEMORY SYSTEM
 	   - Sliding window FIFO for continuous learning
 	   - HTTP bridge on port 50052 for external access
 
-	7. EVA's Own Memory (Neo4j port 7688)
+	7. EVA's Own Memory (NietzscheDB port 7688)
 	   - EvaSelf node with Big Five personality traits
 	   - CoreMemory nodes from post-session reflection
 	   - MetaInsight nodes from cross-session pattern detection
@@ -312,11 +312,11 @@ CONTEXT PIPELINE
 	   - Signifier chain extraction
 	   - Narrative shift detection
 	   - Grand Autre transference analysis
-	2. Medical context from Neo4j (conditions, medications)
-	3. Patient metadata from PostgreSQL (name, language, persona)
+	2. Medical context from NietzscheDB (conditions, medications)
+	3. Patient metadata from NietzscheDB (name, language, persona)
 	4. Scheduled medications from agendamentos table
 	5. Recent episodic memories (last 15 turns, 7-day window)
-	6. Semantic signifier chains from Qdrant
+	6. Semantic signifier chains from NietzscheDB
 	7. Therapeutic stories from wisdom knowledge base
 	8. Situational context (time of day, recent events, stressors)
 	9. Personality modulation (Big Five + Enneagram + situation)
@@ -380,10 +380,10 @@ AUTONOMOUS AGENT
 		get_code_diff          - Show uncommitted changes (git diff)
 
 	Database Access (4 databases):
-		query_postgresql       - Full CRUD (SELECT, INSERT, UPDATE,
+		query_NietzscheDB       - Full CRUD (SELECT, INSERT, UPDATE,
 		                         DELETE, CREATE, ALTER)
-		query_neo4j            - Cypher queries (read-only)
-		query_qdrant           - Vector similarity search
+		query_NietzscheDB            - Cypher queries (read-only)
+		query_NietzscheDB           - Vector similarity search
 		query_nietzsche        - NietzscheDB REST API
 
 	Filesystem:
@@ -525,7 +525,7 @@ SELF-KNOWLEDGE (AUTOCONHECIMENTO)
 ----------------------------------
 
 	EVA knows what she can do. At every startup, 33 capabilities
-	are seeded as CoreMemory nodes in Neo4j via MERGE (idempotent).
+	are seeded as CoreMemory nodes in NietzscheDB via MERGE (idempotent).
 	These are injected into the system prompt under the section
 	"O QUE EU SEI FAZER" so EVA can naturally describe her own
 	capabilities when asked.
@@ -542,7 +542,7 @@ SELF-KNOWLEDGE (AUTOCONHECIMENTO)
 	  - Code execution (bash, Python, Node.js in sandbox)
 	  - Web search and real-time information access
 	  - Self-programming (read, edit, test own source code)
-	  - Database access (PostgreSQL, Neo4j, Qdrant, NietzscheDB)
+	  - Database access (NietzscheDB, NietzscheDB, NietzscheDB, NietzscheDB)
 	  - Smart home (Home Assistant IoT control)
 	  - Multi-LLM (Claude, GPT-4o, DeepSeek as consultants)
 	  - MCP bridge (bidirectional Claude Code integration)
@@ -635,7 +635,7 @@ BUILDING
 
 	- Go 1.24 or later
 	- NietzscheDB (unified graph + vector + cache)
-	- PostgreSQL 15+
+	- NietzscheDB 15+
 	- Google Gemini API key
 
 	Build:
@@ -655,7 +655,7 @@ CONFIGURATION
 	EVA-Mind reads from a .env file in the working directory.
 	Required variables:
 
-		DATABASE_URL          - PostgreSQL connection string
+		DATABASE_URL          - NietzscheDB connection string
 		NIETZSCHE_GRPC_ADDR   - NietzscheDB endpoint (default: localhost:50051)
 		NIETZSCHE_ENCRYPTION_KEY - AES key for at-rest encryption (PHI)
 		GOOGLE_API_KEY        - Gemini API key
@@ -665,8 +665,8 @@ CONFIGURATION
 
 	Optional:
 
-		QDRANT_URL            - Qdrant endpoint
-		CORE_MEMORY_NEO4J_URI - Separate Neo4j for EVA's own memory
+		NietzscheDB_URL            - NietzscheDB endpoint
+		CORE_MEMORY_NietzscheDB_URI - Separate NietzscheDB for EVA's own memory
 		TWILIO_ACCOUNT_SID    - For outbound voice calls
 		TWILIO_AUTH_TOKEN     - Twilio auth
 		TWILIO_PHONE_NUMBER   - Caller ID for scheduled calls
@@ -822,11 +822,11 @@ MCP SERVER (CLAUDE CODE INTEGRATION)
 		eva_recall         - Search EVA's memories by query, returns
 		                     relevant stored memories
 		eva_teach          - Teach EVA something new, writes as
-		                     CoreMemory to Neo4j (port 7688)
+		                     CoreMemory to NietzscheDB (port 7688)
 		eva_identity       - Returns EVA's current identity:
 		                     personality, memories, capabilities
 		eva_learn_topic    - EVA autonomously studies a topic: web
-		                     research, Gemini summary, Qdrant storage
+		                     research, Gemini summary, NietzscheDB storage
 
 	Communication (7 tools):
 		eva_send_email     - Send email via Gmail API
@@ -856,15 +856,15 @@ MCP SERVER (CLAUDE CODE INTEGRATION)
 		                     results
 
 	Databases (4 tools):
-		eva_query_postgres   - Execute SQL on PostgreSQL (130+
+		eva_query_postgres   - Execute SQL on NietzscheDB (130+
 		                       tables: patients, schedules, meds)
-		eva_query_neo4j      - Execute Cypher on Neo4j general
+		eva_query_NietzscheDB      - Execute Cypher on NietzscheDB general
 		                       (:7687) knowledge graph (Person,
 		                       Condition, Medication, Symptom)
-		eva_query_neo4j_core - Execute Cypher on Neo4j Core (:7688)
+		eva_query_NietzscheDB_core - Execute Cypher on NietzscheDB Core (:7688)
 		                       EVA's personal memory (EvaSelf,
 		                       CoreMemory, MetaInsight)
-		eva_query_qdrant     - Vector similarity search on Qdrant
+		eva_query_NietzscheDB     - Vector similarity search on NietzscheDB
 		                       (20+ collections, 3072-dim embeddings)
 
 	Code Execution (1 tool):
@@ -913,7 +913,7 @@ DEPLOYMENTS
 		Backend: EVA-Mind on port 8091
 		Detection: Go backend on port 8080
 		WebSocket proxy: Nginx /ws/browser -> 8091
-		Infrastructure: Docker (Neo4j, Qdrant, Redis)
+		Infrastructure: Docker (NietzscheDB, NietzscheDB, NietzscheDB)
 		Service: systemd eva-mind.service
 
 	EVA Elderly Care:
@@ -1036,7 +1036,7 @@ COPYRIGHT AND LICENSE
 
 	Copyright (C) 2025-2026 Jose R F Junior. All rights reserved.
 
-	EVA-Mind is free software; you can redistribute it and/or
+	EVA-Mind is free software; you can NietzscheDBtribute it and/or
 	modify it under the terms of the GNU Affero General Public
 	License as published by the Free Software Foundation; either
 	version 3 of the License, or (at your option) any later version.

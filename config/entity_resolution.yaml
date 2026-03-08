@@ -104,7 +104,7 @@ examples:
 
 # Integration points
 integration:
-  graph_store: true           # Integrar com Neo4j GraphStore
+  graph_store: true           # Integrar com NietzscheDB GraphStore
   retrieval_service: true     # Usar durante retrieval
   memory_ingestion: true      # Resolver nomes durante ingestão
   api_endpoints: true         # Expor API para cuidadores

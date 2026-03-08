@@ -61,6 +61,9 @@ type AutonomousLearner struct {
 
 // NewAutonomousLearner cria um novo motor de aprendizagem
 func NewAutonomousLearner(db *sql.DB, cfg *config.Config, vectorAdapter *nietzscheInfra.VectorAdapter, embedSvc *knowledge.EmbeddingService) *AutonomousLearner {
+	if db == nil {
+		log.Warn().Msg("⚠️ [LEARNER] NietzscheDB unavailable — running in degraded mode (no curriculum)")
+	}
 	return &AutonomousLearner{
 		db:            db,
 		cfg:           cfg,
@@ -456,6 +459,9 @@ func (l *AutonomousLearner) GetLearningContext(ctx context.Context, query string
 
 // AddToCurriculum adiciona um topico na fila de estudo
 func (l *AutonomousLearner) AddToCurriculum(ctx context.Context, topic, category, requestedBy string, priority int) error {
+	if l.db == nil {
+		return fmt.Errorf("NietzscheDB unavailable — cannot add to curriculum")
+	}
 	if category == "" {
 		category = "geral"
 	}
@@ -475,6 +481,9 @@ func (l *AutonomousLearner) AddToCurriculum(ctx context.Context, topic, category
 
 // ListCurriculum lista topicos do curriculum
 func (l *AutonomousLearner) ListCurriculum(ctx context.Context, status string, limit int) ([]CurriculumItem, error) {
+	if l.db == nil {
+		return nil, fmt.Errorf("NietzscheDB unavailable — cannot list curriculum")
+	}
 	query := `SELECT id, topic, category, priority, status, COALESCE(source_hint,''), requested_by, created_at, completed_at, insights_count FROM eva_curriculum`
 	args := []interface{}{}
 
@@ -508,6 +517,9 @@ func (l *AutonomousLearner) ListCurriculum(ctx context.Context, status string, l
 // --- Helpers privados ---
 
 func (l *AutonomousLearner) nextPendingTopic(ctx context.Context) (*CurriculumItem, error) {
+	if l.db == nil {
+		return nil, nil
+	}
 	var item CurriculumItem
 	err := l.db.QueryRowContext(ctx,
 		`SELECT id, topic, category, priority, status FROM eva_curriculum WHERE status = 'pending' ORDER BY priority DESC, created_at ASC LIMIT 1`,
@@ -523,6 +535,9 @@ func (l *AutonomousLearner) nextPendingTopic(ctx context.Context) (*CurriculumIt
 }
 
 func (l *AutonomousLearner) updateStatus(ctx context.Context, id int64, status, errMsg string) {
+	if l.db == nil {
+		return
+	}
 	if errMsg != "" {
 		l.db.ExecContext(ctx, `UPDATE eva_curriculum SET status = $1, error_message = $2 WHERE id = $3`, status, errMsg, id)
 	} else {
@@ -531,6 +546,9 @@ func (l *AutonomousLearner) updateStatus(ctx context.Context, id int64, status, 
 }
 
 func (l *AutonomousLearner) completeItem(ctx context.Context, id int64, insightsCount int) {
+	if l.db == nil {
+		return
+	}
 	l.db.ExecContext(ctx,
 		`UPDATE eva_curriculum SET status = 'completed', completed_at = NOW(), insights_count = $1 WHERE id = $2`,
 		insightsCount, id,

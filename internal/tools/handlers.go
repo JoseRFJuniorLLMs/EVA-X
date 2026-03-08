@@ -292,7 +292,7 @@ var debugOnlyTools = map[string]bool{
 	"edit_my_code": true, "create_branch": true, "commit_code": true,
 	"run_tests": true, "get_code_diff": true,
 	// Database queries diretas (risco de dados sensiveis)
-	"query_postgresql": true, "query_nietzsche_graph": true, "query_nietzsche_vector": true, "query_nietzsche": true,
+	"query_NietzscheDB": true, "query_nietzsche_graph": true, "query_nietzsche_vector": true, "query_nietzsche": true,
 	// Code Execution Sandbox
 	"execute_code": true,
 	// Browser Automation (form filling, extraction — risco de abuso)
@@ -311,6 +311,9 @@ var debugOnlyTools = map[string]bool{
 
 // GetGoogleAccessToken obtém um access token válido para Google APIs
 func (h *ToolsHandler) GetGoogleAccessToken(idosoID int64) (string, error) {
+	if h.db == nil {
+		return "", fmt.Errorf("database not initialized")
+	}
 	refreshToken, accessToken, expiry, err := h.db.GetGoogleTokens(idosoID)
 	if err != nil {
 		return "", fmt.Errorf("Google não conectado: %v", err)
@@ -362,6 +365,20 @@ func (h *ToolsHandler) ExecuteTool(name string, args map[string]interface{}, ido
 		}, nil
 	}
 
+	// Guard: tools that need h.db.Conn (legacy PostgreSQL)
+	needsDBConn := map[string]bool{
+		"alert_family": true, "confirm_medication": true, "pending_schedule": true,
+		"confirm_schedule": true, "schedule_appointment": true,
+		"get_vitals": true, "get_agendamentos": true, "scan_medication_visual": true,
+	}
+	if needsDBConn[name] && (h.db == nil || h.db.Conn == nil) {
+		return map[string]interface{}{
+			"status":  "degraded",
+			"error":   "PostgreSQL indisponivel — funcionalidade desabilitada",
+			"message": "Esta funcao requer PostgreSQL que foi removido. Migre para NietzscheDB.",
+		}, nil
+	}
+
 	switch name {
 	case "alert_family":
 		reason, _ := args["reason"].(string)
@@ -394,7 +411,9 @@ func (h *ToolsHandler) ExecuteTool(name string, args map[string]interface{}, ido
 
 				// Buscar nome do idoso
 				var elderName string
-				h.db.Conn.QueryRow("SELECT nome FROM idosos WHERE id = $1", eid).Scan(&elderName)
+				if h.db != nil && h.db.Conn != nil {
+					h.db.Conn.QueryRow("SELECT nome FROM idosos WHERE id = $1", eid).Scan(&elderName)
+				}
 				if elderName == "" {
 					elderName = fmt.Sprintf("Paciente %d", eid)
 				}
@@ -999,8 +1018,8 @@ func (h *ToolsHandler) ExecuteTool(name string, args map[string]interface{}, ido
 	// 🗄️ ACESSO DIRETO A BASES DE DADOS
 	// ============================================================================
 
-	case "query_postgresql":
-		return h.handleQueryPostgreSQL(idosoID, args)
+	case "query_NietzscheDB":
+		return h.handleQueryNietzscheDB(idosoID, args)
 
 	case "query_nietzsche_graph":
 		return h.handleQueryGraph(idosoID, args)
@@ -1187,6 +1206,19 @@ func (h *ToolsHandler) ExecuteTool(name string, args map[string]interface{}, ido
 
 	case "nietzsche_dream_explore":
 		return h.handleDreamExplore(idosoID, args)
+
+	// Phase V — Cognitive Interference
+	case "nietzsche_hydrate_path":
+		return h.handleHydratePath(idosoID, args)
+
+	case "nietzsche_geodesic_coherence":
+		return h.handleGeodesicCoherence(idosoID, args)
+
+	case "nietzsche_persist_synthesis":
+		return h.handlePersistSynthesis(idosoID, args)
+
+	case "nietzsche_curvature_anomalies":
+		return h.handleCurvatureAnomalies(idosoID, args)
 
 	default:
 		// Bridge para swarm orchestrator — tools registradas nos swarm agents

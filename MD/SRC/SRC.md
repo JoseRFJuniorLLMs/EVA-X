@@ -63,7 +63,7 @@ O SRC (Sparse Representation-based Classification) funciona tentando reconstruir
 
 ### 2. A "Mecânica do Disparo" em Grafos (Hebbian Learning)
 
-Em redes neurais, a co-ativação é matemática (\$y = f(Wx + b)\$). No Neo4j, os nós são inertes. Você precisa pesquisar **Graph Signal Processing (GSP)**.
+Em redes neurais, a co-ativação é matemática (\$y = f(Wx + b)\$). No NietzscheDB, os nós são inertes. Você precisa pesquisar **Graph Signal Processing (GSP)**.
 
 * **O que pesquisar:** Como simular a "energia" percorrendo o grafo.
 * **Exemplo prático:** Se o usuário fala "Café", o nó Café "acende". Essa energia se espalha para os vizinhos (Maria, Manhã, Pão). Se o usuário fala "Maria" logo em seguida, o nó Maria também acende.
@@ -76,7 +76,7 @@ Em redes neurais, a co-ativação é matemática (\$y = f(Wx + b)\$). No Neo4j, 
 
 O *Learning Rate* (LR) em redes neurais serve para a rede não "surtar" com dados novos. No EVA, isso se traduz em **Consolidação de Memória**.
 
-* **O que pesquisar:** Como os pesos das arestas no Neo4j devem diminuir com o tempo se não forem usados (Decaimento) e como devem se estabilizar se forem muito repetidos (Consolidação).
+* **O que pesquisar:** Como os pesos das arestas no NietzscheDB devem diminuir com o tempo se não forem usados (Decaimento) e como devem se estabilizar se forem muito repetidos (Consolidação).
 * **O desafio:** Se você forçar um aprendizado muito rápido, o EVA terá "alucinações" contextuais. Se for muito lento, ele parecerá ter Alzheimer, esquecendo o que acabou de ser dito.
 * **Conceito chave:***Stability-Plasticity Dilemma* (Dilema Estabilidade-Plasticidade). Como aprender coisas novas sem apagar o que já é sólido (como os nomes das suas filhas).
 
@@ -110,7 +110,7 @@ O algoritmo **Weighted Edges Node Ordering** demonstrou superior precisão e res
 
 ---
 
-### 🧠 Lógica Pseudo-Hebb para o Grafo EVA no Neo4j
+### 🧠 Lógica Pseudo-Hebb para o Grafo EVA no NietzscheDB
 
 A regra de Hebb original é: **"Neurons that fire together, wire together"** — traduzido para o seu grafo: **"Nós buscados juntos, terão arestas mais fortes."**
 
@@ -123,12 +123,12 @@ A regra de Hebb original é: **"Neurons that fire together, wire together"** —
 
 Onde:
 
-* `freq(A,B)` = frequência de co-ativação (A e B aparecem na mesma query Neo4j)
+* `freq(A,B)` = frequência de co-ativação (A e B aparecem na mesma query NietzscheDB)
 * `η` = taxa de aprendizado (ex: 0.01)
 * `decay(t)` = fator de esquecimento temporal (ex: `e^(-t/τ)`)
 * `λ · w` = regularização para evitar pesos saturarem (LTD — Long-Term Depression)
 
-### Implementação no Neo4j (Cypher + Backend)
+### Implementação no NietzscheDB (Cypher + Backend)
 
 ```cypher
 -- Após cada busca que ativa nós A e B juntos:
@@ -165,7 +165,7 @@ def update_hebbian_weights(activated_nodes: list[str], session_id: str):
         # Atualização Hebb + regularização L2 (LTD)
         delta_w = ETA * decay - LAMBDA * get_current_weight(node_a, node_b)
   
-        neo4j_update_weight(node_a, node_b, delta_w)
+        NietzscheDB_update_weight(node_a, node_b, delta_w)
 
 ```
 
@@ -182,7 +182,7 @@ O modelo DHP usa **pesos lentos (fixos)** combinados com **pesos plásticos (rá
 Isso mapeia perfeitamente para o EVA:
 
 * **Peso lento** = embedding semântico (fixo, vindo do LLM)
-* **Peso rápido** = peso Hebb da aresta Neo4j (dinâmico, baseado em uso)
+* **Peso rápido** = peso Hebb da aresta NietzscheDB (dinâmico, baseado em uso)
 
 ---
 
@@ -198,17 +198,17 @@ Phase 2 (3-4 semanas): Hebbian Weight Updates
 
 Phase 3 (4-6 semanas): Dual-Rate Consolidation
 ├── Transfer Episodic → Krylov (24h)
-├── Transfer Krylov → Neo4j (padrões estáveis)
+├── Transfer Krylov → NietzscheDB (padrões estáveis)
 └── Consolidation durante "sleep" do sistema
 
 Phase 4 (6-8 semanas): Open-Set Entity Recognition
 ├── SRC para reconhecimento de entidades
 ├── Entity resolution sem IDs fixos
-└── Integration com Neo4j MERGES_WITH edges
+└── Integration com NietzscheDB MERGES_WITH edges
 
 ### Conclusão
 
-A literatura acadêmica **valida completamente** a intuição expressa no documento: o abismo entre "IA de laboratório" e "IA de acompanhamento" pode ser transposto através de mecanismos biologicamente inspirados. O EVA-Mind já possui os componentes fundamentais (Neo4j, Krylov, Heat Kernel) - o próximo passo é integrar **dinâmica temporal** e **atualização de pesos** Hebbianos.
+A literatura acadêmica **valida completamente** a intuição expressa no documento: o abismo entre "IA de laboratório" e "IA de acompanhamento" pode ser transposto através de mecanismos biologicamente inspirados. O EVA-Mind já possui os componentes fundamentais (NietzscheDB, Krylov, Heat Kernel) - o próximo passo é integrar **dinâmica temporal** e **atualização de pesos** Hebbianos.
 
 Análise da Implementação Atual
 
@@ -311,7 +311,7 @@ result = await resolver.resolve_entity(
 #### 4. **Multi-Rate Consolidation**
 
 ```
-Episodic (PostgreSQL) → Working (Krylov) → Long-term (Neo4j)
+Episodic (NietzscheDB) → Working (Krylov) → Long-term (NietzscheDB)
      FAST (24h)            MEDIUM (7d)          SLOW (stable)
 ```
 
@@ -361,7 +361,7 @@ O Que Tá Foda (Real e Funcional)
 
    - process_session() pós-search reforça arestas dos nós retornados.
    - Zonas "consolidated" no contexto = EVA "lembra" associações fortes sem rebuscar.
-   - Mock pra Neo4j = testável sem banco real.
+   - Mock pra NietzscheDB = testável sem banco real.
 4. **Alinhamento com Papers**
 
    - DHP (pesos lentos = embedding fixo, rápidos = Hebb dinâmico).

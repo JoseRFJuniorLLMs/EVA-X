@@ -63,7 +63,7 @@ func (a *Agent) registerTools() {
 		Required: []string{"query"},
 	}, a.handleSearchCode)
 
-	// 2. query_my_database — Read-only PostgreSQL queries
+	// 2. query_my_database — Read-only NietzscheDB queries
 	a.RegisterTool(swarm.ToolDefinition{
 		Name:        "query_my_database",
 		Description: "Consulta read-only nas tabelas internas da EVA (SELECT only)",
@@ -257,7 +257,7 @@ func (a *Agent) handleQueryDatabase(ctx context.Context, call swarm.ToolCall) (*
 		return &swarm.ToolResult{Success: false, Message: "Service nao inicializado"}, nil
 	}
 
-	log.Info().Str("query", query).Msg("[SELF-AWARE] Querying PostgreSQL")
+	log.Info().Str("query", query).Msg("[SELF-AWARE] Querying NietzscheDB")
 
 	rows, err := a.svc.QueryPostgres(ctx, query)
 	if err != nil {
@@ -317,7 +317,7 @@ func (a *Agent) handleSystemStats(ctx context.Context, call swarm.ToolCall) (*sw
 	}
 
 	msg := fmt.Sprintf(`Meus sistemas:
-- PostgreSQL: %d tabelas, %d memorias episodicas
+- NietzscheDB: %d tabelas, %d memorias episodicas
 - NietzscheDB: %d colecoes, %d nos vetoriais
 - Curriculum: %d pendentes, %d completados
 - Runtime: %d goroutines, %dMB RAM, uptime %s`,
@@ -413,7 +413,7 @@ func (a *Agent) handleIntrospect(ctx context.Context, call swarm.ToolCall) (*swa
 	msg.WriteString("Meu estado atual:\n")
 
 	if report.Stats != nil {
-		msg.WriteString(fmt.Sprintf("\nSistemas: %d tabelas PostgreSQL, %d colecoes NietzscheDB (%d nos)\n",
+		msg.WriteString(fmt.Sprintf("\nSistemas: %d tabelas NietzscheDB, %d colecoes NietzscheDB (%d nos)\n",
 			report.Stats.PostgresTables, report.Stats.NietzscheCollections, report.Stats.NietzscheTotalNodes))
 		msg.WriteString(fmt.Sprintf("Memorias: %d episodicas | Curriculum: %d pendentes, %d completados\n",
 			report.Stats.TotalMemories, report.Stats.CurriculumPending, report.Stats.CurriculumDone))

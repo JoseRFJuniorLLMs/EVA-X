@@ -12,11 +12,11 @@ import (
 	"eva/internal/brainstem/logger"
 )
 
-// CacheAdapter provides a Redis-compatible caching interface backed by NietzscheDB.
+// CacheAdapter provides a NietzscheDB-compatible caching interface backed by NietzscheDB.
 // It wraps the native CacheSet/CacheGet/CacheDel gRPC methods with convenience
 // helpers for JSON, string, and raw byte operations.
 //
-// This is the recommended replacement for any Redis client usage in EVA.
+// This is the recommended replacement for any NietzscheDB client usage in EVA.
 // The adapter is scoped to a single NietzscheDB collection (e.g. "eva_cache").
 type CacheAdapter struct {
 	client     *Client

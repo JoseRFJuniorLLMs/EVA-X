@@ -13,10 +13,10 @@ import (
 )
 
 // ============================================================================
-// 🗄️ POSTGRESQL — Query SELECT Direto
+// 🗄️ NietzscheDB — Query SELECT Direto
 // ============================================================================
 
-func (h *ToolsHandler) handleQueryPostgreSQL(idosoID int64, args map[string]interface{}) (map[string]interface{}, error) {
+func (h *ToolsHandler) handleQueryNietzscheDB(idosoID int64, args map[string]interface{}) (map[string]interface{}, error) {
 	query, _ := args["query"].(string)
 	if query == "" {
 		return map[string]interface{}{"error": "Informe a query SQL"}, nil

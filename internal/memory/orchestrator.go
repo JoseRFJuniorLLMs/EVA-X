@@ -39,6 +39,9 @@ func NewMemoryOrchestrator(
 	fdpn *memory.FDPNEngine,
 	krylovMgr *krylov.KrylovMemoryManager,
 ) *MemoryOrchestrator {
+	if db == nil {
+		log.Warn().Msg("⚠️ [MEMORY-ORCH] NietzscheDB unavailable — running in degraded mode")
+	}
 	return &MemoryOrchestrator{
 		db:              db,
 		graphAdapter:    graphAdapter,
@@ -92,7 +95,7 @@ func (o *MemoryOrchestrator) IngestMemory(ctx context.Context, userID string, co
 	// TODO: Store in NietzscheDB vector with compressed embedding
 	// This would require VectorAdapter integration
 
-	// STEP 5: Store in PostgreSQL
+	// STEP 5: Store in NietzscheDB
 	// TODO: Store episodic memory in database
 
 	log.Info().

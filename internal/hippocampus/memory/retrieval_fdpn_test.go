@@ -5,7 +5,7 @@
 // +build integration
 
 // NOTE: These tests use mock structs that cannot satisfy the concrete types
-// in RetrievalService (e.g., *sql.DB, *EmbeddingService, *vector.QdrantClient).
+// in RetrievalService (e.g., *sql.DB, *EmbeddingService, *vector.NietzscheDBClient).
 // They require refactoring to use interfaces before they can compile.
 // Run with: go test -tags=integration ./internal/hippocampus/memory/
 // TODO: Refactor RetrievalService to accept interfaces for testability.

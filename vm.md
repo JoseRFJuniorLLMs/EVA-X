@@ -24,8 +24,8 @@
 
 | Database | Host | Porta | DB | User |
 |----------|------|-------|----|------|
-| **PostgreSQL (EVA-Mind)** | `35.232.177.102` | 5432 | `eva-db` | `postgres` |
-| **PostgreSQL (Malaria)** | `34.35.142.107` | 5432 | `malaria-db` | `postgres` |
+| **NietzscheDB (EVA-Mind)** | `35.232.177.102` | 5432 | `eva-db` | `postgres` |
+| **NietzscheDB (Malaria)** | `34.35.142.107` | 5432 | `malaria-db` | `postgres` |
 
 ## Acesso SSH
 
@@ -79,7 +79,7 @@ NIETZSCHE_GRPC_ADDR=localhost:50051
 NIETZSCHE_ENCRYPTION_KEY=your-aes-key-here
 NIETZSCHE_RBAC_ENABLED=true
 
-# PostgreSQL (Cloud SQL)
+# NietzscheDB (Cloud SQL)
 DATABASE_URL=postgres://postgres:Debian23%40@35.232.177.102:5432/eva-db?sslmode=disable
 ```
 
@@ -97,13 +97,13 @@ sudo systemctl restart eva-mind
 
 # Docker containers
 docker ps
-docker logs eva-neo4j
-docker logs eva-qdrant
-docker logs eva-redis
+docker logs eva-NietzscheDB
+docker logs eva-NietzscheDB
+docker logs eva-NietzscheDB
 
-# Neo4j Browser
+# NietzscheDB Browser
 # http://34.35.36.178:7474
 
-# Qdrant Dashboard
+# NietzscheDB Dashboard
 # http://34.35.36.178:6333/dashboard
 ```

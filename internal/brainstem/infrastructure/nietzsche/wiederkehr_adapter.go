@@ -216,7 +216,7 @@ func (w *WiederkehrAdapter) ListDaemons(ctx context.Context, collection string) 
 // ── Daemon Lifecycle Helpers ─────────────────────────────────────────────────
 
 // CreateEnergyGuard creates a daemon that runs DIFFUSE on high-energy nodes
-// to redistribute activation across the graph. This prevents energy hotspots
+// to NietzscheDBtribute activation across the graph. This prevents energy hotspots
 // that can destabilize the Poincare geometry.
 func (w *WiederkehrAdapter) CreateEnergyGuard(ctx context.Context, collection string, threshold float64, interval string) error {
 	return w.CreateDaemon(ctx, collection, CreateDaemonOpts{

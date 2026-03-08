@@ -97,8 +97,8 @@ case "medium":    // ❌ Nunca dispara para "MEDIA"
 // ANTES
 type Service struct {
     db                 *sql.DB
-    qdrantClient       *vector.QdrantClient
-    neo4jClient        *graph.Neo4jClient
+    NietzscheDBClient       *vector.NietzscheDBClient
+    NietzscheDBClient        *graph.NietzscheDBClient
     graphStore         *memory.GraphStore
     // ... outros campos
 }
@@ -106,8 +106,8 @@ type Service struct {
 // DEPOIS
 type Service struct {
     db                 *sql.DB
-    qdrantClient       *vector.QdrantClient
-    neo4jClient        *graph.Neo4jClient
+    NietzscheDBClient       *vector.NietzscheDBClient
+    NietzscheDBClient        *graph.NietzscheDBClient
     graphStore         *memory.GraphStore
     memoryStore        *memory.MemoryStore  // ✅ NOVO
     // ... outros campos
@@ -119,14 +119,14 @@ type Service struct {
 // DEPOIS:
 var memoryStore *memory.MemoryStore
 if db != nil {
-    memoryStore = memory.NewMemoryStore(db, graphStore, qdrant)  // ✅ NOVO
+    memoryStore = memory.NewMemoryStore(db, graphStore, NietzscheDB)  // ✅ NOVO
 }
 ```
 
 **Por que**: O `MemoryStore` é a forma correta de salvar memórias. Ele:
-- Salva no PostgreSQL com emotion e importance corretos
-- Salva no Neo4j com relacionamentos
-- Salva no Qdrant com embeddings vetoriais
+- Salva no NietzscheDB com emotion e importance corretos
+- Salva no NietzscheDB com relacionamentos
+- Salva no NietzscheDB com embeddings vetoriais
 
 ---
 
@@ -239,7 +239,7 @@ func (s *Service) SaveEpisodicMemoryWithContext(
 **Benefícios**:
 - ✅ Importância é **realmente salva**
 - ✅ Emoção é **preservada corretamente**
-- ✅ Dados vão para **Postgres, Neo4j e Qdrant** simultaneamente
+- ✅ Dados vão para **Postgres, NietzscheDB e NietzscheDB** simultaneamente
 - ✅ Embedding é **gerado e armazenado**
 
 ---
@@ -716,12 +716,12 @@ SaveEpisodicMemoryWithContext()
     │
     ↓
 memoryStore.Store(ctx, mem)
-    ├─ Salva em PostgreSQL
+    ├─ Salva em NietzscheDB
     │   episodic_memories(idoso_id, speaker, content,
     │                     emotion, importance, topics, ...)
-    ├─ Salva em Neo4j
+    ├─ Salva em NietzscheDB
     │   (:EpisodicMemory {importance: 0.85, emotion: "sad", ...})
-    └─ Salva em Qdrant
+    └─ Salva em NietzscheDB
         point.payload = {emotion, importance, topics, ...}
 ```
 
@@ -734,7 +734,7 @@ memoryStore.Store(ctx, mem)
 | **Considera Intensidade de Voz** | ❌ Não | ✅ Sim |
 | **Detecta Palavras Críticas** | ❌ Não | ✅ Sim (Lacan, médica, etc) |
 | **Suporta PT e EN** | ❌ Só EN | ✅ Ambas |
-| **Locais de Salvamento** | Postgres só | ✅ Postgres + Neo4j + Qdrant |
+| **Locais de Salvamento** | Postgres só | ✅ Postgres + NietzscheDB + NietzscheDB |
 
 ---
 
@@ -745,8 +745,8 @@ memoryStore.Store(ctx, mem)
 ```
 🧠 [MEMORY-CTX] Importância calculada: 0.85 | Emoção: sad | Urgência: ALTA | Intensidade: 8
 ✅ [STORAGE] Memória salva no Postgres: ID=12345, idoso=67, speaker=user
-✅ [NEO4J] Relações salvas: 3 topics, emoção=sad (memória 12345)
-✅ [QDRANT] Vetor salvo com sucesso: 12345
+✅ [NietzscheDB] Relações salvas: 3 topics, emoção=sad (memória 12345)
+✅ [NietzscheDB] Vetor salvo com sucesso: 12345
 ```
 
 ### Interpretação dos Logs
@@ -754,14 +754,14 @@ memoryStore.Store(ctx, mem)
 | Log | Significado |
 |-----|-------------|
 | `[MEMORY-CTX]` | Cálculo de importância + contexto |
-| `[STORAGE]` | Memória salva no PostgreSQL |
-| `[NEO4J]` | Relacionamentos salvos no grafo |
-| `[QDRANT]` | Vetor de embedding salvo |
+| `[STORAGE]` | Memória salva no NietzscheDB |
+| `[NietzscheDB]` | Relacionamentos salvos no grafo |
+| `[NietzscheDB]` | Vetor de embedding salvo |
 
 ### Debug: Como Verificar Salvamento
 
 ```sql
--- PostgreSQL: Ver memória com importância
+-- NietzscheDB: Ver memória com importância
 SELECT id, idoso_id, speaker, emotion, importance, content
 FROM episodic_memories
 WHERE idoso_id = 67
@@ -815,8 +815,8 @@ id | idoso_id | speaker | emotion | importance | content
 
 ### Dependências
 - `eva-mind/internal/hippocampus/memory` - MemoryStore, Memory struct
-- `eva-mind/internal/brainstem/infrastructure/vector` - QdrantClient
-- `eva-mind/internal/brainstem/infrastructure/graph` - Neo4jClient
+- `eva-mind/internal/brainstem/infrastructure/vector` - NietzscheDBClient
+- `eva-mind/internal/brainstem/infrastructure/graph` - NietzscheDBClient
 
 ---
 
@@ -874,7 +874,7 @@ $ go build ./...
 
 2. Verificar que `service.go` tem:
    ```go
-   memoryStore: memory.NewMemoryStore(db, graphStore, qdrant),
+   memoryStore: memory.NewMemoryStore(db, graphStore, NietzscheDB),
    ```
 
 3. Verificar imports em `memory_context.go`:

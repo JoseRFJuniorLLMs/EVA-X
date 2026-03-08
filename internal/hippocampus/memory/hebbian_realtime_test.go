@@ -17,7 +17,7 @@ func TestHebbianRealTime_UpdateWeights(t *testing.T) {
 		Timeout: 100 * time.Millisecond,
 	}
 
-	// nil neo4j — UpdateWeights short-circuits (neo4j==nil guard)
+	// nil NietzscheDB — UpdateWeights short-circuits (NietzscheDB==nil guard)
 	// This tests constructor + config propagation
 	hebb := NewHebbianRealTime(nil, config)
 
@@ -159,7 +159,7 @@ func TestHebbianRealTime_WeightDecay_NoActivation(t *testing.T) {
 }
 
 func TestHebbianRealTime_BoostMemories(t *testing.T) {
-	// nil neo4j — BoostMemories short-circuits (neo4j==nil guard)
+	// nil NietzscheDB — BoostMemories short-circuits (NietzscheDB==nil guard)
 	hebb := NewHebbianRealTime(nil, nil)
 
 	memoryIDs := []string{"mem_1", "mem_2", "mem_3"}
@@ -173,7 +173,7 @@ func TestHebbianRealTime_BoostMemories(t *testing.T) {
 }
 
 func TestHebbianRealTime_DecayMemories(t *testing.T) {
-	// nil neo4j — DecayMemories short-circuits (neo4j==nil guard)
+	// nil NietzscheDB — DecayMemories short-circuits (NietzscheDB==nil guard)
 	hebb := NewHebbianRealTime(nil, nil)
 
 	memoryIDs := []string{"mem_1", "mem_2"}
@@ -191,7 +191,7 @@ func TestHebbianRealTime_Timeout(t *testing.T) {
 		Timeout: 50 * time.Millisecond,
 	}
 
-	// nil neo4j — UpdateWeights returns immediately (neo4j==nil guard)
+	// nil NietzscheDB — UpdateWeights returns immediately (NietzscheDB==nil guard)
 	// This verifies the constructor accepts timeout config
 	hebb := NewHebbianRealTime(nil, config)
 

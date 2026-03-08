@@ -16,7 +16,7 @@ import (
 )
 
 // ============================================================================
-// 🧠 mcp_remember — Armazena memória na tabela memories (PostgreSQL)
+// 🧠 mcp_remember — Armazena memória na tabela memories (NietzscheDB)
 // ============================================================================
 
 func (h *ToolsHandler) handleMCPRemember(idosoID int64, args map[string]interface{}) (map[string]interface{}, error) {
@@ -45,7 +45,7 @@ func (h *ToolsHandler) handleMCPRemember(idosoID int64, args map[string]interfac
 }
 
 // ============================================================================
-// 🔍 mcp_recall — Busca memorias por texto (PostgreSQL)
+// 🔍 mcp_recall — Busca memorias por texto (NietzscheDB)
 // ============================================================================
 
 func (h *ToolsHandler) handleMCPRecall(idosoID int64, args map[string]interface{}) (map[string]interface{}, error) {
@@ -125,7 +125,7 @@ func (h *ToolsHandler) handleMCPTeachEva(idosoID int64, args map[string]interfac
 	}
 
 	if h.evaCoreAdapter == nil {
-		// Fallback: salvar como memoria no PostgreSQL com tag [TEACHING]
+		// Fallback: salvar como memoria no NietzscheDB com tag [TEACHING]
 		var memoryID int64
 		err := h.db.Conn.QueryRow(`
 			INSERT INTO memories (patient_id, content, event_time, ingestion_time, importance_score, created_at)
@@ -139,9 +139,9 @@ func (h *ToolsHandler) handleMCPTeachEva(idosoID int64, args map[string]interfac
 
 		return map[string]interface{}{
 			"status":    "sucesso",
-			"stored_in": "postgresql_fallback",
+			"stored_in": "NietzscheDB_fallback",
 			"memory_id": memoryID,
-			"message":   fmt.Sprintf("Ensinamento salvo (PostgreSQL fallback, ID %d). NietzscheDB eva_core indisponivel.", memoryID),
+			"message":   fmt.Sprintf("Ensinamento salvo (NietzscheDB fallback, ID %d). NietzscheDB eva_core indisponivel.", memoryID),
 		}, nil
 	}
 

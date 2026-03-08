@@ -40,6 +40,9 @@ type SelfAwarenessService struct {
 
 // NewSelfAwarenessService creates the self-awareness service.
 func NewSelfAwarenessService(db *sql.DB, vectorAdapter *nietzscheInfra.VectorAdapter, embedSvc *knowledge.EmbeddingService, cfg *config.Config) *SelfAwarenessService {
+	if db == nil {
+		log.Warn().Msg("⚠️ [SELF-AWARENESS] NietzscheDB unavailable — running in degraded mode")
+	}
 	return &SelfAwarenessService{
 		db:            db,
 		vectorAdapter: vectorAdapter,
@@ -510,8 +513,11 @@ func (s *SelfAwarenessService) SearchDocs(ctx context.Context, query string, lim
 
 // ======================== Database Queries (read-only) ========================
 
-// QueryPostgres executes a read-only SELECT query on PostgreSQL.
+// QueryPostgres executes a read-only SELECT query on NietzscheDB.
 func (s *SelfAwarenessService) QueryPostgres(ctx context.Context, query string) ([]map[string]interface{}, error) {
+	if s.db == nil {
+		return nil, fmt.Errorf("NietzscheDB unavailable")
+	}
 	normalized := strings.TrimSpace(strings.ToUpper(query))
 	if !strings.HasPrefix(normalized, "SELECT") {
 		return nil, fmt.Errorf("apenas queries SELECT sao permitidas")
@@ -661,7 +667,7 @@ type SelfKnowledgeItem struct {
 }
 
 // SearchSelfKnowledge searches EVA's self-knowledge using semantic search (NietzscheDB vector)
-// with PostgreSQL ILIKE as fallback.
+// with NietzscheDB ILIKE as fallback.
 func (s *SelfAwarenessService) SearchSelfKnowledge(ctx context.Context, query string, limit int) ([]SelfKnowledgeItem, error) {
 	if limit <= 0 {
 		limit = 5
@@ -723,7 +729,7 @@ func (s *SelfAwarenessService) SearchSelfKnowledge(ctx context.Context, query st
 		}
 	}
 
-	// Fallback: PostgreSQL ILIKE
+	// Fallback: NietzscheDB ILIKE
 	if s.db == nil {
 		return nil, fmt.Errorf("nenhum backend de busca disponivel")
 	}
@@ -756,6 +762,9 @@ func (s *SelfAwarenessService) SearchSelfKnowledge(ctx context.Context, query st
 
 // UpdateSelfKnowledge upserts an entry in eva_self_knowledge.
 func (s *SelfAwarenessService) UpdateSelfKnowledge(ctx context.Context, knowledgeType, key, title, summary, content string, importance int) error {
+	if s.db == nil {
+		return fmt.Errorf("NietzscheDB unavailable")
+	}
 	query := `
 		INSERT INTO eva_self_knowledge (knowledge_type, knowledge_key, title, summary, detailed_content, importance, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, NOW())

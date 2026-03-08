@@ -40,7 +40,7 @@ var rateLimits = map[string][2]int{
 	"send_teams":     {10, 60},
 	"send_signal":    {10, 60},
 	"execute_code":   {10, 100},
-	"query_postgresql": {30, 300},
+	"query_NietzscheDB": {30, 300},
 	"query_nietzsche_graph":  {30, 300},
 	"query_nietzsche_vector": {30, 300},
 	"mcp_query_nietzsche_core": {30, 300},

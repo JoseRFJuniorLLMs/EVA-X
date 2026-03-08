@@ -79,10 +79,10 @@ type Situation struct {
 
 type SituationalModulator struct {
     llm   llm.Provider
-    cache *cache.RedisClient
+    cache *cache.NietzscheDBClient
 }
 
-func NewModulator(llm llm.Provider, cache *cache.RedisClient) *SituationalModulator {
+func NewModulator(llm llm.Provider, cache *cache.NietzscheDBClient) *SituationalModulator {
     return &SituationalModulator{llm: llm, cache: cache}
 }
 
@@ -209,7 +209,7 @@ func (e *FDPNEngine) StreamingPrimeWithSituation(ctx context.Context, userID str
 
 ```go
 type HebbianRealTime struct {
-    neo4j   *graph.Neo4jClient
+    NietzscheDB   *graph.NietzscheDBClient
     eta     float64  // 0.01
     lambda  float64  // 0.001 (safeguard)
     tau     float64  // 86400
@@ -226,7 +226,7 @@ func (h *HebbianRealTime) UpdateWeights(ctx context.Context, patientID int64, no
             decay := math.Exp(-deltaT / h.tau)
             deltaW := h.eta * decay - h.lambda * h.getCurrentWeight(nodeIDs[i], nodeIDs[j])
 
-            h.updateNeo4j(ctx, nodeIDs[i], nodeIDs[j], deltaW)
+            h.updateNietzscheDB(ctx, nodeIDs[i], nodeIDs[j], deltaW)
         }
     }
     return nil
@@ -234,7 +234,7 @@ func (h *HebbianRealTime) UpdateWeights(ctx context.Context, patientID int64, no
 ```
 
 ### A2. DHP - Dual Weights
-**Migration Neo4j:**
+**Migration NietzscheDB:**
 ```cypher
 MATCH ()-[r:ASSOCIADO_COM]->()
 SET r.slow_weight = COALESCE(r.slow_weight, r.weight),
@@ -254,7 +254,7 @@ func (r *RetrievalService) RetrieveHybrid(ctx context.Context, idosoID int64, qu
 
     activatedNodes, _ := r.fdpn.StreamingPrime(ctx, fmt.Sprintf("%d", idosoID), query)
 
-    qResults, _ := r.qdrant.Search(ctx, "memories", queryEmbedding, uint64(k), nil)
+    qResults, _ := r.NietzscheDB.Search(ctx, "memories", queryEmbedding, uint64(k), nil)
 
     for _, result := range qResults {
         nodeID := extractNodeID(result)
@@ -324,7 +324,7 @@ func GetEmergingAssociations(c *gin.Context) {
 
 ```go
 type EntityResolver struct {
-    neo4j    *graph.Neo4jClient
+    NietzscheDB    *graph.NietzscheDBClient
     embedder *EmbeddingService
 }
 
@@ -489,7 +489,7 @@ ram:
 
 ### Semana 2-3 (FASES A+B)
 1. `hebbian_realtime.go` com safeguards
-2. Migration Neo4j dual weights
+2. Migration NietzscheDB dual weights
 3. FDPN boost no retrieval
 
 ---

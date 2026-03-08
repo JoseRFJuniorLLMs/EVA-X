@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -27,6 +28,9 @@ type FHIRHandler struct {
 
 // NewFHIRHandler creates a new handler with a database connection
 func NewFHIRHandler(db *sql.DB) *FHIRHandler {
+	if db == nil {
+		log.Printf("⚠️ [FHIR] NietzscheDB unavailable — running in degraded mode")
+	}
 	return &FHIRHandler{db: db}
 }
 
@@ -36,6 +40,10 @@ func NewFHIRHandler(db *sql.DB) *FHIRHandler {
 // Returns a single patient resource in FHIR R4 Patient format.
 
 func (h *FHIRHandler) GetPatient(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		writeFHIRError(w, http.StatusServiceUnavailable, "unavailable", "NietzscheDB unavailable")
+		return
+	}
 	vars := mux.Vars(r)
 	idStr := vars["id"]
 
@@ -67,6 +75,10 @@ func (h *FHIRHandler) GetPatient(w http.ResponseWriter, r *http.Request) {
 // observations (clinical assessments converted to FHIR Observation).
 
 func (h *FHIRHandler) GetPatientBundle(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		writeFHIRError(w, http.StatusServiceUnavailable, "unavailable", "NietzscheDB unavailable")
+		return
+	}
 	vars := mux.Vars(r)
 	idStr := vars["id"]
 

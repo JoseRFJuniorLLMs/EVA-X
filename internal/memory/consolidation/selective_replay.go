@@ -55,11 +55,11 @@ type ReplayResult struct {
 	Duration          time.Duration `json:"duration"`
 }
 
-// ScoreDissonance computes dissonance for each memory.
+// ScoNietzscheDBsonance computes dissonance for each memory.
 // dissonance = activation × (1 - coherence)
 // where coherence = average cosine similarity to K nearest neighbors.
 // High dissonance = memory is highly activated but doesn't fit well with its neighbors.
-func ScoreDissonance(memories []EpisodicMemory, kNeighbors int) []DissonanceScore {
+func ScoNietzscheDBsonance(memories []EpisodicMemory, kNeighbors int) []DissonanceScore {
 	if len(memories) == 0 {
 		return nil
 	}
@@ -165,7 +165,7 @@ func (r *REMConsolidator) ExecuteSelectiveReplay(
 	}
 
 	// 1. Score dissonance
-	scores := ScoreDissonance(memories, cfg.KNeighbors)
+	scores := ScoNietzscheDBsonance(memories, cfg.KNeighbors)
 	result.DissonantCount = len(scores)
 
 	if len(scores) > 0 {

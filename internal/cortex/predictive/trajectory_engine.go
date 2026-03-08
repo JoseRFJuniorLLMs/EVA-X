@@ -667,8 +667,8 @@ func (te *TrajectoryEngine) getSimulation(id string) (*TrajectorySimulation, err
 		return nil, err
 	}
 
-	// Parse critical factors (PostgreSQL array)
-	// TODO: Properly parse PostgreSQL array
+	// Parse critical factors (NietzscheDB array)
+	// TODO: Properly parse NietzscheDB array
 
 	return sim, nil
 }
@@ -742,7 +742,7 @@ func max(a, b int) int {
 	return b
 }
 
-// pqArray helper for PostgreSQL arrays
+// pqArray helper for NietzscheDB arrays
 func pqArray(arr []string) interface{} {
 	// Placeholder - use github.com/lib/pq.Array in production
 	return arr

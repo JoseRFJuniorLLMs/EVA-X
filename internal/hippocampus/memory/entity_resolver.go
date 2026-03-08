@@ -12,9 +12,8 @@ import (
 	"time"
 )
 
-// Neo4jClient interface para operações no grafo NietzscheDB (entity resolution)
-// NOTE: Name kept for backward compatibility; actual backend is NietzscheDB.
-type Neo4jClient interface {
+// GraphClient interface para operações no grafo NietzscheDB (entity resolution)
+type GraphClient interface {
 	ExecuteQuery(ctx context.Context, query string, params map[string]interface{}) ([]map[string]interface{}, error)
 }
 
@@ -22,7 +21,7 @@ type Neo4jClient interface {
 // Exemplo: "Maria", "Dona Maria", "minha mãe Maria" → mesmo nó
 // Usa embedding similarity (NÃO SRC - conforme mente.md)
 type EntityResolver struct {
-	neo4j           Neo4jClient
+	graph           GraphClient
 	embedder        EmbeddingService
 	similarityThreshold float64 // 0.85 default
 	minNameLength   int         // 3 chars minimum
@@ -78,9 +77,9 @@ type EntityCache interface {
 }
 
 // NewEntityResolver cria novo resolver
-func NewEntityResolver(neo4j Neo4jClient, embedder EmbeddingService, cache EntityCache) *EntityResolver {
+func NewEntityResolver(graph GraphClient, embedder EmbeddingService, cache EntityCache) *EntityResolver {
 	return &EntityResolver{
-		neo4j:           neo4j,
+		graph:           graph,
 		embedder:        embedder,
 		similarityThreshold: 0.85, // Threshold conservador
 		minNameLength:   3,
@@ -264,7 +263,7 @@ func (r *EntityResolver) getPatientEntities(ctx context.Context, patientID int64
 		"patientID": patientID,
 	}
 
-	records, err := r.neo4j.ExecuteQuery(ctx, query, params)
+	records, err := r.graph.ExecuteQuery(ctx, query, params)
 	if err != nil {
 		return nil, err
 	}
@@ -378,7 +377,7 @@ func (r *EntityResolver) mergeSingleEntity(ctx context.Context, patientID int64,
 		"targetID": candidate.TargetID,
 	}
 
-	records, err := r.neo4j.ExecuteQuery(ctx, query, params)
+	records, err := r.graph.ExecuteQuery(ctx, query, params)
 	if err != nil {
 		result.Error = err
 		return result

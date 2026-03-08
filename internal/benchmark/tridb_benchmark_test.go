@@ -20,20 +20,20 @@ import (
 // MOCK ADAPTERS (usados em testes unitários, sem dependência de infra)
 // ============================================================================
 
-// mockNeo4jAdapter simula Neo4j com busca por keywords em propriedades
-type mockNeo4jAdapter struct {
+// mockNietzscheDBAdapter simula NietzscheDB com busca por keywords em propriedades
+type mockNietzscheDBAdapter struct {
 	memories []SyntheticMemory
 	latency  time.Duration
 }
 
-func (a *mockNeo4jAdapter) Name() BackendType { return BackendNeo4j }
+func (a *mockNietzscheDBAdapter) Name() BackendType { return BackendNietzscheDB }
 
-func (a *mockNeo4jAdapter) Setup(ctx context.Context, memories []SyntheticMemory) error {
+func (a *mockNietzscheDBAdapter) Setup(ctx context.Context, memories []SyntheticMemory) error {
 	a.memories = memories
 	return nil
 }
 
-func (a *mockNeo4jAdapter) Search(ctx context.Context, query string, k int) ([]RetrievedItem, error) {
+func (a *mockNietzscheDBAdapter) Search(ctx context.Context, query string, k int) ([]RetrievedItem, error) {
 	time.Sleep(a.latency) // simular latência de rede
 
 	queryLower := strings.ToLower(query)
@@ -47,7 +47,7 @@ func (a *mockNeo4jAdapter) Search(ctx context.Context, query string, k int) ([]R
 		score := 0.0
 		contentLower := strings.ToLower(m.Content)
 
-		// Neo4j: busca por propriedades (CONTAINS) — simula full-text index
+		// NietzscheDB: busca por propriedades (CONTAINS) — simula full-text index
 		words := strings.Fields(queryLower)
 		for _, word := range words {
 			if len(word) < 3 {
@@ -70,7 +70,7 @@ func (a *mockNeo4jAdapter) Search(ctx context.Context, query string, k int) ([]R
 			score += 0.3
 		}
 
-		// Boost temporal (Neo4j é bom com grafos temporais)
+		// Boost temporal (NietzscheDB é bom com grafos temporais)
 		daysSince := time.Since(m.Timestamp).Hours() / 24
 		if strings.Contains(queryLower, "ontem") || strings.Contains(queryLower, "yesterday") {
 			if daysSince <= 2 {
@@ -113,18 +113,18 @@ func (a *mockNeo4jAdapter) Search(ctx context.Context, query string, k int) ([]R
 	return items, nil
 }
 
-func (a *mockNeo4jAdapter) Cleanup(ctx context.Context) error { return nil }
+func (a *mockNietzscheDBAdapter) Cleanup(ctx context.Context) error { return nil }
 
-// mockQdrantAdapter simula Qdrant com busca vetorial (cosine similarity)
-type mockQdrantAdapter struct {
+// mockNietzscheDBAdapter simula NietzscheDB com busca vetorial (cosine similarity)
+type mockNietzscheDBAdapter struct {
 	memories   []SyntheticMemory
 	embeddings map[string][]float32
 	latency    time.Duration
 }
 
-func (a *mockQdrantAdapter) Name() BackendType { return BackendQdrant }
+func (a *mockNietzscheDBAdapter) Name() BackendType { return BackendNietzscheDB }
 
-func (a *mockQdrantAdapter) Setup(ctx context.Context, memories []SyntheticMemory) error {
+func (a *mockNietzscheDBAdapter) Setup(ctx context.Context, memories []SyntheticMemory) error {
 	a.memories = memories
 	a.embeddings = make(map[string][]float32)
 
@@ -135,7 +135,7 @@ func (a *mockQdrantAdapter) Setup(ctx context.Context, memories []SyntheticMemor
 	return nil
 }
 
-func (a *mockQdrantAdapter) Search(ctx context.Context, query string, k int) ([]RetrievedItem, error) {
+func (a *mockNietzscheDBAdapter) Search(ctx context.Context, query string, k int) ([]RetrievedItem, error) {
 	time.Sleep(a.latency) // simular latência gRPC
 
 	queryEmbed := fakeEmbed(query)
@@ -174,7 +174,7 @@ func (a *mockQdrantAdapter) Search(ctx context.Context, query string, k int) ([]
 	return items, nil
 }
 
-func (a *mockQdrantAdapter) Cleanup(ctx context.Context) error { return nil }
+func (a *mockNietzscheDBAdapter) Cleanup(ctx context.Context) error { return nil }
 
 // mockNietzscheAdapter simula NietzscheDB com busca híbrida (keyword + decay temporal)
 type mockNietzscheAdapter struct {
@@ -352,8 +352,8 @@ func TestTriDBBenchmark_Mock(t *testing.T) {
 	ctx := context.Background()
 
 	adapters := []BackendAdapter{
-		&mockNeo4jAdapter{latency: 2 * time.Millisecond},
-		&mockQdrantAdapter{latency: 1 * time.Millisecond},
+		&mockNietzscheDBAdapter{latency: 2 * time.Millisecond},
+		&mockNietzscheDBAdapter{latency: 1 * time.Millisecond},
 		&mockNietzscheAdapter{latency: 3 * time.Millisecond},
 	}
 
@@ -386,8 +386,8 @@ func TestTriDBBenchmark_DetailedComparison(t *testing.T) {
 	ctx := context.Background()
 
 	adapters := []BackendAdapter{
-		&mockNeo4jAdapter{latency: 2 * time.Millisecond},
-		&mockQdrantAdapter{latency: 1 * time.Millisecond},
+		&mockNietzscheDBAdapter{latency: 2 * time.Millisecond},
+		&mockNietzscheDBAdapter{latency: 1 * time.Millisecond},
 		&mockNietzscheAdapter{latency: 3 * time.Millisecond},
 	}
 
@@ -395,7 +395,7 @@ func TestTriDBBenchmark_DetailedComparison(t *testing.T) {
 	require.NoError(t, err)
 
 	// Cada backend deve ter métricas por tipo
-	for _, backend := range []BackendType{BackendNeo4j, BackendQdrant, BackendNietzsche} {
+	for _, backend := range []BackendType{BackendNietzscheDB, BackendNietzscheDB, BackendNietzsche} {
 		r := report.Results[backend]
 		assert.NotEmpty(t, r.ByType, "%s should have per-type metrics", backend)
 
@@ -417,8 +417,8 @@ func TestTriDBBenchmark_LatencyComparison(t *testing.T) {
 	// Usar latência pequena para garantir medição >0 mesmo no Windows
 	// (timer resolution ~1ms no Windows, ~100ns no Linux)
 	adapters := []BackendAdapter{
-		&mockNeo4jAdapter{latency: 100 * time.Microsecond},
-		&mockQdrantAdapter{latency: 100 * time.Microsecond},
+		&mockNietzscheDBAdapter{latency: 100 * time.Microsecond},
+		&mockNietzscheDBAdapter{latency: 100 * time.Microsecond},
 		&mockNietzscheAdapter{latency: 100 * time.Microsecond},
 	}
 
@@ -426,7 +426,7 @@ func TestTriDBBenchmark_LatencyComparison(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verificar que todas as latências foram medidas corretamente
-	for _, backend := range []BackendType{BackendNeo4j, BackendQdrant, BackendNietzsche} {
+	for _, backend := range []BackendType{BackendNietzscheDB, BackendNietzscheDB, BackendNietzsche} {
 		r := report.Results[backend]
 		// Com 100µs de sleep, P50 deve ser >= 100µs
 		assert.GreaterOrEqual(t, r.Latency.P50, 100*time.Microsecond,
@@ -447,22 +447,22 @@ func TestTriDBBenchmark_UnavailableBackend(t *testing.T) {
 	ctx := context.Background()
 
 	adapters := []BackendAdapter{
-		&mockNeo4jAdapter{latency: 1 * time.Millisecond},
-		&failingAdapter{name: BackendQdrant},
+		&mockNietzscheDBAdapter{latency: 1 * time.Millisecond},
+		&failingAdapter{name: BackendNietzscheDB},
 		&mockNietzscheAdapter{latency: 1 * time.Millisecond},
 	}
 
 	report, err := RunTriDBBenchmark(ctx, adapters)
 	require.NoError(t, err)
 
-	assert.True(t, report.Results[BackendNeo4j].Available)
-	assert.False(t, report.Results[BackendQdrant].Available)
+	assert.True(t, report.Results[BackendNietzscheDB].Available)
+	assert.False(t, report.Results[BackendNietzscheDB].Available)
 	assert.True(t, report.Results[BackendNietzsche].Available)
-	assert.Contains(t, report.Results[BackendQdrant].Error, "setup failed")
+	assert.Contains(t, report.Results[BackendNietzscheDB].Error, "setup failed")
 
-	// Ranking deve ter Qdrant com score 0
+	// Ranking deve ter NietzscheDB com score 0
 	for _, r := range report.Ranking {
-		if r.Backend == BackendQdrant {
+		if r.Backend == BackendNietzscheDB {
 			assert.Equal(t, 0.0, r.CompositeScore)
 		}
 	}
@@ -471,12 +471,12 @@ func TestTriDBBenchmark_UnavailableBackend(t *testing.T) {
 // TestTriDBRanking verifica cálculo de ranking
 func TestTriDBRanking(t *testing.T) {
 	results := map[BackendType]*BackendResult{
-		BackendNeo4j: {
+		BackendNietzscheDB: {
 			Available: true,
 			Metrics:   GlobalMetrics{RecallAt5: 0.6, RecallAt10: 0.75, MRR: 0.5},
 			Latency:   LatencyStats{P50: 5 * time.Millisecond},
 		},
-		BackendQdrant: {
+		BackendNietzscheDB: {
 			Available: true,
 			Metrics:   GlobalMetrics{RecallAt5: 0.8, RecallAt10: 0.9, MRR: 0.7},
 			Latency:   LatencyStats{P50: 2 * time.Millisecond},
@@ -503,28 +503,28 @@ func TestTriDBRanking(t *testing.T) {
 }
 
 // ============================================================================
-// BENCHMARK INTEGRATION TEST (requer Neo4j, Qdrant, NietzscheDB rodando)
+// BENCHMARK INTEGRATION TEST (requer NietzscheDB, NietzscheDB, NietzscheDB rodando)
 // ============================================================================
 
 // TestTriDBBenchmark_Integration executa contra backends reais
 // Pule com: go test -run TestTriDBBenchmark_Integration -tags integration
 func TestTriDBBenchmark_Integration(t *testing.T) {
 	// Só roda se variáveis de ambiente estiverem setadas
-	neo4jURI := os.Getenv("NEO4J_URI")
-	qdrantHost := os.Getenv("QDRANT_HOST")
+	NietzscheDBURI := os.Getenv("NietzscheDB_URI")
+	NietzscheDBHost := os.Getenv("NietzscheDB_HOST")
 	nietzscheURL := os.Getenv("NIETZSCHE_URL")
 
-	if neo4jURI == "" && qdrantHost == "" && nietzscheURL == "" {
-		t.Skip("Skipping integration test: set NEO4J_URI, QDRANT_HOST, NIETZSCHE_URL to run")
+	if NietzscheDBURI == "" && NietzscheDBHost == "" && nietzscheURL == "" {
+		t.Skip("Skipping integration test: set NietzscheDB_URI, NietzscheDB_HOST, NIETZSCHE_URL to run")
 	}
 
-	t.Logf("Integration test com: Neo4j=%s, Qdrant=%s, NietzscheDB=%s",
-		neo4jURI, qdrantHost, nietzscheURL)
+	t.Logf("Integration test com: NietzscheDB=%s, NietzscheDB=%s, NietzscheDB=%s",
+		NietzscheDBURI, NietzscheDBHost, nietzscheURL)
 
 	// TODO: Instanciar adapters reais aqui quando infra estiver disponível
 	// adapters := []BackendAdapter{}
-	// if neo4jURI != "" { adapters = append(adapters, NewNeo4jBenchAdapter(neo4jURI, user, pass)) }
-	// if qdrantHost != "" { adapters = append(adapters, NewQdrantBenchAdapter(qdrantHost, port)) }
+	// if NietzscheDBURI != "" { adapters = append(adapters, NewNietzscheDBBenchAdapter(NietzscheDBURI, user, pass)) }
+	// if NietzscheDBHost != "" { adapters = append(adapters, NewNietzscheDBBenchAdapter(NietzscheDBHost, port)) }
 	// if nietzscheURL != "" { adapters = append(adapters, NewNietzscheBenchAdapter(nietzscheURL)) }
 	// report, err := RunTriDBBenchmark(ctx, adapters)
 
@@ -535,8 +535,8 @@ func TestTriDBBenchmark_Integration(t *testing.T) {
 // GO BENCHMARKS (performance measurement)
 // ============================================================================
 
-func BenchmarkNeo4jSearch(b *testing.B) {
-	adapter := &mockNeo4jAdapter{latency: 0}
+func BenchmarkNietzscheDBSearch(b *testing.B) {
+	adapter := &mockNietzscheDBAdapter{latency: 0}
 	memories, queries := GenerateSyntheticDataset()
 	ctx := context.Background()
 	_ = adapter.Setup(ctx, memories)
@@ -548,8 +548,8 @@ func BenchmarkNeo4jSearch(b *testing.B) {
 	}
 }
 
-func BenchmarkQdrantSearch(b *testing.B) {
-	adapter := &mockQdrantAdapter{latency: 0}
+func BenchmarkNietzscheDBSearch(b *testing.B) {
+	adapter := &mockNietzscheDBAdapter{latency: 0}
 	memories, queries := GenerateSyntheticDataset()
 	ctx := context.Background()
 	_ = adapter.Setup(ctx, memories)
@@ -576,8 +576,8 @@ func BenchmarkNietzscheSearch(b *testing.B) {
 
 func BenchmarkTriDBFull(b *testing.B) {
 	adapters := []BackendAdapter{
-		&mockNeo4jAdapter{latency: 0},
-		&mockQdrantAdapter{latency: 0},
+		&mockNietzscheDBAdapter{latency: 0},
+		&mockNietzscheDBAdapter{latency: 0},
 		&mockNietzscheAdapter{latency: 0},
 	}
 	ctx := context.Background()

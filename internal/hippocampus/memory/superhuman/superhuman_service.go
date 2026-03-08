@@ -45,6 +45,13 @@ type SuperhumanMemoryService struct {
 
 // NewSuperhumanMemoryService creates the orchestrator service
 func NewSuperhumanMemoryService(db *sql.DB) *SuperhumanMemoryService {
+	if db == nil {
+		log.Printf("⚠️ [SUPERHUMAN] NietzscheDB unavailable — running in degraded mode")
+		svc := &SuperhumanMemoryService{}
+		svc.compilePatterns()
+		return svc
+	}
+
 	svc := &SuperhumanMemoryService{
 		db:            db,
 		enneagram:     NewEnneagramService(db),
@@ -123,8 +130,17 @@ func compilePatterns(patterns []string) []*regexp.Regexp {
 func (s *SuperhumanMemoryService) ProcessMemory(ctx context.Context, idosoID int64, memoryID int64, text string, timestamp time.Time, metadata map[string]interface{}) error {
 	log.Printf("🧠 [SUPERHUMAN] Processing memory for patient %d", idosoID)
 
+	// Guard: degraded mode (no DB) — skip all sub-service processing
+	if s.db == nil {
+		log.Printf("⚠️ [SUPERHUMAN] Degraded mode — skipping full memory processing for patient %d", idosoID)
+		return nil
+	}
+
 	// 1. Enneagram Detection
 	go func() {
+		if s.enneagram == nil {
+			return
+		}
 		if _, err := s.enneagram.AnalyzeText(ctx, idosoID, text, memoryID); err != nil {
 			log.Printf("⚠️ [ENNEAGRAM] Error: %v", err)
 		}
@@ -132,6 +148,9 @@ func (s *SuperhumanMemoryService) ProcessMemory(ctx context.Context, idosoID int
 
 	// 2. Self-Core (Identity Memory)
 	go func() {
+		if s.selfCore == nil {
+			return
+		}
 		if err := s.selfCore.ProcessText(ctx, idosoID, text, timestamp); err != nil {
 			log.Printf("⚠️ [SELF_CORE] Error: %v", err)
 		}
@@ -196,34 +215,36 @@ func (s *SuperhumanMemoryService) ProcessMemory(ctx context.Context, idosoID int
 	}()
 
 	// 11. Deep Memory - Persistent Memory (Trauma Detection)
-	go func() {
-		topics := s.extractTopics(text)
-		for _, topic := range topics {
-			// Detect avoidance patterns
-			if err := s.deepMemory.DetectAvoidance(ctx, idosoID, text, topic, timestamp); err != nil {
-				log.Printf("⚠️ [PERSISTENT] Avoidance error: %v", err)
+	if s.deepMemory != nil {
+		go func() {
+			topics := s.extractTopics(text)
+			for _, topic := range topics {
+				// Detect avoidance patterns
+				if err := s.deepMemory.DetectAvoidance(ctx, idosoID, text, topic, timestamp); err != nil {
+					log.Printf("⚠️ [PERSISTENT] Avoidance error: %v", err)
+				}
 			}
-		}
-		// Detect returns to traumatic topics
-		if err := s.deepMemory.DetectReturn(ctx, idosoID, text, timestamp); err != nil {
-			log.Printf("⚠️ [PERSISTENT] Return error: %v", err)
-		}
-	}()
+			// Detect returns to traumatic topics
+			if err := s.deepMemory.DetectReturn(ctx, idosoID, text, timestamp); err != nil {
+				log.Printf("⚠️ [PERSISTENT] Return error: %v", err)
+			}
+		}()
 
-	// 12. Deep Memory - Body Memory (Somatic)
-	go func() {
-		topics := s.extractTopics(text)
-		if err := s.deepMemory.DetectBodySymptom(ctx, idosoID, text, topics, timestamp); err != nil {
-			log.Printf("⚠️ [BODY_MEMORY] Error: %v", err)
-		}
-	}()
+		// 12. Deep Memory - Body Memory (Somatic)
+		go func() {
+			topics := s.extractTopics(text)
+			if err := s.deepMemory.DetectBodySymptom(ctx, idosoID, text, topics, timestamp); err != nil {
+				log.Printf("⚠️ [BODY_MEMORY] Error: %v", err)
+			}
+		}()
 
-	// 13. Deep Memory - Shared Memory (Commemoration)
-	go func() {
-		if err := s.deepMemory.DetectSharingDesire(ctx, idosoID, text, timestamp); err != nil {
-			log.Printf("⚠️ [SHARED_MEMORY] Error: %v", err)
-		}
-	}()
+		// 13. Deep Memory - Shared Memory (Commemoration)
+		go func() {
+			if err := s.deepMemory.DetectSharingDesire(ctx, idosoID, text, timestamp); err != nil {
+				log.Printf("⚠️ [SHARED_MEMORY] Error: %v", err)
+			}
+		}()
+	}
 
 	// 14. Life Markers Detection
 	go func() {
@@ -238,6 +259,9 @@ func (s *SuperhumanMemoryService) ProcessMemory(ctx context.Context, idosoID int
 
 	// 15. Record Interaction & Update Relationship Phase
 	go func() {
+		if s.consciousness == nil {
+			return
+		}
 		if phase, err := s.consciousness.RecordInteraction(ctx, idosoID); err != nil {
 			log.Printf("⚠️ [CONSCIOUSNESS] Interaction error: %v", err)
 		} else {
@@ -247,6 +271,9 @@ func (s *SuperhumanMemoryService) ProcessMemory(ctx context.Context, idosoID int
 
 	// 16. Update Rapport (based on interaction quality)
 	go func() {
+		if s.consciousness == nil {
+			return
+		}
 		// Detect positive/negative interaction
 		eventType, delta := s.analyzeInteractionSentiment(text)
 		if err := s.consciousness.RecordRapportEvent(ctx, idosoID, eventType, text[:min(100, len(text))], delta); err != nil {
@@ -259,68 +286,74 @@ func (s *SuperhumanMemoryService) ProcessMemory(ctx context.Context, idosoID int
 		s.detectBehavioralCycles(ctx, idosoID, text, timestamp)
 	}()
 
-	// 18. Add Empathic Load (based on emotional content)
-	go func() {
-		emotionalWeight := s.calculateEmotionalWeight(text)
-		eventType := "normal"
-		if emotionalWeight > 0.7 {
-			eventType = "heavy_memory"
-		} else if emotionalWeight > 0.9 {
-			eventType = "trauma"
-		}
-		if _, err := s.consciousness.AddEmpathicLoad(ctx, idosoID, eventType, emotionalWeight); err != nil {
-			log.Printf("⚠️ [EMPATHIC_LOAD] Error: %v", err)
-		}
-	}()
-
-	// 19. Update Emotional State & Mode
-	go func() {
-		emotionalState, crisisLevel, receptivity := s.detectEmotionalState(text, metadata)
-		if mode, err := s.consciousness.UpdateEmotionalState(ctx, idosoID, emotionalState, crisisLevel, receptivity); err != nil {
-			log.Printf("⚠️ [MODE] Error: %v", err)
-		} else {
-			log.Printf("🎭 [MODE] Patient %d mode: %s (crisis: %.2f, receptivity: %.2f)",
-				idosoID, mode, crisisLevel, receptivity)
-		}
-	}()
-
-	// 20. Register Memory Gravity
-	go func() {
-		valence, arousal := s.calculateValenceArousal(text)
-		if valence < -0.5 || arousal > 0.7 {
-			// Heavy memory - register gravity
-			if err := s.consciousness.RegisterMemoryGravity(ctx, idosoID, memoryID, "episode",
-				text[:min(200, len(text))], valence, arousal); err != nil {
-				log.Printf("⚠️ [GRAVITY] Error: %v", err)
+	// 18-20: Consciousness systems (empathic load, emotional state, memory gravity)
+	if s.consciousness != nil {
+		// 18. Add Empathic Load (based on emotional content)
+		go func() {
+			emotionalWeight := s.calculateEmotionalWeight(text)
+			eventType := "normal"
+			if emotionalWeight > 0.7 {
+				eventType = "heavy_memory"
+			} else if emotionalWeight > 0.9 {
+				eventType = "trauma"
 			}
-		}
-	}()
+			if _, err := s.consciousness.AddEmpathicLoad(ctx, idosoID, eventType, emotionalWeight); err != nil {
+				log.Printf("⚠️ [EMPATHIC_LOAD] Error: %v", err)
+			}
+		}()
+
+		// 19. Update Emotional State & Mode
+		go func() {
+			emotionalState, crisisLevel, receptivity := s.detectEmotionalState(text, metadata)
+			if mode, err := s.consciousness.UpdateEmotionalState(ctx, idosoID, emotionalState, crisisLevel, receptivity); err != nil {
+				log.Printf("⚠️ [MODE] Error: %v", err)
+			} else {
+				log.Printf("🎭 [MODE] Patient %d mode: %s (crisis: %.2f, receptivity: %.2f)",
+					idosoID, mode, crisisLevel, receptivity)
+			}
+		}()
+
+		// 20. Register Memory Gravity
+		go func() {
+			valence, arousal := s.calculateValenceArousal(text)
+			if valence < -0.5 || arousal > 0.7 {
+				// Heavy memory - register gravity
+				if err := s.consciousness.RegisterMemoryGravity(ctx, idosoID, memoryID, "episode",
+					text[:min(200, len(text))], valence, arousal); err != nil {
+					log.Printf("⚠️ [GRAVITY] Error: %v", err)
+				}
+			}
+		}()
+	}
 
 	// =========================================
 	// CRITICAL MEMORY SYSTEMS (memoria-critica.md)
 	// =========================================
 
-	// 21. Apply Temporal Decay (memories fade over time)
-	go func() {
-		if _, err := s.critical.ApplyTemporalDecay(ctx, idosoID); err != nil {
-			log.Printf("⚠️ [DECAY] Error: %v", err)
-		}
-	}()
+	// 21-23: Critical memory systems (decay, clustering)
+	if s.critical != nil {
+		// 21. Apply Temporal Decay (memories fade over time)
+		go func() {
+			if _, err := s.critical.ApplyTemporalDecay(ctx, idosoID); err != nil {
+				log.Printf("⚠️ [DECAY] Error: %v", err)
+			}
+		}()
 
-	// 22. Cluster Similar Memories (abstraction)
-	go func() {
-		if err := s.critical.ClusterSimilarMemories(ctx, idosoID); err != nil {
-			log.Printf("⚠️ [CLUSTER] Error: %v", err)
-		}
-	}()
+		// 22. Cluster Similar Memories (abstraction)
+		go func() {
+			if err := s.critical.ClusterSimilarMemories(ctx, idosoID); err != nil {
+				log.Printf("⚠️ [CLUSTER] Error: %v", err)
+			}
+		}()
 
-	// 23. Auto-cluster by detected topics
-	go func() {
-		topics := s.extractTopics(text)
-		for _, topic := range topics {
-			s.critical.CreateOrUpdateCluster(ctx, idosoID, topic, "topic")
-		}
-	}()
+		// 23. Auto-cluster by detected topics
+		go func() {
+			topics := s.extractTopics(text)
+			for _, topic := range topics {
+				s.critical.CreateOrUpdateCluster(ctx, idosoID, topic, "topic")
+			}
+		}()
+	}
 
 	return nil
 }

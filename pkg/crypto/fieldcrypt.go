@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Package crypto provides AES-256-GCM field-level encryption for LGPD Art. 46 compliance.
-// Sensitive fields (CPF, nome, telefone, clinical data) are encrypted at rest in PostgreSQL.
+// Sensitive fields (CPF, nome, telefone, clinical data) are encrypted at rest in NietzscheDB.
 package crypto
 
 import (

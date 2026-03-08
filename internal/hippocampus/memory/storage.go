@@ -52,6 +52,9 @@ type MemoryStore struct {
 // NewMemoryStore cria um novo gerenciador de memórias
 // graphStore é opcional - se nil, apenas Postgres será usado
 func NewMemoryStore(db *sql.DB, graphStore *GraphStore, vectorAdapter *nietzscheInfra.VectorAdapter) *MemoryStore {
+	if db == nil {
+		log.Printf("⚠️ [STORAGE] NietzscheDB unavailable — running in degraded mode (NietzscheDB only)")
+	}
 	return &MemoryStore{
 		db:            db,
 		graphStore:    graphStore,
@@ -62,35 +65,40 @@ func NewMemoryStore(db *sql.DB, graphStore *GraphStore, vectorAdapter *nietzsche
 // Store salva uma nova memória no banco
 // ✅ CORREÇÃO P5: Agora salva no Postgres E NietzscheDB graph
 func (m *MemoryStore) Store(ctx context.Context, memory *Memory) error {
-	query := `
-		INSERT INTO episodic_memories 
-		(idoso_id, speaker, content, emotion, importance, topics, session_id, call_history_id, event_date, is_atomic)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		RETURNING id, timestamp
-	`
-
 	// 1. ✅ Salvar no Postgres (Sem vetor)
-	err := m.db.QueryRowContext(
-		ctx,
-		query,
-		memory.IdosoID,
-		memory.Speaker,
-		memory.Content,
-		memory.Emotion,
-		memory.Importance,
-		pqArray(memory.Topics),
-		memory.SessionID,
-		memory.CallHistoryID,
-		memory.EventDate,
-		memory.IsAtomic,
-	).Scan(&memory.ID, &memory.Timestamp)
+	if m.db != nil {
+		query := `
+			INSERT INTO episodic_memories
+			(idoso_id, speaker, content, emotion, importance, topics, session_id, call_history_id, event_date, is_atomic)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			RETURNING id, timestamp
+		`
 
-	if err != nil {
-		return fmt.Errorf("postgres save failed: %w", err)
+		err := m.db.QueryRowContext(
+			ctx,
+			query,
+			memory.IdosoID,
+			memory.Speaker,
+			memory.Content,
+			memory.Emotion,
+			memory.Importance,
+			pqArray(memory.Topics),
+			memory.SessionID,
+			memory.CallHistoryID,
+			memory.EventDate,
+			memory.IsAtomic,
+		).Scan(&memory.ID, &memory.Timestamp)
+
+		if err != nil {
+			return fmt.Errorf("postgres save failed: %w", err)
+		}
+
+		log.Printf("✅ [STORAGE] Memória salva no Postgres: ID=%d, idoso=%d, speaker=%s",
+			memory.ID, memory.IdosoID, memory.Speaker)
+	} else {
+		log.Printf("⚠️ [STORAGE] NietzscheDB unavailable — skipping Postgres save for memory")
+		memory.Timestamp = time.Now()
 	}
-
-	log.Printf("✅ [STORAGE] Memória salva no Postgres: ID=%d, idoso=%d, speaker=%s",
-		memory.ID, memory.IdosoID, memory.Speaker)
 
 	// 2. ✅ Salvar relações no NietzscheDB graph
 	if m.graphStore != nil {
@@ -165,6 +173,10 @@ func (m *MemoryStore) GetByID(ctx context.Context, id int64) (*Memory, error) {
 	}
 
 	// 2. Fallback para Postgres
+	if m.db == nil {
+		return nil, fmt.Errorf("memory %d not found (NietzscheDB unavailable)", id)
+	}
+
 	query := `
 		SELECT id, idoso_id, timestamp, speaker, content, emotion,
 		       importance, topics, session_id, call_history_id, event_date, is_atomic
@@ -222,6 +234,10 @@ func (m *MemoryStore) GetRecent(ctx context.Context, idosoID int64, limit int) (
 	}
 
 	// 2. Fallback para Postgres
+	if m.db == nil {
+		return nil, fmt.Errorf("no recent memories (NietzscheDB unavailable)")
+	}
+
 	query := `
 		SELECT id, idoso_id, timestamp, speaker, content, emotion,
 		       importance, topics, session_id, call_history_id, event_date, is_atomic
@@ -269,6 +285,9 @@ func isCreator(cpf string) bool {
 //   - int64: número de memórias deletadas
 //   - error: ErrUnauthorized se não for o criador
 func (m *MemoryStore) DeleteOld(ctx context.Context, requesterCPF string, idosoID int64, olderThanDays int, minImportance float64) (int64, error) {
+	if m.db == nil {
+		return 0, fmt.Errorf("NietzscheDB unavailable")
+	}
 	// ═══════════════════════════════════════════════════════════════════════
 	// VERIFICAÇÃO DE AUTORIZAÇÃO - APENAS O CRIADOR PODE USAR ESTA FUNÇÃO
 	// ═══════════════════════════════════════════════════════════════════════
@@ -329,6 +348,9 @@ func (m *MemoryStore) DeleteOld(ctx context.Context, requesterCPF string, idosoI
 //   - Testes de desenvolvimento
 //   - Solicitação explícita de "direito ao esquecimento" (LGPD Art. 18, VI)
 func (m *MemoryStore) DeleteAllMemories(ctx context.Context, requesterCPF string, idosoID int64) (int64, error) {
+	if m.db == nil {
+		return 0, fmt.Errorf("NietzscheDB unavailable")
+	}
 	if !isCreator(requesterCPF) {
 		log.Printf("🚫 [SECURITY] Tentativa não autorizada de DeleteAllMemories por CPF: %s", requesterCPF)
 		return 0, ErrUnauthorized
@@ -354,6 +376,9 @@ func (m *MemoryStore) DeleteAllMemories(ctx context.Context, requesterCPF string
 //
 // ⚠️  FUNÇÃO RESTRITA - Apenas Jose R F Junior (CPF: 64525430249) pode usar
 func (m *MemoryStore) GetMemoryStats(ctx context.Context, requesterCPF string) (map[string]interface{}, error) {
+	if m.db == nil {
+		return nil, fmt.Errorf("NietzscheDB unavailable")
+	}
 	if !isCreator(requesterCPF) {
 		return nil, ErrUnauthorized
 	}
@@ -445,7 +470,7 @@ func (m *MemoryStore) scanMemories(rows *sql.Rows) ([]*Memory, error) {
 }
 
 // memoryFromPayload constructs a Memory from a NietzscheDB node content payload.
-// This eliminates the need to hydrate from PostgreSQL for data that's already
+// This eliminates the need to hydrate from NietzscheDB for data that's already
 // stored in NietzscheDB (see Store() step 3 — vector + payload save).
 func memoryFromPayload(payload map[string]interface{}) *Memory {
 	if payload == nil {
@@ -540,7 +565,7 @@ func memoryFromPayload(payload map[string]interface{}) *Memory {
 	return mem
 }
 
-// Helpers para conversão de tipos PostgreSQL
+// Helpers para conversão de tipos NietzscheDB
 
 func vectorToPostgres(vec []float32) string {
 	if len(vec) == 0 {
@@ -616,6 +641,9 @@ func parsePostgresArray(s string) []string {
 
 // GetArchivalCandidates localiza memórias que podem ser movidas para o Cold Path
 func (m *MemoryStore) GetArchivalCandidates(ctx context.Context, idosoID int64, daysOld int, minImportance float64) ([]*Memory, error) {
+	if m.db == nil {
+		return nil, fmt.Errorf("NietzscheDB unavailable")
+	}
 	query := `
 		SELECT id, idoso_id, timestamp, speaker, content, emotion, importance, topics, session_id, call_history_id, event_date, is_atomic, is_archived
 		FROM episodic_memories
@@ -654,6 +682,9 @@ func (m *MemoryStore) GetArchivalCandidates(ctx context.Context, idosoID int64, 
 
 // MarkAsArchived marca uma memória como arquivada e limpa o conteúdo pesado no buffer local
 func (m *MemoryStore) MarkAsArchived(ctx context.Context, id int64) error {
+	if m.db == nil {
+		return fmt.Errorf("NietzscheDB unavailable")
+	}
 	query := `UPDATE episodic_memories SET is_archived = true WHERE id = $1`
 	_, err := m.db.ExecContext(ctx, query, id)
 	return err
