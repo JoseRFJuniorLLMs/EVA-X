@@ -127,8 +127,10 @@ func (c *Client) SendSetup(instructions string, voiceSettings map[string]interfa
 					},
 					"language_code": voiceSettings["languageCode"],
 				},
-
 				"temperature": 0.6,
+			},
+			"thinking_config": map[string]interface{}{
+				"thinking_budget": 0,
 			},
 			"system_instruction": map[string]interface{}{
 				"parts": func() []interface{} {
