@@ -10,8 +10,9 @@ import (
 	gemini "eva/internal/cortex/gemini"
 	"eva/internal/cortex/lacan"
 	"eva/internal/cortex/personality"
-	"eva/internal/cortex/voice/speaker"
-	"eva/internal/swarm"
+	// MODO DIAGNÓSTICO: imports desabilitados temporariamente
+	// "eva/internal/cortex/voice/speaker"
+	// "eva/internal/swarm"
 	"fmt"
 	"net/http"
 	"strings"
@@ -50,6 +51,8 @@ var browserWSUpgrader = gws.Upgrader{
 			"https://eva-ia.org",
 			"https://www.eva-ia.org",
 			"https://app.eva-ia.org",
+			"https://136.111.0.47",
+			"http://136.111.0.47",
 			"http://localhost:3000",
 			"http://localhost:8080",
 		}
@@ -451,9 +454,7 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 				}
 
 				if interrupted, ok := serverContent["interrupted"].(bool); ok && interrupted {
-					writeMu.Lock()
-					conn.WriteJSON(browserMessage{Type: "status", Text: "interrupted"})
-					writeMu.Unlock()
+					// MODO DIAGNÓSTICO: NÃO envia status ao browser (evita contencao writeMu com audio)
 					responseAccumMu.Lock()
 					responseAccum.Reset()
 					responseAccumMu.Unlock()
@@ -461,9 +462,7 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 				}
 
 				if turnComplete, ok := serverContent["turnComplete"].(bool); ok && turnComplete {
-					writeMu.Lock()
-					conn.WriteJSON(browserMessage{Type: "status", Text: "turn_complete"})
-					writeMu.Unlock()
+					// MODO DIAGNÓSTICO: NÃO envia turn_complete ao browser (evita contencao writeMu)
 					responseAccumMu.Lock()
 					if s.evaMemory != nil && responseAccum.Len() > 0 {
 						go func(t string) {
@@ -477,11 +476,9 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 					continue
 				}
 
+				// MODO DIAGNÓSTICO: inputAudioTranscription — só salva memória, SEM enviar ao browser, SEM tools
 				if inputTrans, ok := serverContent["inputAudioTranscription"].(map[string]interface{}); ok {
 					if text, ok := inputTrans["text"].(string); ok && text != "" {
-						writeMu.Lock()
-						conn.WriteJSON(browserMessage{Type: "text", Text: text, Data: "user"})
-						writeMu.Unlock()
 						if s.evaMemory != nil {
 							go func(t string) {
 								storeCtx, storeCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -489,88 +486,12 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 								s.evaMemory.StoreTurn(storeCtx, sessionID, "user", t)
 							}(text)
 						}
-
-						// --- Tool Detection & Execution ---
-						if s.toolsClient != nil && s.toolsHandler != nil && idosoID > 0 {
-							go func(transcript string, patientID int64) {
-								toolCalls, err := s.toolsClient.AnalyzeTranscription(ctx, transcript, "user")
-								if err != nil {
-									log.Warn().Err(err).Msg("[TOOLS] Falha na analise de transcricao")
-									return
-								}
-								for _, tc := range toolCalls {
-									if tc.Name == "" || tc.Name == "none" {
-										continue
-									}
-									log.Info().Str("tool", tc.Name).Interface("args", tc.Args).Msg("[TOOLS] Tool detectada na fala")
-
-									result, err := s.toolsHandler.ExecuteTool(tc.Name, tc.Args, patientID)
-									if err != nil && strings.Contains(err.Error(), "ferramenta desconhecida") {
-										// Fallthrough: tool nao existe no handlers.go, tentar swarm orchestrator
-										if s.swarmOrchestrator != nil {
-											swarmCall := swarm.ToolCall{
-												Name:   tc.Name,
-												Args:   tc.Args,
-												UserID: patientID,
-											}
-											swarmResult, swarmErr := s.swarmOrchestrator.Route(ctx, swarmCall)
-											if swarmErr == nil && swarmResult != nil {
-												result = map[string]interface{}{
-													"success": swarmResult.Success,
-													"message": swarmResult.Message,
-												}
-												err = nil
-												log.Info().Str("tool", tc.Name).Msg("[SWARM] Tool executada via swarm orchestrator")
-											}
-										}
-									}
-									if err != nil {
-										log.Error().Err(err).Str("tool", tc.Name).Msg("[TOOLS] Erro ao executar tool")
-										continue
-									}
-
-									// Envia ao browser: ui_action para control_ui, tool_event para o resto
-								if isUI, _ := result["ui_action"].(bool); isUI {
-									uiPayload := map[string]interface{}{
-										"type":    "ui_action",
-										"action":  result["action"],
-										"target":  result["target"],
-										"mode":    result["mode"],
-										"url":     result["url"],
-										"message": result["message_ui"],
-									}
-									writeMu.Lock()
-									conn.WriteJSON(uiPayload)
-									writeMu.Unlock()
-									log.Info().Str("action", fmt.Sprint(result["action"])).Msg("[UI] ui_action enviado ao browser")
-								} else {
-									toolEventPayload := map[string]interface{}{
-										"type":      "tool_event",
-										"tool":      tc.Name,
-										"tool_data": result,
-										"status":    "success",
-									}
-									writeMu.Lock()
-									conn.WriteJSON(toolEventPayload)
-									writeMu.Unlock()
-									log.Info().Str("tool", tc.Name).Msg("[TOOLS] tool_event enviado ao browser")
-								}
-
-								// NOTA: NAO enviar SendText ao Gemini native-audio.
-								// O modelo gemini-2.5-flash-native-audio-preview nao suporta client_content
-								// (texto) durante sessao de audio — retorna close 1008 "policy violation".
-								log.Info().Str("tool", tc.Name).Msg("[TOOLS] Tool executada (resultado via WebSocket)")
-								}
-							}(text, idosoID)
-						}
 					}
 				}
 
+				// MODO DIAGNÓSTICO: outputAudioTranscription — só acumula texto, SEM enviar ao browser
 				if outputTrans, ok := serverContent["outputAudioTranscription"].(map[string]interface{}); ok {
 					if text, ok := outputTrans["text"].(string); ok && text != "" {
-						writeMu.Lock()
-						conn.WriteJSON(browserMessage{Type: "text", Text: text})
-						writeMu.Unlock()
 						responseAccumMu.Lock()
 						responseAccum.WriteString(text)
 						responseAccumMu.Unlock()
@@ -617,13 +538,14 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 
 	startReader(initialClient, 1)
 
-	// --- Speaker Recognition: register callback ---
+	// --- Speaker Recognition: DESABILITADO (MODO DIAGNÓSTICO — evita contencao writeMu) ---
 	if s.speakerSvc != nil {
-		s.speakerSvc.SetCallback(sessionID, func(sid string, msg speaker.SpeakerMessage) {
-			writeMu.Lock()
-			conn.WriteJSON(msg)
-			writeMu.Unlock()
-		})
+		// Callback desabilitado: não envia speaker info ao browser
+		// s.speakerSvc.SetCallback(sessionID, func(sid string, msg speaker.SpeakerMessage) {
+		// 	writeMu.Lock()
+		// 	conn.WriteJSON(msg)
+		// 	writeMu.Unlock()
+		// })
 		defer s.speakerSvc.RemoveSession(sessionID)
 	}
 
@@ -666,9 +588,10 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 				pcmData, err := base64.StdEncoding.DecodeString(msg.Data)
 				if err == nil {
 					client.SendAudio(pcmData)
-					if s.speakerSvc != nil {
-						go s.speakerSvc.ProcessAudioChunk(sessionID, clientCPF, pcmData)
-					}
+					// MODO DIAGNÓSTICO: speaker recognition desabilitado
+					// if s.speakerSvc != nil {
+					// 	go s.speakerSvc.ProcessAudioChunk(sessionID, clientCPF, pcmData)
+					// }
 				}
 			case "video":
 				jpegData, err := base64.StdEncoding.DecodeString(msg.Data)
