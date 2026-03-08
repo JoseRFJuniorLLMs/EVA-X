@@ -8,12 +8,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	gemini "eva/internal/cortex/gemini"
-	"eva/internal/cortex/lacan"
-	"eva/internal/cortex/personality"
-	// MODO DIAGNÓSTICO: imports desabilitados temporariamente
+	// MODO TESTE VOZ PURA: imports desabilitados
+	// "eva/internal/cortex/lacan"
+	// "eva/internal/cortex/personality"
 	// "eva/internal/cortex/voice/speaker"
 	// "eva/internal/swarm"
-	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -143,192 +142,11 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 
 	log.Info().Str("session", sessionID).Str("cpf", clientCPF).Bool("hasContext", configMsg.Text != "").Msg("[BROWSER] Config recebida do cliente")
 
-	// --- Enriquecimento de contexto ---
-	var idosoID int64
-
-	if clientCPF != "" && lacan.IsCreatorCPF(clientCPF) && s.db != nil {
-		log.Info().Str("session", sessionID).Msg("[BROWSER] === MODO CRIADOR ATIVADO ===")
-
-		// Setar idosoID do criador para que tools funcionem (gate requer idosoID > 0)
-		if idoso, err := s.db.GetIdosoByCPF(clientCPF); err == nil {
-			idosoID = idoso.ID
-		}
-
-		creatorSvc := personality.NewCreatorProfileService(s.db)
-		profile, err := creatorSvc.LoadCreatorProfile(ctx)
-		if err != nil {
-			log.Warn().Err(err).Msg("[BROWSER] Falha ao carregar perfil do criador")
-		} else {
-			clientContext = creatorSvc.GenerateSystemPrompt(profile)
-		}
-
-		debugMode := lacan.NewDebugMode(s.db)
-		clientContext += "\n" + debugMode.BuildDebugPromptSection(ctx)
-
-	} else if clientCPF != "" && s.db != nil {
-		idoso, err := s.db.GetIdosoByCPF(clientCPF)
-		if err != nil {
-			log.Warn().Err(err).Str("cpf", clientCPF).Msg("[BROWSER] Pessoa nao encontrada")
-		} else {
-			idosoID = idoso.ID
-			fullIdoso, err := s.db.GetIdoso(idoso.ID)
-			if err == nil && fullIdoso != nil {
-				clientContext += fmt.Sprintf("\n\nVoce esta conversando com %s (CPF: %s, nascido em %s). Use o nome dele/dela na conversa.",
-					fullIdoso.Nome, clientCPF, fullIdoso.DataNascimento.Format("02/01/2006"))
-				log.Info().Str("session", sessionID).Str("nome", fullIdoso.Nome).Int64("id", fullIdoso.ID).Msg("[BROWSER] Pessoa carregada")
-			}
-
-			if agendamentos, err := s.db.GetPendingAgendamentosByIdoso(idoso.ID, 20); err == nil && len(agendamentos) > 0 {
-				var medsInfo strings.Builder
-				medsInfo.WriteString("\n\n[MEDICAMENTOS E AGENDAMENTOS]")
-				for _, ag := range agendamentos {
-					medsInfo.WriteString(fmt.Sprintf("\n- %s: %s (Status: %s, Hora: %s)",
-						ag.Tipo, ag.DadosTarefa, ag.Status, ag.DataHoraAgendada.Format("02/01 15:04")))
-				}
-				clientContext += medsInfo.String()
-				log.Info().Str("session", sessionID).Int("count", len(agendamentos)).Msg("[BROWSER] Agendamentos carregados")
-			}
-		}
-	}
-
-	// --- Personalidade, memorias episodicas e sabedoria ---
-	if idosoID > 0 {
-		// #1 Personalidade: nivel de relacionamento, emocao, topicos
-		var dominantEmotion string
-		if s.personalityService != nil {
-			state, err := s.personalityService.GetState(ctx, idosoID)
-			if err == nil && state != nil {
-				dominantEmotion = state.DominantEmotion
-				clientContext += fmt.Sprintf("\n\n[RELACIONAMENTO] Nivel: %d/10, Conversas anteriores: %d, Emocao dominante: %s",
-					state.RelationshipLevel, state.ConversationCount, state.DominantEmotion)
-				if len(state.FavoriteTopics) > 0 {
-					clientContext += fmt.Sprintf(", Topicos favoritos: %s", strings.Join(state.FavoriteTopics, ", "))
-				}
-				log.Info().Str("session", sessionID).Int("level", state.RelationshipLevel).Str("emotion", state.DominantEmotion).Msg("[BROWSER] Personalidade carregada")
-			}
-		}
-
-		// #2 Memorias episodicas recentes
-		if s.memoryStore != nil {
-			recentMems, err := s.memoryStore.GetRecent(ctx, idosoID, 5)
-			if err == nil && len(recentMems) > 0 {
-				var memBuf strings.Builder
-				memBuf.WriteString("\n\n[MEMORIAS RECENTES]")
-				for _, m := range recentMems {
-					content := m.Content
-					if len(content) > 150 {
-						content = content[:150] + "..."
-					}
-					memBuf.WriteString(fmt.Sprintf("\n- [%s] %s: %s",
-						m.Timestamp.Format("02/01 15:04"), m.Speaker, content))
-				}
-				clientContext += memBuf.String()
-				log.Info().Str("session", sessionID).Int("count", len(recentMems)).Msg("[BROWSER] Memorias episodicas carregadas")
-			}
-		}
-
-		// #3 Sabedoria terapeutica (busca semantica por emocao)
-		if s.wisdomService != nil && dominantEmotion != "" && dominantEmotion != "neutro" {
-			wisdomCtx := s.wisdomService.GetWisdomContext(ctx, dominantEmotion, nil)
-			if wisdomCtx != "" {
-				clientContext += "\n\n[SABEDORIA TERAPEUTICA]\n" + wisdomCtx
-				log.Info().Str("session", sessionID).Str("emotion", dominantEmotion).Msg("[BROWSER] Sabedoria injetada")
-			}
-		}
-
-		// --- FASE 2+3+4: Inteligencia avancada (EVA livre, sem controladores) ---
-
-		// #4 FDPN: padrao de demanda lacaniano (a quem a pessoa dirige suas demandas)
-		if s.fdpnEngine != nil {
-			demandCtx := s.fdpnEngine.BuildGraphContext(ctx, idosoID)
-			if demandCtx != "" {
-				clientContext += "\n\n[PADRAO DE DEMANDA]\n" + demandCtx
-				log.Info().Str("session", sessionID).Msg("[BROWSER] FDPN context injetado")
-			}
-		}
-
-		// #5 Habitos: resumo diario (agua, medicamento, exercicio, sono)
-		if s.habitTracker != nil {
-			summary, err := s.habitTracker.GetDailySummary(ctx, idosoID)
-			if err == nil && summary != nil {
-				var habitBuf strings.Builder
-				habitBuf.WriteString("\n\n[HABITOS DO DIA]")
-				if habits, ok := summary["habits"].([]interface{}); ok {
-					for _, h := range habits {
-						if hm, ok := h.(map[string]interface{}); ok {
-							habitBuf.WriteString(fmt.Sprintf("\n- %v: %v", hm["name"], hm["status"]))
-						}
-					}
-				}
-				if streak, ok := summary["best_streak"]; ok {
-					habitBuf.WriteString(fmt.Sprintf("\n- Melhor sequencia: %v dias", streak))
-				}
-				clientContext += habitBuf.String()
-				log.Info().Str("session", sessionID).Msg("[BROWSER] Habitos injetados")
-			}
-		}
-
-		// #6 Spaced Repetition: memorias pendentes de revisao
-		if s.spacedRepetition != nil {
-			reviews, err := s.spacedRepetition.GetPendingReviews(ctx, idosoID, 5)
-			if err == nil && len(reviews) > 0 {
-				var revBuf strings.Builder
-				revBuf.WriteString("\n\n[MEMORIAS PARA REVISAR - reforce naturalmente na conversa]")
-				for _, r := range reviews {
-					revBuf.WriteString(fmt.Sprintf("\n- [%s] %s (gatilho: %s)",
-						r.Category, r.Content, r.Trigger))
-				}
-				clientContext += revBuf.String()
-				log.Info().Str("session", sessionID).Int("count", len(reviews)).Msg("[BROWSER] Revisoes pendentes injetadas")
-			}
-		}
-
-		// #7 Superhuman Memory: espelho psicologico profundo
-		if s.superhumanMemory != nil {
-			mirrors, err := s.superhumanMemory.GenerateComprehensiveMirror(ctx, idosoID)
-			if err == nil && len(mirrors) > 0 {
-				var mirrorBuf strings.Builder
-				mirrorBuf.WriteString("\n\n[PERFIL PSICOLOGICO - use como intuicao, NAO mencione diretamente]")
-				for _, m := range mirrors {
-					if m.Question != "" {
-						mirrorBuf.WriteString(fmt.Sprintf("\n- [%s] %s", m.Type, m.Question))
-					} else if len(m.DataPoints) > 0 {
-						mirrorBuf.WriteString(fmt.Sprintf("\n- [%s] %s", m.Type, m.DataPoints[0]))
-					}
-				}
-				clientContext += mirrorBuf.String()
-				log.Info().Str("session", sessionID).Int("insights", len(mirrors)).Msg("[BROWSER] Espelho psicologico injetado")
-			}
-		}
-
-		// #8 Conhecimento aprendido autonomamente (Scholar Agent)
-		if s.autonomousLearner != nil {
-			searchQuery := dominantEmotion
-			if searchQuery == "" || searchQuery == "neutro" {
-				searchQuery = "bem-estar saude mental"
-			}
-			learningCtx := s.autonomousLearner.GetLearningContext(ctx, searchQuery)
-			if learningCtx != "" {
-				clientContext += "\n\n[CONHECIMENTO APRENDIDO]\n" + learningCtx
-				log.Info().Str("session", sessionID).Msg("[BROWSER] Conhecimento aprendido injetado")
-			}
-		}
-	}
-
-	// --- Memoria meta-cognitiva (NietzscheDB) ---
+	// === MODO TESTE VOZ PURA ===
+	// Tudo desabilitado: sem contexto, sem memorias, sem tools, sem personalidade.
+	// Apenas audio Gemini <-> browser para isolar oscilacoes de voz.
 	var memories []string
-	if s.evaMemory != nil {
-		if err := s.evaMemory.StartSession(ctx, sessionID); err != nil {
-			log.Warn().Err(err).Msg("[BROWSER] Falha ao registrar sessao no NietzscheDB")
-		}
-		metaCognition, err := s.evaMemory.LoadMetaCognition(ctx)
-		if err != nil {
-			log.Warn().Err(err).Msg("[BROWSER] Falha ao carregar memoria meta-cognitiva")
-		} else if metaCognition != "" {
-			memories = []string{metaCognition}
-			log.Info().Str("session", sessionID).Msg("[BROWSER] Memoria meta-cognitiva injetada")
-		}
-	}
+	log.Info().Str("session", sessionID).Msg("[BROWSER] === MODO TESTE VOZ PURA === (sem contexto/memorias/tools)")
 
 	// --- setupGemini: cria e configura um novo client Gemini ---
 	// Captura clientContext e memories do escopo externo — sao imutaveis apos esta linha.
@@ -362,31 +180,7 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 	// --- Estado compartilhado entre goroutines ---
 	var writeMu sync.Mutex      // protege escritas no conn do browser
 
-	// --- Registrar browser listener para resultados assincronos de tools ---
-	// (deve vir apos writeMu para poder usar o mutex no callback)
-	if s.toolsHandler != nil && idosoID > 0 {
-		s.toolsHandler.RegisterBrowserListener(idosoID, func(msgType string, payload interface{}) {
-			toolData, _ := payload.(map[string]interface{})
-			if toolData == nil {
-				toolData = map[string]interface{}{"message": fmt.Sprintf("%v", payload)}
-			}
-			writeMu.Lock()
-			conn.WriteJSON(browserMessage{
-				Type:     "tool_event",
-				Tool:     msgType,
-				ToolData: toolData,
-				Status:   "success",
-			})
-			writeMu.Unlock()
-		})
-		defer s.toolsHandler.UnregisterBrowserListener(idosoID)
-
-		// Gmail Watcher: poll for new emails during this session
-		if s.gmailWatcher != nil {
-			s.gmailWatcher.StartWatching(idosoID)
-			defer s.gmailWatcher.StopWatching(idosoID)
-		}
-	}
+	// MODO TESTE VOZ PURA: tools, gmail watcher desabilitados
 	var geminiMu sync.RWMutex   // protege geminiRef
 	geminiRef := initialClient  // client Gemini ativo
 	var currentGen int64 = 1    // geracao atual (incrementada a cada reconexao)
