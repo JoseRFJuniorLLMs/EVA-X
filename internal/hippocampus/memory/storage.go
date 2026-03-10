@@ -11,6 +11,7 @@ import (
 
 	"eva/internal/brainstem/database"
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
+	retryPkg "eva/internal/brainstem/infrastructure/retry"
 	nietzsche "nietzsche-sdk"
 )
 
@@ -132,9 +133,12 @@ func (m *MemoryStore) Store(ctx context.Context, memory *Memory) error {
 			"call_history_id": memory.CallHistoryID,
 		}
 
-		err := m.vectorAdapter.Upsert(ctx, "memories", fmt.Sprintf("%d", memory.ID), memory.Embedding, payload)
+		// FASE 7 FIX: Retry vector upsert for transient NietzscheDB failures
+		err := retryPkg.Do(ctx, retryPkg.FastConfig(), func(ctx context.Context) error {
+			return m.vectorAdapter.Upsert(ctx, "memories", fmt.Sprintf("%d", memory.ID), memory.Embedding, payload)
+		})
 		if err != nil {
-			log.Printf("❌ [VECTOR] Falha ao salvar vetor para memória %d: %v", memory.ID, err)
+			log.Printf("❌ [VECTOR] Falha ao salvar vetor para memória %d após retries: %v", memory.ID, err)
 		} else {
 			log.Printf("✅ [VECTOR] Vetor salvo com sucesso: %d", memory.ID)
 

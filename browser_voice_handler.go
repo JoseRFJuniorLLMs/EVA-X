@@ -7,12 +7,11 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"eva/internal/cortex/brain"
 	gemini "eva/internal/cortex/gemini"
-	// MODO TESTE VOZ PURA: imports desabilitados
-	// "eva/internal/cortex/lacan"
-	// "eva/internal/cortex/personality"
-	// "eva/internal/cortex/voice/speaker"
-	// "eva/internal/swarm"
+	evaSelf "eva/internal/cortex/self"
+	"eva/internal/cortex/voice/speaker"
+	"eva/internal/tools"
 	"net/http"
 	"strings"
 	"sync"
@@ -117,6 +116,7 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 	defer cancel()
 
 	sessionID := "browser-" + time.Now().Format("20060102150405")
+	sessionStart := time.Now()
 
 	// --- Config inicial do cliente ---
 	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
@@ -142,14 +142,39 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 
 	log.Info().Str("session", sessionID).Str("cpf", clientCPF).Bool("hasContext", configMsg.Text != "").Msg("[BROWSER] Config recebida do cliente")
 
-	// === MODO TESTE VOZ PURA ===
-	// Tudo desabilitado: sem contexto, sem memorias, sem tools, sem personalidade.
-	// Apenas audio Gemini <-> browser para isolar oscilacoes de voz.
+	// === CARREGAR CONTEXTO E MEMORIAS ===
 	var memories []string
-	log.Info().Str("session", sessionID).Msg("[BROWSER] === MODO TESTE VOZ PURA === (sem contexto/memorias/tools)")
+
+	// 1. Iniciar sessao e carregar meta-cognicao (sessoes recentes, topicos, insights)
+	if s.evaMemory != nil {
+		s.evaMemory.StartSession(ctx, sessionID)
+		metaCognition, err := s.evaMemory.LoadMetaCognition(ctx)
+		if err == nil && metaCognition != "" {
+			memories = []string{metaCognition}
+			log.Info().Str("session", sessionID).Int("len", len(metaCognition)).Msg("[BROWSER] Meta-cognicao carregada")
+		} else if err != nil {
+			log.Warn().Err(err).Str("session", sessionID).Msg("[BROWSER] Erro ao carregar meta-cognicao")
+		}
+	}
+
+	// 2. Carregar identidade (personalidade, memorias core, capacidades)
+	if s.coreMemory != nil {
+		identityCtx, err := s.coreMemory.GetIdentityContext(ctx)
+		if err == nil && identityCtx != "" {
+			clientContext = identityCtx + "\n\n---\n\n" + clientContext
+			log.Info().Str("session", sessionID).Int("len", len(identityCtx)).Msg("[BROWSER] Identidade carregada")
+		} else if err != nil {
+			log.Warn().Err(err).Str("session", sessionID).Msg("[BROWSER] Erro ao carregar identidade")
+		}
+	}
+
+	log.Info().Str("session", sessionID).Int("memories", len(memories)).Bool("hasIdentity", s.coreMemory != nil).Msg("[BROWSER] Contexto carregado")
 
 	// --- setupGemini: cria e configura um novo client Gemini ---
 	// Captura clientContext e memories do escopo externo — sao imutaveis apos esta linha.
+	// Tool definitions para Gemini Function Calling (Swarm tools + built-in)
+	toolDefs := tools.GetToolDefinitions()
+
 	setupGemini := func() (*gemini.Client, error) {
 		client, err := gemini.NewClient(ctx, s.cfg)
 		if err != nil {
@@ -158,7 +183,7 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 		if err := client.SendSetup(
 			clientContext,
 			map[string]interface{}{"voiceName": "Aoede", "languageCode": "pt-BR"},
-			memories, "", nil,
+			memories, "", toolDefs,
 		); err != nil {
 			client.Close()
 			return nil, err
@@ -180,13 +205,17 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 	// --- Estado compartilhado entre goroutines ---
 	var writeMu sync.Mutex      // protege escritas no conn do browser
 
-	// MODO TESTE VOZ PURA: tools, gmail watcher desabilitados
 	var geminiMu sync.RWMutex   // protege geminiRef
 	geminiRef := initialClient  // client Gemini ativo
 	var currentGen int64 = 1    // geracao atual (incrementada a cada reconexao)
 	var reconnecting atomic.Bool // true enquanto reconexao em progresso
 	var responseAccum strings.Builder
 	var responseAccumMu sync.Mutex // protege responseAccum contra acessos concorrentes
+
+	// Transcript accumulation — necessario para CoreMemory.ProcessSessionEnd
+	var transcriptMu sync.Mutex
+	var transcriptAccum strings.Builder // transcript completo da sessao
+	var evaResponses []string           // respostas da EVA para CoreMemory
 
 	// sigChan recebe sinais das goroutines para o loop principal
 	// Buffer 4: captura sinais de goroutines mortas sem bloquear
@@ -221,13 +250,78 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 					continue
 				}
 
+				// Tool calls do Gemini Function Calling
+				if toolCall, ok := resp["toolCall"].(map[string]interface{}); ok {
+					if fcList, ok := toolCall["functionCalls"].([]interface{}); ok {
+						for _, f := range fcList {
+							fc, ok := f.(map[string]interface{})
+							if !ok {
+								continue
+							}
+							name, _ := fc["name"].(string)
+							args, _ := fc["args"].(map[string]interface{})
+							if name == "" {
+								continue
+							}
+							log.Info().Str("session", sessionID).Str("tool", name).Msg("[BROWSER] Tool call recebido do Gemini")
+
+							writeMu.Lock()
+							conn.WriteJSON(browserMessage{Type: "tool_event", Tool: name, Status: "executing"})
+							writeMu.Unlock()
+
+							go func(n string, a map[string]interface{}) {
+								defer func() {
+									if r := recover(); r != nil {
+										log.Error().Str("tool", n).Interface("panic", r).Msg("[BROWSER] Tool panic")
+										geminiMu.RLock()
+										c := geminiRef
+										geminiMu.RUnlock()
+										if c != nil {
+											c.SendToolResponse(n, map[string]interface{}{"error": "Internal error"})
+										}
+										writeMu.Lock()
+										conn.WriteJSON(browserMessage{Type: "tool_event", Tool: n, Status: "error", Text: "Internal error"})
+										writeMu.Unlock()
+									}
+								}()
+
+								result, execErr := s.toolsHandler.ExecuteTool(n, a, 0)
+								if execErr != nil {
+									log.Warn().Err(execErr).Str("tool", n).Msg("[BROWSER] Tool execution failed")
+									result = map[string]interface{}{"error": execErr.Error()}
+								}
+
+								geminiMu.RLock()
+								c := geminiRef
+								geminiMu.RUnlock()
+								if c != nil {
+									c.SendToolResponse(n, result)
+								}
+
+								status := "success"
+								if execErr != nil {
+									status = "error"
+								}
+								writeMu.Lock()
+								conn.WriteJSON(browserMessage{Type: "tool_event", Tool: n, ToolData: result, Status: status})
+								writeMu.Unlock()
+
+								log.Info().Str("tool", n).Str("status", status).Msg("[BROWSER] Tool call concluido")
+							}(name, args)
+						}
+					}
+					continue
+				}
+
 				serverContent, ok := resp["serverContent"].(map[string]interface{})
 				if !ok {
 					continue
 				}
 
 				if interrupted, ok := serverContent["interrupted"].(bool); ok && interrupted {
-					// MODO DIAGNÓSTICO: NÃO envia status ao browser (evita contencao writeMu com audio)
+					writeMu.Lock()
+					conn.WriteJSON(browserMessage{Type: "status", Text: "interrupted"})
+					writeMu.Unlock()
 					responseAccumMu.Lock()
 					responseAccum.Reset()
 					responseAccumMu.Unlock()
@@ -235,23 +329,49 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 				}
 
 				if turnComplete, ok := serverContent["turnComplete"].(bool); ok && turnComplete {
-					// MODO DIAGNÓSTICO: NÃO envia turn_complete ao browser (evita contencao writeMu)
+					writeMu.Lock()
+					conn.WriteJSON(browserMessage{Type: "status", Text: "turn_complete"})
+					writeMu.Unlock()
 					responseAccumMu.Lock()
-					if s.evaMemory != nil && responseAccum.Len() > 0 {
-						go func(t string) {
-							storeCtx, storeCancel := context.WithTimeout(context.Background(), 10*time.Second)
-							defer storeCancel()
-							s.evaMemory.StoreTurn(storeCtx, sessionID, "assistant", t)
-						}(responseAccum.String())
+					if responseAccum.Len() > 0 {
+						turn := responseAccum.String()
+						if s.evaMemory != nil {
+							go func(t string) {
+								storeCtx, storeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+								defer storeCancel()
+								s.evaMemory.StoreTurn(storeCtx, sessionID, "assistant", t)
+							}(turn)
+						}
+						// FASE 1: Save to vector memory with embeddings (async, non-blocking)
+						if s.brainService != nil {
+							go func(t string) {
+								memCtx := brain.MemoryContext{
+									Emotion:    "neutral",
+									Urgency:    "low",
+									Importance: 0.3,
+								}
+								if err := s.brainService.SaveEpisodicMemoryWithContext(0, "assistant", t, time.Now(), false, memCtx); err != nil {
+									log.Warn().Err(err).Msg("[BRAIN] Falha ao salvar resposta EVA em memória vetorial")
+								}
+							}(turn)
+						}
+						// Acumular transcript para ProcessSessionEnd (evolucao de personalidade)
+						transcriptMu.Lock()
+						transcriptAccum.WriteString("EVA: " + turn + "\n")
+						evaResponses = append(evaResponses, turn)
+						transcriptMu.Unlock()
 					}
 					responseAccum.Reset()
 					responseAccumMu.Unlock()
 					continue
 				}
 
-				// MODO DIAGNÓSTICO: inputAudioTranscription — só salva memória, SEM enviar ao browser, SEM tools
+				// inputAudioTranscription — envia transcricao do usuario ao browser + salva memoria
 				if inputTrans, ok := serverContent["inputAudioTranscription"].(map[string]interface{}); ok {
 					if text, ok := inputTrans["text"].(string); ok && text != "" {
+						writeMu.Lock()
+						conn.WriteJSON(browserMessage{Type: "text", Data: "user", Text: text})
+						writeMu.Unlock()
 						if s.evaMemory != nil {
 							go func(t string) {
 								storeCtx, storeCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -259,12 +379,32 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 								s.evaMemory.StoreTurn(storeCtx, sessionID, "user", t)
 							}(text)
 						}
+						// FASE 1: Save user input to vector memory with embeddings
+						if s.brainService != nil {
+							go func(t string) {
+								memCtx := brain.MemoryContext{
+									Emotion:    "neutral",
+									Urgency:    "low",
+									Importance: 0.5,
+								}
+								if err := s.brainService.SaveEpisodicMemoryWithContext(0, "user", t, time.Now(), false, memCtx); err != nil {
+									log.Warn().Err(err).Msg("[BRAIN] Falha ao salvar input do utilizador em memória vetorial")
+								}
+							}(text)
+						}
+						// Acumular transcript do usuario
+						transcriptMu.Lock()
+						transcriptAccum.WriteString("Usuario: " + text + "\n")
+						transcriptMu.Unlock()
 					}
 				}
 
-				// MODO DIAGNÓSTICO: outputAudioTranscription — só acumula texto, SEM enviar ao browser
+				// outputAudioTranscription — envia legenda (subtitle) ao browser + acumula para memoria
 				if outputTrans, ok := serverContent["outputAudioTranscription"].(map[string]interface{}); ok {
 					if text, ok := outputTrans["text"].(string); ok && text != "" {
+						writeMu.Lock()
+						conn.WriteJSON(browserMessage{Type: "text", Text: text})
+						writeMu.Unlock()
 						responseAccumMu.Lock()
 						responseAccum.WriteString(text)
 						responseAccumMu.Unlock()
@@ -311,14 +451,13 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 
 	startReader(initialClient, 1)
 
-	// --- Speaker Recognition: DESABILITADO (MODO DIAGNÓSTICO — evita contencao writeMu) ---
+	// --- Speaker Recognition ---
 	if s.speakerSvc != nil {
-		// Callback desabilitado: não envia speaker info ao browser
-		// s.speakerSvc.SetCallback(sessionID, func(sid string, msg speaker.SpeakerMessage) {
-		// 	writeMu.Lock()
-		// 	conn.WriteJSON(msg)
-		// 	writeMu.Unlock()
-		// })
+		s.speakerSvc.SetCallback(sessionID, func(sid string, msg speaker.SpeakerMessage) {
+			writeMu.Lock()
+			conn.WriteJSON(msg)
+			writeMu.Unlock()
+		})
 		defer s.speakerSvc.RemoveSession(sessionID)
 	}
 
@@ -361,10 +500,9 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 				pcmData, err := base64.StdEncoding.DecodeString(msg.Data)
 				if err == nil {
 					client.SendAudio(pcmData)
-					// MODO DIAGNÓSTICO: speaker recognition desabilitado
-					// if s.speakerSvc != nil {
-					// 	go s.speakerSvc.ProcessAudioChunk(sessionID, clientCPF, pcmData)
-					// }
+					if s.speakerSvc != nil {
+						go s.speakerSvc.ProcessAudioChunk(sessionID, clientCPF, pcmData)
+					}
 				}
 			case "video":
 				jpegData, err := base64.StdEncoding.DecodeString(msg.Data)
@@ -478,6 +616,41 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 	if s.evaMemory != nil {
 		s.evaMemory.EndSession(ctx, sessionID)
 		go s.evaMemory.DetectPatterns(context.Background())
+	}
+
+	// Processar fim de sessao no CoreMemoryEngine (reflexao + memorias pessoais + evolucao Big Five)
+	if s.coreMemory != nil {
+		transcriptMu.Lock()
+		transcript := transcriptAccum.String()
+		evaResponsesCopy := make([]string, len(evaResponses))
+		copy(evaResponsesCopy, evaResponses)
+		transcriptMu.Unlock()
+		if transcript != "" {
+			duration := time.Since(sessionStart).Minutes()
+			go func() {
+				data := evaSelf.SessionData{
+					SessionID:       sessionID,
+					Transcript:      transcript,
+					DurationMinutes: duration,
+					EVAResponses:    evaResponsesCopy,
+					Timestamp:       sessionStart,
+				}
+				bgCtx := context.Background()
+				if err := s.coreMemory.ProcessSessionEnd(bgCtx, data); err != nil {
+					log.Warn().Err(err).Str("session", sessionID).Msg("[CoreMemory] Falha ao processar fim de sessao de voz")
+				} else {
+					log.Info().Str("session", sessionID).Msg("[CoreMemory] Sessao de voz processada — memorias pessoais atualizadas")
+				}
+
+				// 7.12.1 Simbiose AGI: Feed energy based on situation to trigger reflexes
+				if s.situationMod != nil && s.energyFeeder != nil {
+					sit, _ := s.situationMod.Infer(bgCtx, clientCPF, transcript, nil)
+					if err := s.energyFeeder.FeedReflexes(bgCtx, clientCPF, sit, "default"); err != nil {
+						log.Warn().Err(err).Msg("[EnergyFeeder] Falha ao alimentar reflexos (voz)")
+					}
+				}
+			}()
+		}
 	}
 
 	log.Info().

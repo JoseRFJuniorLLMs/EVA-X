@@ -26,18 +26,22 @@ WHAT IS EVA-MIND
 	- Real-time bidirectional voice via WebSocket (Gemini Live API)
 	- Real-time camera and screen analysis for medical assistance
 	- Unified Graph & Vector Memory (NietzscheDB) with Hebbian learning
-	- Native Hyperbolic embeddings (Poincaré ball)
+	- Native Hyperbolic embeddings (Poincare ball model)
 	- Krylov subspace compression (1536D -> 64D, ~97% precision)
-	- Psychoanalytic context modeling (Lacanian framework)
+	- Psychoanalytic context modeling (Lacanian FDPN framework)
 	- Personality system (Big Five + Enneagram) with evolution
 	- Clinical scales (PHQ-9, GAD-7, C-SSRS) via voice
 	- Voice prosody analysis (depression, anxiety, Parkinson detection)
+	- Speaker identification via ECAPA-TDNN (192D voiceprints)
 	- Medication scheduling, alerting, and visual identification
 	- Emergency detection, escalation, and crisis prediction
-	- Multi-agent swarm with circuit breaker routing
+	- Multi-agent swarm (12 agents) with circuit breaker routing
+	- Episodic memory with 3072D embeddings + importance scoring
 	- REM-inspired memory consolidation with selective replay
-	- Global Workspace Theory consciousness model
-	- FHIR R4 interoperability and MCP server
+	- Global Workspace Theory consciousness model (Baars 1988)
+	- Autonomous learning with curriculum-driven study cycles
+	- Narrative therapy via seeded therapeutic stories
+	- FHIR R4 interoperability and MCP server (44 tools)
 	- Multi-language support (30+ languages)
 
 	The system currently serves two deployments:
@@ -58,7 +62,7 @@ ARCHITECTURE
 	Each directory maps to a brain region:
 
 	brainstem/     - Configuration, database, auth, push notifications,
-	                 infrastructure (NietzscheDB, NietzscheDB, worker pools)
+	                 infrastructure (NietzscheDB adapters, retry, worker pools)
 
 	cortex/        - Higher-order processing:
 	  gemini/        - Gemini Live API client (v1beta, thread-safe,
@@ -67,32 +71,37 @@ ARCHITECTURE
 	  skills/        - Runtime skills engine (create, execute, version)
 	  lacan/         - Lacanian psychoanalytic engine (demand/desire
 	                   analysis, signifier chains, narrative shift
-	                   detection, Grand Autre, transference, FDPN)
+	                   detection, Grand Autre, transference, FDPN,
+	                   UnifiedRetrieval with RSI binding)
 	  personality/   - Big Five traits, Enneagram types, trait relevance
-	  self/          - Core memory engine, post-session reflection,
+	  self/          - Core memory engine, post-session reflection
 	  attention/     - Affect stabilizer, confidence gate, executive
 	                   attention, pattern interrupt, triple attention,
 	                   wavelet attention
-	  consciousness/ - Global Workspace Theory (Baars 1988) with
-	                   cognitive module competition and broadcast
-	  evolution/     - Zaratustra evolution engine (Will to Power, 
+	  consciousness/ - Cognitive Operating System kernel:
+	                   Global Workspace Theory (Baars 1988),
+	                   ThoughtBus (cognitive pub/sub barramento),
+	                   Attention Scheduler (dynamic thresholding)
+	  evolution/     - Zaratustra evolution engine (Will to Power,
 	                   energy propagation, autonomous snapshots)
-	  activeinference/ - Free Energy Principle (Friston) for gap 
+	  activeinference/ - Free Energy Principle (Friston) for gap
 	                   detection and cognitive self-correction
-	  prediction/    - Bayesian networks, crisis prediction,
-	  predictive/    - HMC (Hamiltonian Monte Carlo) sampler,
-	  ram/           - Retrieval-Augmented Memory with feedback loop,
+	  prediction/    - Bayesian networks, crisis prediction
+	  predictive/    - HMC (Hamiltonian Monte Carlo) sampler
+	  ram/           - Retrieval-Augmented Memory with feedback loop
 	  scales/        - Clinical scales (PHQ-9, GAD-7, C-SSRS)
 	  ethics/        - Ethical boundary engine
 	  explainability/- Clinical decision explainer, PDF report generation
 	  cognitive/     - Cognitive load orchestrator
-	  learning/      - Continuous learning, meta-learner, self-eval loop
+	  learning/      - Continuous learning, meta-learner, self-eval loop,
+	                   autonomous learner with curriculum management
 	  medgemma/      - Medical image analysis (prescriptions, exams)
 	  spectral/      - Community detection, fractal dimension analysis,
 	                   synaptogenesis engine
 	  pattern/       - Behavioral cue detector
 	  veracity/      - Lie detector, inconsistency types, response strategy
-	  voice/         - Prosody analyzer (pitch, rhythm, pauses, tremor)
+	  voice/         - Prosody analyzer (pitch, rhythm, pauses, tremor),
+	                   speaker embedder (ECAPA-TDNN, ONNX, 192D)
 	  transnar/      - A/B testing, desire detector, inference engine,
 	                   signifier chain, response generator
 	  kids/          - Kids mode (adapted conversation)
@@ -100,7 +109,9 @@ ARCHITECTURE
 	  orchestration/ - Conversation orchestrator
 	  alert/         - Escalation engine
 	  llm/thinking/  - LLM thinking detector, audit, notification
-	  brain/         - Context builder, memory service
+	  brain/         - Episodic memory service with context metadata,
+	                   multi-factor importance scoring, embedding
+	                   generation with retry/backoff
 
 	hippocampus/   - Knowledge graphs and memory:
 	  memory/        - Graph store, retrieval service, FDPN engine,
@@ -115,7 +126,7 @@ ARCHITECTURE
 	                   graph reasoning, self knowledge, wisdom service,
 	                   audio analysis
 	  habits/        - Habit tracker
-	  spaced/        - Spaced repetition engine
+	  spaced/        - Spaced repetition engine (SM-2 algorithm)
 	  stories/       - Therapeutic story repository
 	  topology/      - Persistent homology (topological data analysis)
 	  zettelkasten/  - Entity extractor, zettel service
@@ -190,6 +201,8 @@ ARCHITECTURE
 	    kids/          - Pediatric mode
 	    legal/         - Legal compliance
 	    productivity/  - Task management
+	    scholar/       - Autonomous learning (curriculum + web research)
+	    selfawareness/ - Introspection and self-monitoring
 	    wellness/      - Wellness monitoring
 
 	memory/        - Memory consolidation:
@@ -240,65 +253,366 @@ ARCHITECTURE
 	Both are actively used. They are not duplicates.
 
 
+NIETZSCHEDB — UNIFIED DATABASE
+-------------------------------
+
+	NietzscheDB is EVA's sole database. A multi-manifold hyperbolic
+	graph database written in Rust with 45+ specialized crates.
+	It provides graph, vector, cache, and SQL in a single gRPC endpoint.
+
+	Server: /usr/local/bin/nietzsche-server (Rust binary)
+	gRPC:   port 50051 (65+ RPCs in a unified service)
+	HTTP:   port 8080 (React dashboard + WebSocket streaming)
+	Config: /etc/nietzsche.env
+
+	Core capabilities:
+
+	1. Hyperbolic Geometry (Poincare Ball)
+	   - All embeddings stored as points inside the unit ball (||x|| < 1)
+	   - Hierarchical depth encoded as distance to origin
+	   - Mobius addition for gyrovector operations
+	   - exp_map_zero / log_map_zero for Euclidean <-> Poincare
+	   - Frechet mean (gyromidpoint) for multimodal fusion
+
+	2. Multi-Manifold Support
+	   - Poincare (K < 0): Storage, distance, KNN — primary manifold
+	   - Klein (K < 0): Pathfinding, collinearity checks
+	   - Riemann/Sphere (K > 0): Dialectical synthesis, aggregation
+	   - Minkowski (pseudo-Riemann): Causal filtering, light cones
+
+	3. HNSW Vector Search
+	   - CPU: Full HNSW with metadata filtering (RoaringBitmap)
+	   - GPU: NVIDIA cuVS CAGRA (10x faster build, millions QPS)
+	   - Quantization: None (f64), ScalarI8 (~5% error), Binary (1-bit)
+	   - Metrics: Poincare, Euclidean (L2), Cosine, Lorentz
+	   - CRITICAL: Binary Quantization REJECTED for hyperbolic metrics
+	     (sign(x) destroys magnitude hierarchy in Poincare ball)
+
+	4. NQL (Nietzsche Query Language)
+	   - PEG-based parser with full WHERE/ORDER/LIMIT support
+	   - MATCH (n:Label) for node scanning (4 built-in types)
+	   - HYPERBOLIC_DIST() for KNN within NQL
+	   - DIFFUSE for Chebyshev heat-kernel diffusion walks
+	   - RECONSTRUCT for sensory data decompression
+	   - Workaround: Custom types stored via node_label field +
+	     RewriteNQL() in db.QueryNodes()
+
+	5. Autonomous Cognitive Cycles (Background Schedulers)
+	   - Sleep Cycle: Riemannian reconsolidation with RiemannianAdam
+	     optimizer, Hausdorff dimension monitoring, checkpoint/rollback
+	   - Zaratustra Engine: Will to Power (energy propagation),
+	     Eternal Recurrence (temporal echo snapshots),
+	     Ubermensch (elite hot-cache promotion)
+	   - L-System: Fractal growth rules, spawn_child via Mobius
+	     placement, tumor detection circuit breaker
+	   - Agency Engine: 10+ subsystems including entropy/coherence
+	     daemons, gap detection, desire signals, shatter protocol,
+	     world model, Hebbian LTP, cognitive thermodynamics
+	   - Wiederkehr Daemon: Autonomous agent ticking (30s interval)
+	   - TTL Reaper: Expired node cleanup (60s interval)
+
+	6. Storage (RocksDB with 6 Column Families)
+	   - CF_NODES: node_id -> NodeMeta (bincode)
+	   - CF_EDGES: edge_id -> Edge (bincode)
+	   - CF_ADJ: node_id -> adjacency (JSON)
+	   - CF_META: health reports, daemon state
+	   - CF_EGO: ego-cache depth-2 subgraphs
+	   - CF_BACKUP: snapshot checksums
+	   - Encryption: AES-256-GCM with HKDF-SHA256 per column family
+
+	7. Additional Features
+	   - CDC (Change Data Capture) with WebSocket streaming
+	   - Swartz embedded SQL layer (rusqlite-style)
+	   - Graph algorithms: PageRank, Louvain, Betweenness, A*, SCC, WCC
+	   - DreamerV3 dream simulation engine
+	   - GNN inference with ONNX Runtime
+	   - MCTS (Monte Carlo Tree Search) advisor
+	   - Schema validation with FieldType constraints
+	   - Secondary indexes on metadata fields
+	   - Cluster mode with gossip protocol (optional)
+	   - Backup/restore with retention pruning
+
+	8. Security
+	   - API Key auth (SHA-256 hashed, constant-time comparison)
+	   - RBAC: Admin / Writer / Reader (3-tier hierarchy)
+	   - AES-256-GCM encryption at rest (HKDF-derived per-CF keys)
+	   - Input validation: embedding dim caps, NQL injection prevention,
+	     NaN/Inf rejection, UUID format enforcement
+	   - Collection-level namespace isolation
+
+	Data model:
+	  Node: { id (UUID), node_type, energy (f64), depth (f64),
+	          hausdorff_local (f64), created_at, expires_at,
+	          valence, arousal, content (JSON) }
+	  Edge: { from, to, edge_type, weight, created_at, metadata }
+	  Schrodinger edges: probabilistic with entanglement
+
+
+NIETZSCHEDB COLLECTIONS
+-----------------------
+
+	EVA uses 14 collections in NietzscheDB, each with a specific
+	purpose, dimension, and distance metric:
+
+	eva_mind              3072D  poincare  Primary relational store.
+	                                       All patient data, schedules,
+	                                       medications, clinical records.
+	                                       Migrated from PostgreSQL.
+
+	eva_core              3072D  poincare  EVA's interaction graph.
+	                                       Conversation turns, session
+	                                       edges, speaker relationships.
+
+	memories              3072D  cosine    Episodic memory with full
+	                                       embeddings. Each conversation
+	                                       turn gets a 3072D Gemini vector
+	                                       + importance score + emotion.
+
+	signifier_chains      3072D  cosine    Lacanian signifier tracking.
+	                                       Populated by UnifiedRetrieval
+	                                       during Prime() calls.
+
+	speaker_embeddings    192D   cosine    ECAPA-TDNN voiceprints.
+	                                       Used for speaker identification
+	                                       and voice biometrics.
+
+	stories               3072D  cosine    Therapeutic narratives for
+	                                       wisdom service. Fables, koans,
+	                                       Rumi poems, African tales.
+
+	eva_self_knowledge    3072D  cosine    EVA's self-knowledge base.
+	                                       Identity, capabilities,
+	                                       personality description.
+
+	eva_learnings         3072D  cosine    Autonomous learner output.
+	                                       Topics studied, summaries
+	                                       from web research.
+
+	eva_curriculum        128D   cosine    Study curriculum for the
+	                                       autonomous learner. Topics
+	                                       with priority and category.
+
+	patient_graph         3072D  poincare  Patient relationship graphs.
+	                                       Family, caregiver, doctor
+	                                       connections.
+
+	eva_cache             2D     cosine    Fast key-value cache for
+	                                       temporary data.
+
+	malaria               3072D  poincare  Malaria Angola clinical data.
+	                                       Separate collection for the
+	                                       malaria detection service.
+
+	aesop_fables          3072D  cosine    Aesop's fables collection.
+	zen_koans             3072D  cosine    Zen koan collection.
+
+
+EPISODIC MEMORY PIPELINE (brain.Service)
+-----------------------------------------
+
+	Every conversation turn now flows through the episodic memory
+	pipeline. This was implemented in the 2026-03-10 memory audit
+	(8-phase fix) to ensure EVA actually forms long-term memories.
+
+	Pipeline:
+
+	  User speaks
+	    |
+	    v
+	  handleBrowserVoice() / handleEvaChat()
+	    |
+	    +--> evaMemory.StoreTurn()          [eva_core graph node]
+	    |
+	    +--> brain.SaveEpisodicMemoryWithContext()  [ASYNC, non-blocking]
+	           |
+	           +--> calculateImportance()    [multi-factor scoring]
+	           |     Base 0.5 + emotion + urgency + intensity + content
+	           |     Factors: Lacanian keywords (+0.20), personal
+	           |     relations (+0.15), medical urgency (+0.15),
+	           |     temporal references (+0.10), object location (+0.10)
+	           |     Cap at 1.0
+	           |
+	           +--> embeddingService.GenerateEmbedding()  [with retry]
+	           |     Retry: FastConfig (2 attempts, 50ms backoff)
+	           |     Fallback: saves without vector if embedding fails
+	           |
+	           +--> memoryStore.Store()      [with retry]
+	                 |--> NietzscheDB Insert (eva_mind, episodic_memories)
+	                 |--> GraphStore edges (speaker, session, temporal)
+	                 +--> VectorAdapter.Upsert (memories collection)
+	                       Retry: FastConfig (2 attempts, 50ms backoff)
+
+	Source files:
+	  main.go                                - brain.Service creation
+	  browser_voice_handler.go               - Voice turn -> brain pipeline
+	  eva_handler.go                         - Text turn -> brain pipeline
+	  internal/cortex/brain/memory_context.go - Importance + embedding + store
+	  internal/hippocampus/memory/storage.go  - MemoryStore with retry
+
+	MemoryContext metadata per turn:
+	  Emotion        string    - Detected emotion (e.g., "happy", "sad")
+	  Urgency        string    - Level (e.g., "ALTA", "CRITICA", "LOW")
+	  Keywords       []string  - Extracted keywords
+	  Importance     float64   - Calculated importance (0-1)
+	  AudioIntensity int       - Voice intensity 1-10 from DSP
+
+
+DATABASE ABSTRACTION LAYER
+--------------------------
+
+	The database layer (internal/brainstem/database/db.go) wraps
+	NietzscheDB gRPC with a relational-style API. All data is stored
+	as nodes with a node_label field for table routing.
+
+	ID Generation: Deterministic UUID v5 from "eva_mind:table:pgID"
+	               (matches the PostgreSQL migration tool format).
+	Auto-IDs: atomic int64 counter (time.Now().Unix() * 1000 + N).
+
+	Collection routing:
+
+	  db.Insert(ctx, table, content)
+	    -> Always writes to eva_mind collection.
+	    -> Used for patient data, schedules, medications.
+
+	  db.InsertTo(ctx, collection, table, content)
+	    -> Writes to a SPECIFIC collection.
+	    -> Used for eva_learnings, eva_curriculum, stories, etc.
+	    -> ID format: "collection:table:id" (unique per collection).
+
+	  db.NQL(ctx, nql, params)
+	    -> Executes NQL against eva_mind.
+
+	  db.NQLIn(ctx, collection, nql, params)
+	    -> Executes NQL against a SPECIFIC collection.
+
+	  db.QueryByLabel(ctx, label, extraWhere, params, limit)
+	    -> Finds nodes by node_label in eva_mind.
+
+	  db.QueryByLabelIn(ctx, collection, label, extraWhere, params, limit)
+	    -> Finds nodes by node_label in a SPECIFIC collection.
+
+	Type helpers: GetString, GetInt64, GetBool, GetFloat64, GetTime,
+	              GetTimePtr, GetNullBool, GetNullString.
+
+	Indexes: node_label, idoso_id, status, cpf_hash, email,
+	         session_id, medication_id, ativo, tipo, sender.
+
+
+INFRASTRUCTURE ADAPTERS
+-----------------------
+
+	EVA communicates with NietzscheDB through typed adapters:
+
+	VectorAdapter  - KNN search, Upsert, Delete on vector collections.
+	                 Wraps NietzscheDB gRPC KnnSearch and InsertNode
+	                 with embedding coordinates.
+
+	GraphAdapter   - InsertEdge, GetNeighbors, BFS, Dijkstra.
+	                 Typed edge operations on the graph layer.
+
+	ManifoldAdapter - Multi-manifold operations:
+	                  Synthesis (Riemann sphere dialectics),
+	                  CausalNeighbors (Minkowski light-cone filtering),
+	                  KleinPath (Klein geodesic pathfinding).
+
+	CacheAdapter   - CacheSet/CacheGet/CacheDel with TTL.
+	                 Uses eva_cache collection (2D cosine).
+
+	SecurityAdapter - LGPD/HIPAA compliance layer.
+	                  Encryption at rest via NietzscheDB AES-256-GCM.
+
+	WiederkehrAdapter - Daemon agent management.
+	                    Create/list/tick autonomous agents.
+
+	BackupService  - Snapshot/restore via NietzscheDB backup RPCs.
+
+	CDCListener    - Change Data Capture subscription.
+	                 WebSocket bridge for real-time event streaming.
+
+	RetryPackage   - Exponential backoff with jitter:
+	                 FastConfig: 2 retries, 50ms initial, 500ms max
+	                 DefaultConfig: 3 retries, 100ms initial, 10s max
+	                 SlowConfig: 5 retries, 500ms initial, 30s max
+	                 Error classification: IsRetryable() checks for
+	                 timeout, connection refused, rate limit, 429/502/503/504.
+	                 Permanent errors (400/401/403/404/422) are not retried.
+
+	Source: internal/brainstem/infrastructure/nietzsche/
+	        internal/brainstem/infrastructure/retry/retry.go
+
+
 MEMORY SYSTEM
 -------------
 
-	EVA's memory is inspired by neuroscience. It has multiple layers:
+	EVA's memory is inspired by neuroscience. It has 10 layers:
 
-	1. Unified Memory (NietzscheDB)
-	   - Graph, Vector, and Cache in a single gRPC-driven substrate.
-	   - Stored as nodes with Poincaré embeddings (Hyperbolic space).
-	   - Hierarchical depth encoded as geometric distance to origin.
-	   - Retrieved by NQL (Nietzsche Query Language) + KNN.
+	1. Episodic Memory (brain.Service)
+	   - Every conversation turn generates a 3072D Gemini embedding.
+	   - Stored in the 'memories' collection via VectorAdapter.Upsert.
+	   - Multi-factor importance scoring (emotion + urgency + intensity
+	     + content analysis). Score range: 0.5 to 1.0.
+	   - Retry with exponential backoff on transient failures.
+	   - Async (goroutine) to avoid blocking voice responses.
 
-	2. Hebbian Learning (Native)
-	   - Real-time: Updates node/edge energy after every retrieval.
-	   - Synaptogenesis: Automatic edge creation via preferential attachment.
-	   - Edge weighting: Bio-inspired dual plasticity (fast/slow weights).
+	2. Graph Memory (eva_core)
+	   - Conversation turns stored as graph nodes with edges:
+	     speaker -> turn, turn -> session, temporal ordering.
+	   - Hebbian real-time weight updates after every retrieval
+	     (eta=0.01, lambda=0.001, tau=86400s).
+	   - Synaptogenesis: automatic edge creation via preferential
+	     attachment, triadic closure, and homophily.
+	   - Science: Bullmore & Sporns (2012), Holtmaat & Svoboda (2009).
 
-	3. REM Consolidation (Periodic)
+	3. Signifier Chains (Lacanian)
+	   - UnifiedRetrieval.Prime() extracts signifier chains from
+	     user speech during each interaction.
+	   - Stored in the 'signifier_chains' collection (3072D cosine).
+	   - Tracks demand/desire dynamics, narrative shifts, and
+	     transference patterns across sessions.
+
+	4. REM Consolidation (Periodic)
 	   - Sleep-inspired memory consolidation pipeline.
 	   - Hot episodic memories -> selective replay -> spectral
 	     clustering -> Krylov centroid -> semantic NietzscheDB node.
 	   - Prunes redundant memories, creates abstractions.
+	   - Scheduled at 3am daily via memory scheduler.
 	   - Science: Rasch & Born (2013), Tadros et al. (2022).
 
-	4. Hebbian Learning
-	   - Real-time: updates weights after every retrieval query
-	     (eta=0.01, lambda=0.001, tau=86400s)
-	   - Consolidation: batch strengthening during REM cycles
-	   - Dual plasticity: Zenke & Gerstner (2017) model
-
-	5. REM Consolidation
-	   - Sleep-inspired memory consolidation pipeline
-	   - Hot episodic memories -> selective replay -> spectral
-	     clustering -> Krylov centroid -> semantic NietzscheDB node
-	   - Prunes redundant memories, creates abstractions
-	   - Science: Rasch & Born (2013), Tadros et al. (2022)
+	5. Hebbian Learning
+	   - Real-time: updates weights after every retrieval query.
+	   - Consolidation: batch strengthening during REM cycles.
+	   - Dual plasticity: Zenke & Gerstner (2017) model.
+	   - Edge zones: hot (recent, high energy) vs cold (aged, low).
 
 	6. Krylov Subspace Compression
-	   - Compresses 1536D embeddings to 64D (~97% precision)
-	   - Rank-1 updates with Modified Gram-Schmidt
-	   - Sliding window FIFO for continuous learning
-	   - HTTP bridge on port 50052 for external access
+	   - Compresses 1536D embeddings to 64D (~97% precision).
+	   - Rank-1 updates with Modified Gram-Schmidt orthogonalization.
+	   - Sliding window FIFO for continuous learning.
+	   - 4-level hierarchy: Features / Concepts / Themes / Schemas.
+	   - HTTP bridge on port 50052 for external access.
+	   - Scheduled every 6 hours via memory scheduler.
 
-	7. EVA's Own Memory (NietzscheDB port 7688)
-	   - EvaSelf node with Big Five personality traits
-	   - CoreMemory nodes from post-session reflection
-	   - MetaInsight nodes from cross-session pattern detection
-	   - All data anonymized, no PII
-	   - Personality evolves based on cumulative experience
+	7. EVA's Own Memory (Self Model)
+	   - EvaSelf node with Big Five personality traits.
+	   - CoreMemory nodes from post-session reflection.
+	   - MetaInsight nodes from cross-session pattern detection.
+	   - All data anonymized, no PII.
+	   - Personality evolves based on cumulative experience.
 
-	8. Synaptogenesis
-	   - Automatic edge creation via preferential attachment
-	   - Triadic closure and homophily
-	   - Science: Bullmore & Sporns (2012), Holtmaat & Svoboda (2009)
+	8. Spaced Repetition
+	   - SM-2 algorithm for optimized recall scheduling.
+	   - Important memories reviewed at increasing intervals.
+	   - Tracks ease factor and repetition count per memory.
 
-	9. Spaced Repetition
-	   - Optimized recall scheduling for important memories
+	9. Topological Analysis
+	   - Persistent homology for memory graph structure.
+	   - Detects topological features (holes, loops, clusters)
+	     in the memory graph.
 
-	10. Topological Analysis
-	    - Persistent homology for memory graph structure
+	10. Habit Tracking
+	    - Monitors recurring patterns in user behavior.
+	    - Streak tracking, frequency analysis.
+	    - Integrated with medication adherence monitoring.
 
 
 CONTEXT PIPELINE
@@ -324,6 +638,107 @@ CONTEXT PIPELINE
 
 	All of this is merged into a single system instruction
 	sent to the Gemini WebSocket API.
+
+
+LACANIAN ENGINE
+---------------
+
+	EVA's psychoanalytic framework implements Lacanian theory:
+
+	1. FDPN (Four Discourses + Proper Names)
+	   - Spreading activation network for signifier chains.
+	   - Maps desire dynamics across conversation turns.
+	   - Activation decay with configurable parameters.
+
+	2. UnifiedRetrieval (The Sinthome)
+	   - Binds the RSI registers (Real, Symbolic, Imaginary).
+	   - Parallel execution: Graph (Symbolic) + Vector (Imaginary) +
+	     Causal (Real) pathways via NietzscheDB manifolds.
+	   - Prime() method: extracts signifier chains from user input,
+	     stores in signifier_chains collection, tracks narrative shifts.
+	   - Dynamic weights based on active inference gap detection.
+
+	3. Narrative Shift Detection
+	   - Detects when user's discourse changes topic or affect.
+	   - Triggers Riemannian conflict synthesis via Klein manifold.
+
+	4. Transference Analysis
+	   - Models the user's unconscious transfer patterns.
+	   - Grand Autre (Big Other) position tracking.
+
+	Source: internal/cortex/lacan/
+
+
+PERSONALITY SYSTEM
+------------------
+
+	EVA's personality is dynamic and multi-dimensional:
+
+	1. Big Five (OCEAN Model)
+	   - Openness, Conscientiousness, Extraversion,
+	     Agreeableness, Neuroticism.
+	   - Each trait: 0.0 to 1.0, evolves with interactions.
+	   - Trait relevance scoring per conversation context.
+
+	2. Dynamic Enneagram
+	   - 9-type probabilistic distribution (not a single type).
+	   - Weights shift based on interaction patterns.
+	   - Integration/disintegration arrows modeled.
+
+	3. Situational Modulator
+	   - Context-aware personality adjustment (<10ms latency).
+	   - Factors: time of day, user mood, crisis state, topic.
+
+	4. RAM Engine (Retrieval-Augmented Memory)
+	   - 3-phase loop: Interpretation -> Validation -> Feedback.
+	   - Adjusts response style based on personality + context.
+
+	5. Energy Overlay
+	   - Zaratustra-compatible energy scoring for personality traits.
+	   - Will to Power propagation through personality graph.
+
+	Source: internal/cortex/personality/
+	        internal/cortex/situation/
+	        internal/cortex/ram/
+
+
+VOICE SYSTEM
+------------
+
+	EVA has a sophisticated voice processing pipeline:
+
+	1. Gemini Live API (Primary)
+	   - Model: gemini-2.5-flash-native-audio-preview-12-2025
+	     (UNTOUCHABLE — changing this model BREAKS voice)
+	   - Bidirectional WebSocket streaming (v1beta API)
+	   - Native audio input/output (no transcription needed)
+	   - Voice Activity Detection (VAD) tuning
+	   - Function calling support for tools during conversation
+
+	2. Speaker Identification (ECAPA-TDNN)
+	   - ONNX model producing 192-dimensional voiceprints
+	   - Stored in speaker_embeddings collection (192D cosine)
+	   - Cosine similarity for speaker matching
+	   - Enrollment: 3-5 samples per speaker recommended
+
+	3. Voice Prosody Analysis (DSP Pipeline)
+	   - MFCC feature extraction (mel-frequency cepstral coefficients)
+	   - Pitch tracking (F0 estimation, jitter, shimmer)
+	   - Rhythm analysis (speech rate, pause patterns)
+	   - Timbre analysis (spectral envelope, formants)
+	   - Clinical markers: depression, anxiety, Parkinson tremor,
+	     dehydration (dry voice detection)
+
+	4. Audio Processing
+	   - Input: PCM 16kHz mono from browser/Twilio
+	   - Output: PCM 24kHz mono from Gemini
+	   - WebSocket transport: base64-encoded chunks
+	   - Real-time streaming with sub-second latency
+
+	Source: internal/cortex/voice/speaker/ (ECAPA-TDNN embedder)
+	        internal/cortex/voice/ (prosody analyzer)
+	        internal/cortex/gemini/ (Gemini Live client)
+	        internal/voice/ (Twilio session management)
 
 
 AUTONOMOUS AGENT
@@ -379,12 +794,8 @@ AUTONOMOUS AGENT
 		run_tests              - Execute go test ./... with timeout
 		get_code_diff          - Show uncommitted changes (git diff)
 
-	Database Access (4 databases):
-		query_NietzscheDB       - Full CRUD (SELECT, INSERT, UPDATE,
-		                         DELETE, CREATE, ALTER)
-		query_NietzscheDB            - Cypher queries (read-only)
-		query_NietzscheDB           - Vector similarity search
-		query_nietzsche        - NietzscheDB REST API
+	Database Access:
+		query_nietzsche        - NietzscheDB NQL + gRPC API
 
 	Filesystem:
 		read_file              - Read file from sandbox directory
@@ -521,6 +932,100 @@ SWARM SYSTEM
 	  wellness       - Wellness monitoring
 
 
+AUTONOMOUS LEARNING
+-------------------
+
+	EVA learns continuously through the AutonomousLearner:
+
+	1. Curriculum System
+	   - Topics stored in eva_curriculum collection (128D cosine).
+	   - Each topic has: name, category, priority (1-5), status.
+	   - Categories: clinical, psychology, technology, wellness,
+	     linguistics, culture.
+	   - Seed script: cmd/seed_curriculum/main.go (31 topics).
+
+	2. Study Cycle
+	   - Runs every 6 hours via background goroutine.
+	   - Picks next pending topic by priority (highest first).
+	   - Uses Gemini with Google Search grounding for research.
+	   - Generates structured summary with key findings.
+	   - Stores result in eva_learnings collection with embedding.
+	   - Marks topic as completed in eva_curriculum.
+
+	3. Scholar Agent
+	   - On-demand research via study_topic tool.
+	   - Deeper research with web scraping and multiple sources.
+	   - Available through voice commands and MCP.
+
+	Seed curriculum includes:
+	  - Malaria epidemiology in Angola (2024-2026)
+	  - Microscopy techniques for blood parasites
+	  - Sleeping sickness diagnosis and treatment
+	  - Schistosomiasis lifecycle in Africa
+	  - Sickle cell anemia genetics
+	  - TB pulmonary X-ray interpretation
+	  - Lacanian clinical structures
+	  - AI in medical diagnostics
+	  - Hyperbolic graph databases (Poincare ball model)
+	  - Evidence-based mindfulness and meditation
+	  - Portuguese/Angolan clinical terminology
+	  - And 20 more topics across 6 categories.
+
+	Source: internal/cortex/learning/autonomous_learner.go
+	        cmd/seed_curriculum/main.go
+
+
+THERAPEUTIC STORIES (WISDOM SERVICE)
+-------------------------------------
+
+	EVA uses narrative therapy with a curated story collection.
+	Stories are stored in the 'stories' collection with embeddings
+	for semantic retrieval based on patient context.
+
+	20 stories across 6 sources:
+
+	Therapeutic Fables (8):
+	  O Velho e a Arvore, A Pedra no Caminho, O Cantaro Rachado,
+	  O Tecelao Cego, O Album de Fotografias, As Maos do Avo,
+	  A Semente Guardada, O Silencio Partilhado
+
+	Zen Koans (2):
+	  A Chavena de Cha, O Som de Uma Mao
+
+	Nasrudin Stories (2):
+	  As Chaves de Nasrudin, O Burro de Nasrudin
+
+	Rumi Poems (2):
+	  A Casa de Hospedes, A Ferida e o Lugar
+
+	African Tales (3):
+	  O Baoba e o Vento, A Tartaruga e a Chuva,
+	  O Anciao e o Rio
+
+	Aesop's Fables (2):
+	  A Lebre e a Tartaruga, O Leao e o Rato
+
+	Each story has:
+	  title     - Story name
+	  content   - Full narrative text
+	  archetype - Jungian archetype (wise_elder, hero, helper,
+	              trickster, shadow)
+	  moral     - Therapeutic moral/lesson
+	  tags      - Comma-separated themes
+	  source    - Origin (therapeutic, zen, nasrudin, rumi,
+	              african, aesop)
+	  embedding - 3072D Gemini vector for semantic matching
+
+	The WisdomService selects stories based on:
+	  - Patient's current emotional state
+	  - Active topics in conversation
+	  - Semantic similarity to recent memories
+	  - Archetype relevance to therapeutic goals
+
+	Seed script: cmd/seed_stories/main.go
+	Source: internal/hippocampus/stories/
+
+
 SELF-KNOWLEDGE (AUTOCONHECIMENTO)
 ----------------------------------
 
@@ -535,31 +1040,95 @@ SELF-KNOWLEDGE (AUTOCONHECIMENTO)
 
 	Source: internal/cortex/self/core_memory_engine.go
 
-	Capabilities include:
-	  - Communication (email, WhatsApp, Telegram, Slack, Discord, Teams, Signal)
-	  - Media (YouTube, Spotify, embedded webpages)
-	  - Productivity (Google Calendar, Drive, alarms, scheduled tasks)
-	  - Code execution (bash, Python, Node.js in sandbox)
-	  - Web search and real-time information access
-	  - Self-programming (read, edit, test own source code)
-	  - Database access (NietzscheDB, NietzscheDB, NietzscheDB, NietzscheDB)
-	  - Smart home (Home Assistant IoT control)
-	  - Multi-LLM (Claude, GPT-4o, DeepSeek as consultants)
-	  - MCP bridge (bidirectional Claude Code integration)
-	  - Native voice (Gemini Live API, emotion detection, prosody)
-	  - Video calls (WebRTC with ICE signaling)
-	  - Lacanian psychoanalytic motor
-	  - 12 specialized swarm agents
-	  - Clinical scales (PHQ-9, GAD-7, C-SSRS)
-	  - 10-layer memory system
-	  - Google Suite integration (Calendar, Gmail, Drive, Sheets, Docs, Maps, YouTube, Fit, Uber)
-	  - Browser automation
-	  - Krylov subspace compression
-	  - Memory orchestrator and scheduler (REM at 3am, Krylov every 6h)
-	  - Clinical research engine
-	  - Scholar agent (autonomous learning)
-	  - Self-awareness agent (introspection)
-	  - Real-time web search via Google Search grounding
+	Additionally, the eva_self_knowledge collection stores deeper
+	identity information seeded via cmd/seed_knowledge/main.go.
+
+
+COGNITIVE OPERATING SYSTEM (COS)
+---------------------------------
+
+	EVA-Mind is a Cognitive Operating System. The LLM (Gemini)
+	is just one process inside the cognitive kernel, not the
+	system itself. The kernel coordinates perception, memory,
+	reasoning, and action through a unified architecture.
+
+	The COS has three core components:
+
+	1. ThoughtBus (Cognitive Barramento)
+	   - Pub/sub system for inter-module communication
+	   - ThoughtEvents carry: payload, salience, energy cost,
+	     causal chain ID (NietzscheDB manifold tracing)
+	   - 6 event types: Perception, Inference, Intent,
+	     Reflection, Memory, Emotion
+	   - Non-blocking publish with homeostatic backpressure
+	     (drops low-salience thoughts when buffer is full)
+	   - Goroutine-isolated listeners with panic recovery
+	   - Metrics: published, delivered, dropped counts
+	   - Source: internal/cortex/consciousness/thought_bus.go
+
+	2. GlobalWorkspace (Attention Scheduler)
+	   - Implements Baars' Global Workspace Theory (1988)
+	   - Subscribes to ThoughtBus as global listener ("*")
+	   - Evaluates each thought for attention:
+	     AttentionScore = Salience / (EnergyCost + epsilon)
+	   - Dynamic thresholding: adapts based on recent focus
+	     history to prevent activation explosion
+	   - Winner is broadcast to consciousness callbacks
+	     (LLM context, UI updates, NietzscheDB persistence)
+	   - Parallel module competition with 5-second timeout
+	   - Source: internal/cortex/consciousness/global_workspace.go
+
+	3. Attention System (6 components)
+	   - Affect stabilizer (emotional regulation)
+	   - Confidence gate (threshold filtering)
+	   - Executive attention (top-down control)
+	   - Pattern interrupt (novelty detection)
+	   - Triple attention (three-stream processing)
+	   - Wavelet attention (multi-scale analysis)
+
+	Architecture:
+
+	  Perception --> ThoughtBus --> GlobalWorkspace --> Action
+	                    ^               |
+	               CognitiveModules  Memory Update
+
+	Cognitive modules publish ThoughtEvents to the bus instead
+	of acting directly. The GlobalWorkspace selects the most
+	salient thought and broadcasts it to the LLM for response
+	generation. This creates a genuine attention competition
+	where multiple cognitive processes run in parallel.
+
+	Homeostasis:
+	  - Buffer overflow drops low-salience thoughts
+	  - Dynamic threshold prevents activation explosion
+	  - Energy cost penalizes expensive computations
+	  - Hyperbolic depth (Poincare ball) encodes abstraction
+	    level — pruning by geometric distance prevents
+	    super-hub collapse
+
+
+NEURO-SYMBOLIC CORE
+-------------------
+
+	EVA v2.0 transitions from a pure RAG system to a Neuro-Symbolic AGI:
+
+	1. The Sinthome (Unified Retrieval)
+	   - Binds the Lacanian RSI (Real, Symbolic, Imaginary) registers.
+	   - Parallel execution: Graph (Symbolic) + Vector (Imaginary) +
+	     Causal (Real) pathways.
+	   - Dynamic weights based on active inference gap detection.
+	   - Wired into brain.Service for signifier chain tracking.
+
+	2. Global Workspace consciousness
+	   - Specialized modules (Ethics, Lacan, Personality) compete
+	     for attention in the workspace.
+	   - Spotlight broadcast creates a coherent "conscious" state.
+	   - Resolves cognitive conflicts via attention shifts.
+
+	3. Zaratustra Evolution
+	   - Autonomous energy cycles based on Will to Power.
+	   - Hebbian strengthening of "productive" cognitive paths.
+	   - Automatic pruning of "death drive" patterns.
 
 
 REAL-TIME WEB SEARCH
@@ -585,47 +1154,43 @@ REAL-TIME WEB SEARCH
 	        internal/swarm/scholar/agent.go
 
 
-CONSCIOUSNESS MODEL
--------------------
+SECURITY
+--------
 
-	EVA implements Baars' Global Workspace Theory (1988):
+	EVA implements multi-layered security:
 
-	- Multiple cognitive modules process input in parallel
-	- Each module bids for attention (confidence score)
-	- Attention spotlight selects the winner
-	- Winner is broadcast to all modules
-	- Integrated insight merges all interpretations
+	1. Authentication
+	   - JWT tokens: HS256, 15-minute access + 7-day refresh.
+	   - Google OAuth 2.0 with HMAC-signed state parameter.
+	   - Password hashing: bcrypt cost=14.
+	   - NietzscheDB API key auth (SHA-256, constant-time comparison).
 
-	Attention system has six components:
-	- Affect stabilizer (emotional regulation)
-	- Confidence gate (threshold filtering)
-	- Executive attention (top-down control)
-	- Pattern interrupt (novelty detection)
-	- Triple attention (three-stream processing)
-	- Wavelet attention (multi-scale analysis)
+	2. Authorization
+	   - NietzscheDB RBAC: Admin / Writer / Reader hierarchy.
+	   - Multi-tenancy isolation via collection-level namespaces.
+	   - Creator-only admin functions (CPF-gated deletion).
 
+	3. Data Protection
+	   - AES-256-GCM encryption at rest (NietzscheDB, per-CF keys).
+	   - LGPD compliance: data anonymization, right to deletion.
+	   - HIPAA-aware: PHI encryption, audit trails.
+	   - No PII in EVA's own memory (anonymized cross-patient insights).
 
-NEURO-SYMBOLIC CORE
--------------------
+	4. Network Security
+	   - CORS middleware with configurable origins.
+	   - Nginx reverse proxy with HTTPS (self-signed + domain SSL).
+	   - WebSocket upgrade validation.
+	   - Sandbox isolation for code execution (EVA_WORKSPACE_DIR).
 
-	EVA v2.0 transitions from a pure RAG system to a Neuro-Symbolic AGI:
+	5. Input Validation
+	   - NietzscheDB: embedding dim caps, NQL injection prevention,
+	     NaN/Inf rejection, UUID format enforcement.
+	   - EVA: request body validation, SQL parameterization,
+	     rate limiting on clinical tool calls.
 
-	1. The Sinthome (Unified Retrieval)
-	   - Binds the Lacanian RSI (Real, Symbolic, Imaginary) registers.
-	   - Parallel execution: Graph (Symbolic) + Vector (Imaginary) +
-	     Causal (Real) pathways.
-	   - Dynamic weights based on active inference gap detection.
-
-	2. Global Workspace consciousness
-	   - Specialized modules (Ethics, Lacan, Personality) compete
-	     for attention in the workspace.
-	   - Spotlight broadcast creates a coherent "conscious" state.
-	   - Resolves cognitive conflicts via attention shifts.
-
-	3. Zaratustra Evolution
-	   - Autonomous energy cycles based on Will to Power.
-	   - Hebbian strengthening of "productive" cognitive paths.
-	   - Automatic pruning of "death drive" patterns.
+	Source: internal/brainstem/auth/
+	        internal/security/
+	        internal/audit/
 
 
 BUILDING
@@ -634,8 +1199,7 @@ BUILDING
 	Prerequisites:
 
 	- Go 1.24 or later
-	- NietzscheDB (unified graph + vector + cache)
-	- NietzscheDB 15+
+	- NietzscheDB server running on gRPC port 50051
 	- Google Gemini API key
 
 	Build:
@@ -648,6 +1212,12 @@ BUILDING
 
 	The server starts on port 8091 by default.
 
+	Seed data (run once after fresh deployment):
+
+		go run cmd/seed_knowledge/main.go    # EVA self-knowledge
+		go run cmd/seed_stories/main.go      # Therapeutic stories
+		go run cmd/seed_curriculum/main.go   # Learning curriculum
+
 
 CONFIGURATION
 -------------
@@ -655,18 +1225,15 @@ CONFIGURATION
 	EVA-Mind reads from a .env file in the working directory.
 	Required variables:
 
-		DATABASE_URL          - NietzscheDB connection string
 		NIETZSCHE_GRPC_ADDR   - NietzscheDB endpoint (default: localhost:50051)
 		NIETZSCHE_ENCRYPTION_KEY - AES key for at-rest encryption (PHI)
 		GOOGLE_API_KEY        - Gemini API key
 		MODEL_ID              - Gemini model for voice
-		                        (e.g. gemini-2.5-flash-native-audio-preview-12-2025)
+		                        (gemini-2.5-flash-native-audio-preview-12-2025)
 		PORT                  - Server port (default: 8091)
 
 	Optional:
 
-		NietzscheDB_URL            - NietzscheDB endpoint
-		CORE_MEMORY_NietzscheDB_URI - Separate NietzscheDB for EVA's own memory
 		TWILIO_ACCOUNT_SID    - For outbound voice calls
 		TWILIO_AUTH_TOKEN     - Twilio auth
 		TWILIO_PHONE_NUMBER   - Caller ID for scheduled calls
@@ -695,7 +1262,8 @@ CONFIGURATION
 		EVA_PROJECT_DIR            - EVA source code (default: /opt/eva-mind)
 		SANDBOX_DIR                - Code execution sandbox (default: /home/eva/sandbox)
 		SKILLS_DIR                 - Skills storage (default: /home/eva/skills)
-		NIETZSCHE_DB_URL           - NietzscheDB API (default: http://localhost:3000)
+		ENABLE_GOOGLE_SEARCH       - Enable Google Search grounding (default: true)
+		ENVIRONMENT                - "production" or "development" (tool tier)
 
 
 WEBSOCKET PROTOCOL
@@ -716,7 +1284,9 @@ WEBSOCKET PROTOCOL
 		{"type": "audio",  "data": "<base64 PCM 24kHz>"}
 		{"type": "text",   "text": "<transcription>"}
 		{"type": "text",   "text": "<transcription>", "data": "user"}
-		{"type": "status", "text": "ready|interrupted|turn_complete|error"}
+		{"type": "status", "text": "ready|interrupted|turn_complete|reconnecting|error"}
+		{"type": "tool_event", "tool": "<name>", "status": "executing|success|error",
+		 "tool_data": {<result>}}
 
 
 API ENDPOINTS
@@ -808,7 +1378,7 @@ MCP SERVER (CLAUDE CODE INTEGRATION)
 
 	Environment variables:
 
-		EVA_API_URL   - EVA backend URL (default: http://34.35.36.178:8080)
+		EVA_API_URL   - EVA backend URL (default: http://136.111.0.47:8091)
 		MCP_API_KEY   - Authentication key for EVA API
 
 	All tool calls are routed to the EVA backend via
@@ -817,104 +1387,92 @@ MCP SERVER (CLAUDE CODE INTEGRATION)
 	Tools by category (44 total, 11 categories):
 
 	Memory & Knowledge (5 tools):
-		eva_remember       - Store a memory in EVA (teach, register
-		                     decisions, save context)
-		eva_recall         - Search EVA's memories by query, returns
-		                     relevant stored memories
-		eva_teach          - Teach EVA something new, writes as
-		                     CoreMemory to NietzscheDB (port 7688)
-		eva_identity       - Returns EVA's current identity:
-		                     personality, memories, capabilities
-		eva_learn_topic    - EVA autonomously studies a topic: web
-		                     research, Gemini summary, NietzscheDB storage
+		eva_remember       - Store a memory in EVA
+		eva_recall         - Search EVA's memories by query
+		eva_teach          - Teach EVA something new (CoreMemory)
+		eva_identity       - Returns EVA's current identity
+		eva_learn_topic    - EVA autonomously studies a topic
 
 	Communication (7 tools):
-		eva_send_email     - Send email via Gmail API
-		eva_send_whatsapp  - Send message via Meta Graph API
-		eva_send_telegram  - Send message via Telegram Bot API
-		eva_send_slack     - Send message via Slack Web API
-		eva_send_discord   - Send message via Discord Bot API
-		eva_send_teams     - Send message via Microsoft Teams webhook
-		eva_send_signal    - Send message via signal-cli
+		eva_send_email, eva_send_whatsapp, eva_send_telegram,
+		eva_send_slack, eva_send_discord, eva_send_teams,
+		eva_send_signal
 
 	Productivity (6 tools):
-		eva_calendar_create - Create event in Google Calendar
-		eva_calendar_list   - List upcoming Google Calendar events
-		eva_drive_save      - Save file to Google Drive
-		eva_create_reminder - Create scheduled task (cron-like)
-		eva_list_reminders  - List active scheduled tasks
-		eva_cancel_reminder - Cancel a scheduled task by ID
+		eva_calendar_create, eva_calendar_list, eva_drive_save,
+		eva_create_reminder, eva_list_reminders, eva_cancel_reminder
 
 	Media & Web (4 tools):
-		eva_youtube_search - Search YouTube videos (title, URL,
-		                     thumbnail)
-		eva_spotify_search - Search Spotify tracks (name, artist,
-		                     URI)
-		eva_web_browse     - Navigate a web page, extract content
-		                     (title, text, links)
-		eva_web_search     - Search the internet, returns summarized
-		                     results
+		eva_youtube_search, eva_spotify_search, eva_web_browse,
+		eva_web_search
 
 	Databases (4 tools):
-		eva_query_postgres   - Execute SQL on NietzscheDB (130+
-		                       tables: patients, schedules, meds)
-		eva_query_NietzscheDB      - Execute Cypher on NietzscheDB general
-		                       (:7687) knowledge graph (Person,
-		                       Condition, Medication, Symptom)
-		eva_query_NietzscheDB_core - Execute Cypher on NietzscheDB Core (:7688)
-		                       EVA's personal memory (EvaSelf,
-		                       CoreMemory, MetaInsight)
-		eva_query_NietzscheDB     - Vector similarity search on NietzscheDB
-		                       (20+ collections, 3072-dim embeddings)
+		eva_query_postgres, eva_query_nietzsche,
+		eva_query_nietzsche_core, eva_query_nietzsche_vector
 
 	Code Execution (1 tool):
-		eva_execute_code   - Run code in secure sandbox (bash,
-		                     Python, Node.js). Timeout max 2 min.
+		eva_execute_code   - Run code in secure sandbox
 
 	Runtime Skills (4 tools):
-		eva_create_skill   - Create new skill (persisted as JSON)
-		eva_list_skills    - List all available skills
-		eva_run_skill      - Execute an existing skill with args
-		eva_delete_skill   - Remove a skill
+		eva_create_skill, eva_list_skills, eva_run_skill,
+		eva_delete_skill
 
 	Filesystem (3 tools):
-		eva_read_file      - Read file from EVA workspace
-		eva_write_file     - Write file to EVA workspace
-		eva_list_files     - List directory contents in workspace
+		eva_read_file, eva_write_file, eva_list_files
 
 	Smart Home / IoT (2 tools):
-		eva_smart_home_control - Control device via Home Assistant
-		                         (on, off, toggle, brightness)
-		eva_smart_home_status  - List devices and their current
-		                         states
+		eva_smart_home_control, eva_smart_home_status
 
 	Webhooks (3 tools):
-		eva_create_webhook  - Register webhook (name, URL, events)
-		eva_list_webhooks   - List all configured webhooks
-		eva_trigger_webhook - Fire webhook manually with payload
+		eva_create_webhook, eva_list_webhooks, eva_trigger_webhook
 
 	Self-Coding (4 tools):
-		eva_read_source    - Read EVA-Mind source code file
-		eva_edit_source    - Edit source code (eva/* branches only)
-		eva_run_tests      - Execute go test ./...
-		eva_get_diff       - Show git diff of uncommitted changes
+		eva_read_source, eva_edit_source, eva_run_tests,
+		eva_get_diff
 
 	Multi-LLM (1 tool):
-		eva_ask_llm        - Query another LLM (Claude, GPT,
-		                     DeepSeek) for second opinion
+		eva_ask_llm        - Query Claude, GPT, or DeepSeek
+
+
+SEED DATA
+---------
+
+	Three seed scripts populate initial knowledge:
+
+	1. cmd/seed_knowledge/main.go
+	   - Populates eva_self_knowledge collection.
+	   - EVA's identity, capabilities, personality description.
+	   - Run: go run cmd/seed_knowledge/main.go
+
+	2. cmd/seed_stories/main.go
+	   - Populates stories collection with 20 therapeutic narratives.
+	   - Each story gets a 3072D Gemini embedding for semantic search.
+	   - Duplicate detection via title matching (idempotent).
+	   - Rate-limited Gemini API calls (500ms between embeddings).
+	   - Run: go run cmd/seed_stories/main.go
+
+	3. cmd/seed_curriculum/main.go
+	   - Populates eva_curriculum collection with 31 study topics.
+	   - Topics across 6 categories: clinical, psychology, technology,
+	     wellness, linguistics, culture.
+	   - Priority 1-5 (5 = highest, studied first).
+	   - Run: go run cmd/seed_curriculum/main.go
+
+	All seed scripts are idempotent (safe to run multiple times).
+	They check for existing data before inserting.
 
 
 DEPLOYMENTS
 -----------
 
 	Malaria Angola:
-		VM: 34.35.36.178 (GCP africa-south1-a)
+		VM: 136.111.0.47 (GCP us-central1-a, static IP)
 		Frontend: Nginx + React (HTTPS, self-signed cert)
 		Backend: EVA-Mind on port 8091
-		Detection: Go backend on port 8080
+		NietzscheDB: port 50051 (gRPC) + port 8080 (dashboard)
+		Malaria API: Go backend on port 8082
 		WebSocket proxy: Nginx /ws/browser -> 8091
-		Infrastructure: Docker (NietzscheDB, NietzscheDB, NietzscheDB)
-		Service: systemd eva-mind.service
+		Service: systemd eva-x.service
 
 	EVA Elderly Care:
 		Twilio voice calls -> EVA-Mind WebSocket
@@ -927,7 +1485,7 @@ DEPLOYMENTS
 		GitHub Actions (.github/workflows/ci-cd.yml)
 		- Triggered on push to main
 		- Build & test on ubuntu-latest (Go 1.24)
-		- Deploy via gcloud compute ssh to malaria-vm
+		- Deploy via gcloud compute ssh to VM
 		- Runs scripts/redeploy.sh on VM:
 		  git pull -> go build -> systemctl restart -> health check
 		- Requires GCP_SA_KEY secret for authentication
@@ -976,6 +1534,76 @@ MONITORING
 	38+ total Prometheus metrics.
 
 
+CHANGELOG (2026-03-10) — MEMORY AUDIT FIX
+-------------------------------------------
+
+	8-phase structural fix to EVA's memory system. The cognitive
+	infrastructure existed but memories were not being formed.
+	The brain existed but could not remember.
+
+	FASE 1: Wire brain.Service into main.go
+	  - Created brain.Service in main.go after adapter initialization.
+	  - Connected to both /ws/browser and /ws/eva handlers.
+	  - Every conversation turn now calls SaveEpisodicMemoryWithContext()
+	    asynchronously after StoreTurn().
+	  - Files: main.go, browser_voice_handler.go, eva_handler.go
+
+	FASE 2: Fix database collection routing
+	  - Added InsertTo() for writing to specific collections
+	    (not just eva_mind).
+	  - Added NQLIn() for querying specific collections.
+	  - Added QueryByLabelIn() for label queries in specific collections.
+	  - Backward compatible: existing Insert()/NQL() unchanged.
+	  - File: internal/brainstem/database/db.go
+
+	FASE 3: Seed AutonomousLearner curriculum
+	  - Created cmd/seed_curriculum/main.go with 31 study topics.
+	  - Topics span clinical, psychology, technology, wellness,
+	    linguistics, and culture categories.
+	  - AutonomousLearner can now find pending topics to study.
+	  - File: cmd/seed_curriculum/main.go (NEW)
+
+	FASE 4: Fix speaker_embeddings dimension mismatch
+	  - Changed from 3072D to 192D in DefaultCollections().
+	  - ECAPA-TDNN model produces 192-dimensional voiceprints.
+	  - Requires drop+recreate of collection on VM if already exists.
+	  - File: internal/brainstem/infrastructure/nietzsche/client.go
+
+	FASE 5: Wire UnifiedRetrieval for Lacanian tracking
+	  - Created UnifiedRetrieval instance in main.go.
+	  - Passed to brain.Service (was nil before).
+	  - Prime() calls now populate signifier_chains collection.
+	  - File: main.go
+
+	FASE 6: Create seed_stories script
+	  - Created cmd/seed_stories/main.go with 20 therapeutic stories.
+	  - Stories get 3072D Gemini embeddings for semantic retrieval.
+	  - WisdomService can now find relevant stories for patients.
+	  - File: cmd/seed_stories/main.go (NEW)
+
+	FASE 7: Add retry with exponential backoff
+	  - Embedding generation: FastConfig retry (2 attempts, 50ms).
+	  - Vector upsert: FastConfig retry (2 attempts, 50ms).
+	  - Fallback: memory saved without vector if embedding fails.
+	  - Files: internal/cortex/brain/memory_context.go,
+	           internal/hippocampus/memory/storage.go
+
+	FASE 8: Document RBAC configuration
+	  - NietzscheDB auth can be enabled via /etc/nietzsche.env:
+	    NIETZSCHE_API_KEY_ADMIN, NIETZSCHE_API_KEY_WRITER,
+	    NIETZSCHE_API_KEY_READER.
+	  - Currently disabled in production (to be enabled post-testing).
+
+	Verification (run on VM after deployment):
+	  curl -s http://localhost:8080/api/collections | python3 -c "
+	  import sys,json
+	  for c in json.load(sys.stdin):
+	    if c['name'] in ['memories','eva_learnings','speaker_embeddings',
+	                      'stories','signifier_chains','eva_self_knowledge']:
+	      print(f\"{c['name']:30s} | {c['node_count']:>8} nodes\")
+	  "
+
+
 SCIENTIFIC FOUNDATIONS
 ---------------------
 
@@ -992,10 +1620,13 @@ SCIENTIFIC FOUNDATIONS
 	  EVA's evolving personality representation.
 
 	- Lacan, J. Psychoanalytic framework.
-	  Demand/desire analysis for clinical context.
+	  Demand/desire analysis, signifier chains, RSI registers.
 
 	- Baars, B.J. (1988). A Cognitive Theory of Consciousness.
 	  Global Workspace Theory for cognitive integration.
+
+	- Dehaene, S. (2014). Consciousness and the Brain.
+	  Neural workspace theory, ignition and broadcast.
 
 	- Rasch & Born (2013). About Sleep's Role in Memory.
 	  REM-inspired memory consolidation pipeline.
@@ -1008,6 +1639,14 @@ SCIENTIFIC FOUNDATIONS
 
 	- Holtmaat & Svoboda (2009). Experience-dependent Structural
 	  Synaptic Plasticity. Fractal connection patterns.
+
+	- Friston, K. (2010). The Free Energy Principle.
+	  Active inference for cognitive gap detection.
+
+	- Nietzsche, F. Philosophical framework.
+	  Will to Power (energy propagation), Eternal Recurrence
+	  (temporal echoes), Ubermensch (elite selection).
+	  Core inspiration for NietzscheDB's autonomous evolution.
 
 
 CONTRIBUTING
@@ -1036,7 +1675,7 @@ COPYRIGHT AND LICENSE
 
 	Copyright (C) 2025-2026 Jose R F Junior. All rights reserved.
 
-	EVA-Mind is free software; you can NietzscheDBtribute it and/or
+	EVA-Mind is free software; you can redistribute it and/or
 	modify it under the terms of the GNU Affero General Public
 	License as published by the Free Software Foundation; either
 	version 3 of the License, or (at your option) any later version.

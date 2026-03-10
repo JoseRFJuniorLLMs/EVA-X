@@ -134,8 +134,9 @@ func (h *FHIRHandler) GetPatientBundle(w http.ResponseWriter, r *http.Request) {
 // ============================================================================
 
 // RegisterFHIRRoutes registers all FHIR R4 endpoints on a gorilla/mux router.
+// IMPORTANT: Pass the v1 JWT-protected subrouter (already at /api/v1) to ensure auth.
 func RegisterFHIRRoutes(router *mux.Router, handler *FHIRHandler) {
-	fhir := router.PathPrefix("/api/v1/fhir").Subrouter()
+	fhir := router.PathPrefix("/fhir").Subrouter()
 
 	fhir.HandleFunc("/Patient/{id}", handler.GetPatient).Methods("GET")
 	fhir.HandleFunc("/Patient/{id}/$everything", handler.GetPatientBundle).Methods("GET")

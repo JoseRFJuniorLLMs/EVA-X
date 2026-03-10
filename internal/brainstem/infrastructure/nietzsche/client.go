@@ -935,7 +935,7 @@ func DefaultCollections() []nietzsche.CollectionConfig {
 		{Name: "eva_learnings", Dim: 3072, Metric: "cosine"},
 		{Name: "eva_codebase", Dim: 3072, Metric: "cosine"},
 		{Name: "eva_docs", Dim: 3072, Metric: "cosine"},
-		{Name: "speaker_embeddings", Dim: 3072, Metric: "cosine"},
+		{Name: "speaker_embeddings", Dim: 192, Metric: "cosine"}, // ECAPA-TDNN = 192D
 		{Name: "stories", Dim: 3072, Metric: "cosine"},
 		// Graph collections (poincare — hyperbolic hierarchy)
 		{Name: "patient_graph", Dim: 3072, Metric: "poincare"},

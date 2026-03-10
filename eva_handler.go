@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"eva/internal/cortex/brain"
 	gemini "eva/internal/cortex/gemini"
 	evaSelf "eva/internal/cortex/self"
 	"net/http"
@@ -217,6 +218,19 @@ func (s *SignalingServer) handleEvaChat(w http.ResponseWriter, r *http.Request) 
 								s.evaMemory.StoreTurn(storeCtx, sessionID, "assistant", t)
 							}(turn)
 						}
+						// FASE 1: Save EVA response to vector memory with embeddings
+						if s.brainService != nil {
+							go func(t string) {
+								memCtx := brain.MemoryContext{
+									Emotion:    "neutral",
+									Urgency:    "low",
+									Importance: 0.3,
+								}
+								if err := s.brainService.SaveEpisodicMemoryWithContext(0, "assistant", t, time.Now(), false, memCtx); err != nil {
+									log.Warn().Err(err).Msg("[BRAIN] Falha ao salvar resposta EVA em memória vetorial")
+								}
+							}(turn)
+						}
 						transcriptMu.Lock()
 						transcriptAccum.WriteString("EVA: " + turn + "\n")
 						evaResponses = append(evaResponses, turn)
@@ -288,6 +302,19 @@ func (s *SignalingServer) handleEvaChat(w http.ResponseWriter, r *http.Request) 
 							storeCtx, storeCancel := context.WithTimeout(context.Background(), 10*time.Second)
 							defer storeCancel()
 							s.evaMemory.StoreTurn(storeCtx, sessionID, "user", text)
+						}(msg.Text)
+					}
+					// FASE 1: Save user message to vector memory with embeddings
+					if s.brainService != nil {
+						go func(text string) {
+							memCtx := brain.MemoryContext{
+								Emotion:    "neutral",
+								Urgency:    "low",
+								Importance: 0.5,
+							}
+							if err := s.brainService.SaveEpisodicMemoryWithContext(0, "user", text, time.Now(), false, memCtx); err != nil {
+								log.Warn().Err(err).Msg("[BRAIN] Falha ao salvar mensagem do utilizador em memória vetorial")
+							}
 						}(msg.Text)
 					}
 					transcriptMu.Lock()
