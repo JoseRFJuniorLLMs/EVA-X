@@ -1,7 +1,7 @@
 # EVA-Mind — Auditoria de Memoria (8 Fases)
 
 **Data**: 2026-03-10
-**Auditor**: Claude Opus 4.6
+**Auditor**: Análise Automatizada
 
 ---
 

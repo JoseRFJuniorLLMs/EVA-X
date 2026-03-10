@@ -297,7 +297,7 @@ if sit.Intensity > 0.8 && contains(sit.Stressors, "crise") {
 
 ## 📞 Suporte
 
-**Implementado por:** Claude Sonnet 4.5
+**Implementado por:** EVA-Mind Team
 **Data:** 2026-02-16
 **Versão:** 1.0
 

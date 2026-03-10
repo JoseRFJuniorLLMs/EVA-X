@@ -1360,12 +1360,12 @@ API ENDPOINTS
 		GET  /metrics                  - Prometheus metrics
 
 
-MCP SERVER (CLAUDE CODE INTEGRATION)
+MCP SERVER
 -------------------------------------
 
-	EVA exposes 44 tools via Model Context Protocol (MCP) for
-	Claude Code integration. The MCP server communicates over
-	JSON-RPC 2.0 via stdin/stdout (stdio transport).
+	EVA exposes 44 tools via Model Context Protocol (MCP).
+	The MCP server communicates over JSON-RPC 2.0 via
+	stdin/stdout (stdio transport).
 
 	Executable: eva-mcp-server.exe
 	Config:     .mcp.json

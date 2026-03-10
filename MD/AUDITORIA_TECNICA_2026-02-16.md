@@ -3,7 +3,7 @@
 **Status Geral:** 🟡 MÉDIO-CRÍTICO
 **Data da Auditoria:** 2026-02-16
 **Arquivos Analisados:** 334 arquivos Go + auxiliares
-**Auditado por:** Claude Sonnet 4.5
+**Auditado por:** Análise Automatizada
 **Versão:** 1.0
 
 ---
@@ -1717,7 +1717,7 @@ O projeto **EVA-Mind** possui uma base de código **ambiciosa e bem estruturada*
 
 ---
 
-**Auditoria realizada por:** Claude Sonnet 4.5
+**Auditoria realizada por:** Análise Automatizada
 **Data:** 2026-02-16
 **Versão do Relatório:** 1.0
 **Linhas Analisadas:** ~150.000 LOC

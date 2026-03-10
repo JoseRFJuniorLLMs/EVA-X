@@ -1115,7 +1115,7 @@ func (h *ToolsHandler) ExecuteTool(name string, args map[string]interface{}, ido
 		return h.handleDeleteSkill(idosoID, args)
 
 	// ============================================================================
-	// 🔌 MCP BRIDGE — Tools expostas via MCP Server (Claude Code)
+	// 🔌 MCP BRIDGE — Tools expostas via MCP Server
 	// ============================================================================
 
 	// ============================================================================
