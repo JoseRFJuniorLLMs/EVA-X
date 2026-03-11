@@ -197,7 +197,7 @@ func (e *CoreMemoryEngine) GetIdentityContext(ctx context.Context) (string, erro
 	selfProps := selfResult.Content
 
 	// 2. Obter memorias recentes importantes (excluindo capabilities)
-	nqlMem := `MATCH (m:CoreMemory) WHERE m.importance_weight >= 0.6 AND m.memory_type != 'capability' RETURN m ORDER BY m.importance_weight DESC LIMIT 5`
+	nqlMem := `MATCH (m:CoreMemory) WHERE m.importance_weight >= 0.6 AND m.memory_type != "capability" RETURN m ORDER BY m.importance_weight DESC LIMIT 5`
 	memResult, err := e.graphAdapter.ExecuteNQL(ctx, nqlMem, nil, "eva_core")
 	if err != nil {
 		return "", fmt.Errorf("failed to query memories: %w", err)

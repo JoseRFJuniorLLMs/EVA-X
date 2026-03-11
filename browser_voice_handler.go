@@ -142,6 +142,27 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 
 	log.Info().Str("session", sessionID).Str("cpf", clientCPF).Bool("hasContext", configMsg.Text != "").Msg("[BROWSER] Config recebida do cliente")
 
+	// === BUSCAR PACIENTE POR CPF E CARREGAR CONTEXTO COMPLETO (Brain Service) ===
+	if clientCPF != "" && s.db != nil {
+		idoso, dbErr := s.db.GetIdosoByCPF(clientCPF)
+		if dbErr == nil && idoso != nil && idoso.ID > 0 {
+			log.Info().Str("session", sessionID).Str("nome", idoso.Nome).Int64("id", idoso.ID).Msg("[BROWSER] Paciente encontrado")
+
+			// Usar Brain Service para obter contexto completo (Lacan + medico + memorias + nome)
+			if s.brainService != nil {
+				systemPrompt, _, brainErr := s.brainService.GetSystemPrompt(ctx, idoso.ID)
+				if brainErr == nil && systemPrompt != "" {
+					clientContext = systemPrompt
+					log.Info().Str("session", sessionID).Int("len", len(systemPrompt)).Msg("[BROWSER] Contexto unificado carregado via Brain")
+				} else if brainErr != nil {
+					log.Warn().Err(brainErr).Str("session", sessionID).Msg("[BROWSER] Erro ao carregar contexto unificado - usando fallback")
+				}
+			}
+		} else if dbErr != nil {
+			log.Warn().Err(dbErr).Str("session", sessionID).Msg("[BROWSER] Erro ao buscar paciente por CPF")
+		}
+	}
+
 	// === CARREGAR CONTEXTO E MEMORIAS ===
 	var memories []string
 
