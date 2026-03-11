@@ -142,10 +142,14 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 
 	log.Info().Str("session", sessionID).Str("cpf", clientCPF).Bool("hasContext", configMsg.Text != "").Msg("[BROWSER] Config recebida do cliente")
 
+	// idosoID persiste para toda a sessao — usado em ExecuteTool para contexto do paciente
+	var sessionIdosoID int64
+
 	// === BUSCAR PACIENTE POR CPF E CARREGAR CONTEXTO COMPLETO (Brain Service) ===
 	if clientCPF != "" && s.db != nil {
 		idoso, dbErr := s.db.GetIdosoByCPF(clientCPF)
 		if dbErr == nil && idoso != nil && idoso.ID > 0 {
+			sessionIdosoID = idoso.ID
 			log.Info().Str("session", sessionID).Str("nome", idoso.Nome).Int64("id", idoso.ID).Msg("[BROWSER] Paciente encontrado")
 
 			// Usar Brain Service para obter contexto completo (Lacan + medico + memorias + nome)
@@ -353,7 +357,7 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 									}
 								}()
 
-								result, execErr := s.toolsHandler.ExecuteTool(n, a, 0)
+								result, execErr := s.toolsHandler.ExecuteTool(n, a, sessionIdosoID)
 								if execErr != nil {
 									log.Warn().Err(execErr).Str("tool", n).Msg("[BROWSER] Tool execution failed")
 									result = map[string]interface{}{"error": execErr.Error()}
@@ -418,7 +422,7 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 									Urgency:    "low",
 									Importance: 0.3,
 								}
-								if err := s.brainService.SaveEpisodicMemoryWithContext(0, "assistant", t, time.Now(), false, memCtx); err != nil {
+								if err := s.brainService.SaveEpisodicMemoryWithContext(sessionIdosoID, "assistant", t, time.Now(), false, memCtx); err != nil {
 									log.Warn().Err(err).Msg("[BRAIN] Falha ao salvar resposta EVA em memória vetorial")
 								}
 							}(turn)
@@ -455,7 +459,7 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 									Urgency:    "low",
 									Importance: 0.5,
 								}
-								if err := s.brainService.SaveEpisodicMemoryWithContext(0, "user", t, time.Now(), false, memCtx); err != nil {
+								if err := s.brainService.SaveEpisodicMemoryWithContext(sessionIdosoID, "user", t, time.Now(), false, memCtx); err != nil {
 									log.Warn().Err(err).Msg("[BRAIN] Falha ao salvar input do utilizador em memória vetorial")
 								}
 							}(text)

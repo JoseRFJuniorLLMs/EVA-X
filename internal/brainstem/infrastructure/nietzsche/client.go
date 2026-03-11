@@ -12,6 +12,11 @@ import (
 	nietzsche "nietzsche-sdk"
 
 	"eva/internal/brainstem/logger"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/backoff"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 )
 
 // Client wraps the NietzscheDB gRPC SDK for EVA.
@@ -22,18 +27,52 @@ type Client struct {
 	addr string
 }
 
-// NewClient connects to NietzscheDB via gRPC (insecure, for same-host / docker-compose).
+// NewClient connects to NietzscheDB via gRPC with auto-reconnect, keepalive, and retry.
+// When NietzscheDB restarts (e.g., after OOM), the gRPC connection automatically reconnects
+// without requiring EVA-X restart. Uses exponential backoff (500ms-5s) and keepalive pings.
 func NewClient(grpcAddr string) (*Client, error) {
 	log := logger.Nietzsche()
-	log.Info().Str("grpc_addr", grpcAddr).Msg("connecting to NietzscheDB via gRPC")
+	log.Info().Str("grpc_addr", grpcAddr).Msg("connecting to NietzscheDB via gRPC (with auto-reconnect)")
 
-	sdk, err := nietzsche.ConnectInsecure(grpcAddr)
+	sdk, err := nietzsche.Connect(grpcAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		// Keepalive: ping every 10s, timeout after 5s, allow pings without active RPCs
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                10 * time.Second,
+			Timeout:             5 * time.Second,
+			PermitWithoutStream: true,
+		}),
+		// Fast reconnect backoff: 500ms base, 1.6x multiplier, max 5s
+		grpc.WithConnectParams(grpc.ConnectParams{
+			Backoff: backoff.Config{
+				BaseDelay:  500 * time.Millisecond,
+				Multiplier: 1.6,
+				Jitter:     0.2,
+				MaxDelay:   5 * time.Second,
+			},
+			MinConnectTimeout: 3 * time.Second,
+		}),
+		// Retry policy: auto-retry on UNAVAILABLE (server restart) and RESOURCE_EXHAUSTED
+		grpc.WithDefaultServiceConfig(`{
+			"methodConfig": [{
+				"name": [{"service": "nietzschedb.NietzscheDB"}],
+				"waitForReady": true,
+				"retryPolicy": {
+					"maxAttempts": 3,
+					"initialBackoff": "0.2s",
+					"maxBackoff": "2s",
+					"backoffMultiplier": 2,
+					"retryableStatusCodes": ["UNAVAILABLE","RESOURCE_EXHAUSTED"]
+				}
+			}]
+		}`),
+	)
 	if err != nil {
 		log.Error().Err(err).Str("addr", grpcAddr).Msg("failed to connect to NietzscheDB")
 		return nil, fmt.Errorf("nietzsche gRPC connect %s: %w", grpcAddr, err)
 	}
 
-	log.Info().Str("grpc_addr", grpcAddr).Msg("NietzscheDB gRPC client connected")
+	log.Info().Str("grpc_addr", grpcAddr).Msg("NietzscheDB gRPC client connected (auto-reconnect enabled)")
 	return &Client{sdk: sdk, addr: grpcAddr}, nil
 }
 
