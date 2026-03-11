@@ -206,3 +206,8 @@ func (o *Orchestrator) Shutdown() {
 	}
 	log.Println("✅ [SWARM] All swarms shutdown complete")
 }
+
+// GetSwarms returns all registered swarm agents (for external tool enumeration).
+func (o *Orchestrator) GetSwarms() []SwarmAgent {
+	return o.registry.AllSwarms()
+}
