@@ -161,8 +161,34 @@ func (db *DB) QueryByLabel(ctx context.Context, label string, extraWhere string,
 }
 
 // Insert creates a new node with auto-generated int64 ID. Returns the new ID.
+// All data goes to the eva_mind collection (primary relational store).
 func (db *DB) Insert(ctx context.Context, table string, content map[string]interface{}) (int64, error) {
 	return db.insertRow(ctx, table, content)
+}
+
+// InsertTo creates a new node in a SPECIFIC collection (not eva_mind).
+// Use this when you need to write to eva_learnings, eva_curriculum, stories, etc.
+// FASE 2 FIX: Allows routing data to the correct collection.
+func (db *DB) InsertTo(ctx context.Context, collection string, table string, content map[string]interface{}) (int64, error) {
+	if db.nz == nil {
+		return 0, fmt.Errorf("NietzscheDB not initialized")
+	}
+	if collection == "" {
+		collection = evaMindCollection
+	}
+	id := nextID()
+	content["node_label"] = table
+	content["id"] = id
+	_, err := db.nz.InsertNode(ctx, nietzsche.InsertNodeOpts{
+		ID:         fmt.Sprintf("%s:%s:%d", collection, table, id),
+		Content:    content,
+		NodeType:   "Semantic",
+		Collection: collection,
+	})
+	if err != nil {
+		return 0, err
+	}
+	return id, nil
 }
 
 // InsertWithID creates a node with a specific ID (for migrations or deterministic IDs).
@@ -183,6 +209,45 @@ func (db *DB) GetNodeByID(ctx context.Context, table string, pgID interface{}) (
 // NQL executes a raw NQL query against the eva_mind collection.
 func (db *DB) NQL(ctx context.Context, nql string, params map[string]interface{}) (*nietzsche.QueryResult, error) {
 	return db.nqlQuery(ctx, nql, params)
+}
+
+// NQLIn executes a raw NQL query against a SPECIFIC collection.
+// FASE 2 FIX: Allows querying eva_learnings, eva_curriculum, stories, etc.
+func (db *DB) NQLIn(ctx context.Context, collection string, nql string, params map[string]interface{}) (*nietzsche.QueryResult, error) {
+	if db.nz == nil {
+		return nil, fmt.Errorf("NietzscheDB not initialized")
+	}
+	if collection == "" {
+		collection = evaMindCollection
+	}
+	return db.nz.Query(ctx, nql, params, collection)
+}
+
+// QueryByLabelIn finds all nodes with a specific node_label in a SPECIFIC collection.
+// FASE 2 FIX: Allows querying collections other than eva_mind.
+func (db *DB) QueryByLabelIn(ctx context.Context, collection string, label string, extraWhere string, params map[string]interface{}, limit int) ([]map[string]interface{}, error) {
+	if params == nil {
+		params = map[string]interface{}{}
+	}
+	params["nlabel"] = label
+
+	nql := fmt.Sprintf(`MATCH (n) WHERE n.node_label = $nlabel%s RETURN n`, extraWhere)
+	if limit > 0 {
+		nql += fmt.Sprintf(" LIMIT %d", limit)
+	}
+
+	result, err := db.NQLIn(ctx, collection, nql, params)
+	if err != nil {
+		return nil, err
+	}
+
+	rows := make([]map[string]interface{}, 0, len(result.Nodes))
+	for _, node := range result.Nodes {
+		if node.Content != nil {
+			rows = append(rows, node.Content)
+		}
+	}
+	return rows, nil
 }
 
 // SoftDelete marks matching nodes as deleted (sets _deleted=true, ativo=false).

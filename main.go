@@ -18,6 +18,7 @@ import (
 	"eva/internal/brainstem/oauth"
 	"eva/internal/brainstem/push"
 	"eva/internal/cortex/alert"
+	"eva/internal/cortex/brain"
 	"eva/internal/cortex/consciousness"
 	"eva/internal/cortex/eva_memory"
 	"eva/internal/cortex/gemini"
@@ -41,6 +42,7 @@ import (
 	internalmemory "eva/internal/memory"
 	"eva/internal/memory/krylov"
 	memscheduler "eva/internal/memory/scheduler"
+	"eva/internal/memory/ingestion"
 	"eva/internal/monitoring"
 	"eva/internal/motor/actions"
 	"eva/internal/motor/browser"
@@ -162,6 +164,16 @@ type SignalingServer struct {
 	energyFeeder       *situation.EnergyFeeder
 	ramEngine          *ram.RAMEngine
 	gmailWatcher       *gmailpkg.Watcher
+	brainService       *brain.Service // FASE 1: Episodic memory with embeddings (vector + graph)
+
+	// COS — Cognitive Operating System
+	thoughtBus     *consciousness.ThoughtBus
+	memoryKernel   *consciousness.MemoryKernel
+	daemonManager  *consciousness.DaemonManager
+	agentRuntime   *consciousness.AgentRuntime
+	graphEvolution *consciousness.GraphEvolutionEngine
+	selfModel      *consciousness.SelfModel
+	cognitiveAPI   *consciousness.CognitiveAPI
 }
 
 func main() {
@@ -282,6 +294,31 @@ func main() {
 	// 6.1 EVA Meta-Cognitive Memory (NietzscheDB eva_core)
 	evaMemSvc := eva_memory.New(evaGraphAdapter)
 	log.Info().Msg("EVA Meta-Cognitive Memory inicializada (NietzscheDB eva_core)")
+
+	// 6.1.1 FASE 5: Unified Retrieval — Lacanian signifier tracking + context building
+	// Integrates FDPN, Zeta router, conflict synthesis, wisdom service, MCP, prompt cache.
+	// Populates signifier_chains collection via TrackSignifierChain().
+	unifiedRetrieval := lacan.NewUnifiedRetrieval(db, evaGraphAdapter, vectorAdapter, cfg)
+	log.Info().Msg("🧠 UnifiedRetrieval inicializado — signifier chains + contexto Lacaniano activos")
+
+	// 6.1.2 FASE 1: Brain Service — episodic memory with 3072D embeddings
+	// Generates Gemini embeddings for every conversation turn and saves to:
+	//   - NietzscheDB relational (via db.Insert → eva_mind)
+	//   - NietzscheDB graph (via graphStore → eva_core)
+	//   - NietzscheDB vector (via vectorAdapter.Upsert → memories collection with KNN)
+	memEmbedSvc := memory.NewEmbeddingService(cfg.GoogleAPIKey)
+	brainService := brain.NewService(
+		db,
+		vectorAdapter,
+		evaGraphAdapter,       // EVA's graph (eva_core)
+		unifiedRetrieval,      // FASE 5: Lacanian signifier tracking
+		personalitySvc,
+		nil,                   // zetaRouter (not used in main handlers)
+		pushService,
+		memEmbedSvc,
+		ingestion.NewIngestionPipeline(cfg),
+	)
+	log.Info().Msg("🧠 Brain Service inicializado — memória episódica com embeddings 3072D activa")
 
 	// 6.3 Core Memory Engine — memoria pessoal da EVA (NietzscheDB eva_core)
 	var coreMemoryEngine *evaSelf.CoreMemoryEngine
@@ -565,12 +602,52 @@ func main() {
 		log.Info().Msg("Speaker Recognition Service initialized")
 	}
 
-	// 7.11 Global Workspace (Baars' Cognitive Theory of Consciousness)
-	globalWS := consciousness.NewGlobalWorkspace()
+	// 7.11 Cognitive Operating System (COS) — ThoughtBus + GlobalWorkspace + Memory + Daemons + Agents + Evolution + Self
+	thoughtBus := consciousness.NewThoughtBus(appCtx, 256)
+
+	globalWS := consciousness.NewGlobalWorkspace(thoughtBus)
 	globalWS.RegisterModule(&consciousness.LacanModule{})
 	globalWS.RegisterModule(&consciousness.PersonalityModule{})
 	globalWS.RegisterModule(&consciousness.EthicsModule{})
-	log.Info().Msg("🧠 Global Workspace inicializado (3 modulos cognitivos)")
+	globalWS.Start(appCtx)
+	log.Info().Msg("🧠 COS: GlobalWorkspace + ThoughtBus (attention scheduler activo)")
+
+	// COS Phase 1: Memory Kernel
+	memKernel := consciousness.NewMemoryKernel(thoughtBus, consciousness.DefaultMemoryKernelConfig())
+	memKernel.Start(appCtx)
+	log.Info().Msg("🧠 COS: Memory Kernel iniciado (WM/EM/SM/PM + spreading activation)")
+
+	// COS Phase 4: Cognitive Daemons
+	daemonMgr := consciousness.NewDefaultDaemons(thoughtBus, globalWS, memKernel)
+	daemonMgr.StartAll(appCtx)
+	log.Info().Msg("🧠 COS: Daemons cognitivos iniciados (energy/synaptogenesis/entropy/consolidation/hub)")
+
+	// COS Phase 5: Graph Evolution Engine
+	graphEvol := consciousness.NewGraphEvolutionEngine(thoughtBus, memKernel, consciousness.DefaultGraphEvolutionConfig())
+	graphEvol.Start(appCtx)
+	log.Info().Msg("🧠 COS: Graph Evolution Engine iniciado (fusion/fission/pruning/emergence)")
+
+	// COS Phase 6: Agent Runtime
+	agentRT := consciousness.NewAgentRuntime(thoughtBus)
+	agentRT.Start(appCtx)
+	log.Info().Msg("🧠 COS: Agent Runtime iniciado")
+
+	// COS Phase 8: Self Model
+	selfMdl := consciousness.NewSelfModel(thoughtBus, globalWS)
+	selfMdl.RegisterCapability("voice_recognition", "speaker_svc", 0.8)
+	selfMdl.RegisterCapability("lacanian_analysis", "lacan_engine", 0.7)
+	selfMdl.RegisterCapability("personality_assessment", "personality_svc", 0.8)
+	selfMdl.RegisterCapability("tool_execution", "swarm_orchestrator", 0.9)
+	selfMdl.RegisterCapability("memory_consolidation", "memory_orchestrator", 0.7)
+	selfMdl.RegisterCapability("emotion_detection", "voice_prosody", 0.6)
+	selfMdl.RegisterCapability("clinical_assessment", "clinical_swarm", 0.85)
+	selfMdl.RegisterCapability("research", "scholar_swarm", 0.7)
+	selfMdl.Start(appCtx)
+	log.Info().Msg("🧠 COS: Self Model iniciado (8 capacidades registadas)")
+
+	// COS Phase 7: Cognitive API
+	cosAPI := consciousness.NewCognitiveAPI(thoughtBus, globalWS, memKernel, daemonMgr, agentRT, graphEvol, selfMdl)
+	log.Info().Msg("🧠 COS: Cognitive Operating System totalmente inicializado")
 
 	// 7.12 Situational Modulator (detecta contexto e modula pesos de personalidade)
 	situationMod := situation.NewModulator(nil, nil)
@@ -638,6 +715,15 @@ func main() {
 		situationMod:       situationMod,
 		energyFeeder:       energyFeeder,
 		ramEngine:          ramEng,
+		brainService:       brainService, // FASE 1: episodic memory with embeddings
+		// COS
+		thoughtBus:     thoughtBus,
+		memoryKernel:   memKernel,
+		daemonManager:  daemonMgr,
+		agentRuntime:   agentRT,
+		graphEvolution: graphEvol,
+		selfModel:      selfMdl,
+		cognitiveAPI:   cosAPI,
 	}
 
 	// Gmail Watcher — DISABLED temporarily (Google OAuth requires valid HTTPS + domain)
@@ -686,6 +772,11 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"ok"}`))
 	}).Methods("GET")
+
+	// COS — Cognitive Operating System API routes
+	cosAPI.RegisterRoutes(func(pattern string, handler func(http.ResponseWriter, *http.Request)) {
+		router.HandleFunc(pattern, handler)
+	})
 
 	// Chat (Malaria-Angolar integration)
 	api.HandleFunc("/chat", server.handleChat).Methods("POST")
@@ -743,9 +834,9 @@ func main() {
 	router.PathPrefix("/mcp").Handler(mcpServer)
 	log.Info().Msg("🔌 MCP Server montado em /mcp")
 
-	// FHIR R4 Endpoints (HL7 interoperability)
+	// FHIR R4 Endpoints (HL7 interoperability) — JWT protected via v1 subrouter
 	fhirHandler := integration.NewFHIRHandler(db)
-	integration.RegisterFHIRRoutes(router, fhirHandler)
+	integration.RegisterFHIRRoutes(v1, fhirHandler)
 	log.Info().Msg("🏥 FHIR R4 endpoints registrados em /api/v1/fhir")
 
 	// Prometheus metrics (protected by bearer token)

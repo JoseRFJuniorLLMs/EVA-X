@@ -1,7 +1,7 @@
 # EVA-Mind — Auditoria Completa
 
 **Data**: 2026-02-20
-**Auditor**: Claude Opus 4.6
+**Auditor**: Análise Automatizada
 
 ---
 

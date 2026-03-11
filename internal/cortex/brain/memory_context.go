@@ -44,11 +44,17 @@ func (s *Service) SaveEpisodicMemoryWithContext(
 	log.Printf("🧠 [MEMORY-CTX] Importância calculada: %.2f | Emoção: %s | Urgência: %s | Intensidade: %d",
 		memCtx.Importance, memCtx.Emotion, memCtx.Urgency, memCtx.AudioIntensity)
 
-	// 2. Generate embedding (não bloqueia se falhar)
+	// 2. Generate embedding with retry (Gemini API may have rate limits)
+	// FASE 7 FIX: Retry embedding generation instead of silent failure
 	var embedding []float32
 	if s.embeddingService != nil {
-		if emb, err := s.embeddingService.GenerateEmbedding(ctx, content); err == nil {
-			embedding = emb
+		var embErr error
+		embedding, embErr = retryPkg.DoWithResult(ctx, retryPkg.FastConfig(), func(ctx context.Context) ([]float32, error) {
+			return s.embeddingService.GenerateEmbedding(ctx, content)
+		})
+		if embErr != nil {
+			log.Printf("⚠️ [MEMORY-CTX] Embedding falhou após retries (memória salva sem vetor): %v", embErr)
+			embedding = nil // Proceed without embedding — at least graph/relational data is saved
 		}
 	}
 

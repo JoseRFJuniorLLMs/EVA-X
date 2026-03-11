@@ -210,7 +210,7 @@
 |---|---|
 | `google_search_retrieval` | Busca nativa do Gemini com dynamic retrieval (threshold 0.5) |
 
-## MCP Server — 42 tools via Claude Code (stdio JSON-RPC 2.0)
+## MCP Server — 42 tools (stdio JSON-RPC 2.0)
 
 Servidor: `cmd/mcp-server/main.go` → bridge HTTP → `internal/tools/handlers.go`
 Config: `.mcp.json` | Auth: `X-MCP-Key` (env `MCP_API_KEY`)

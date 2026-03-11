@@ -1,7 +1,7 @@
 // Copyright (C) 2025-2026 Jose R F Junior <web2ajax@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// MCP Bridge Handlers — ferramentas expostas via MCP Server (Claude Code)
+// MCP Bridge Handlers — ferramentas expostas via MCP Server
 // Estas tools existem exclusivamente para o bridge stdio MCP ↔ EVA API.
 
 package tools

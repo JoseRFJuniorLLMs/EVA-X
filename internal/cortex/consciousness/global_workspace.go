@@ -6,18 +6,32 @@ package consciousness
 import (
 	"context"
 	"fmt"
-	"log"
 	"sync"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // GlobalWorkspace implementa a teoria do Workspace Global de Baars
 // Modulos cognitivos competem por atencao; vencedor e "broadcast" a todos
 // Ciencia: Baars, B. J. (1988) - "A Cognitive Theory of Consciousness"
+//
+// Integrado com ThoughtBus: o GlobalWorkspace subscreve como listener global
+// e actua como Attention Scheduler, decidindo quais pensamentos do barramento
+// ganham o foco e sao broadcast para o LLM.
 type GlobalWorkspace struct {
 	modules    []CognitiveModule
 	spotlight  *AttentionSpotlight
+	bus        *ThoughtBus // Barramento cognitivo (nil = modo legado sem bus)
 	mu         sync.RWMutex
+
+	// Attention Scheduler state
+	currentFocus       *ThoughtEvent // Pensamento actualmente em foco
+	attentionThreshold float64       // Threshold dinamico para ganhar atencao
+	focusMu            sync.Mutex    // Protege currentFocus e attentionThreshold
+
+	// Callbacks para broadcast
+	onFocusChange []func(ThoughtEvent) // Chamados quando o foco muda
 }
 
 // CognitiveModule interface que todo modulo cognitivo deve implementar
@@ -63,9 +77,10 @@ type AttentionSpotlight struct {
 	UrgencyWeight   float64 // Peso para urgencia
 }
 
-// NewGlobalWorkspace cria o workspace global
-func NewGlobalWorkspace() *GlobalWorkspace {
-	return &GlobalWorkspace{
+// NewGlobalWorkspace cria o workspace global.
+// Aceita um ThoughtBus opcional — se nil, opera em modo legado (sem barramento).
+func NewGlobalWorkspace(bus ...*ThoughtBus) *GlobalWorkspace {
+	gw := &GlobalWorkspace{
 		modules: make([]CognitiveModule, 0),
 		spotlight: &AttentionSpotlight{
 			NoveltyWeight:  0.25,
@@ -73,7 +88,12 @@ func NewGlobalWorkspace() *GlobalWorkspace {
 			ConflictWeight: 0.20,
 			UrgencyWeight:  0.20,
 		},
+		attentionThreshold: 0.3, // Threshold inicial conservador
 	}
+	if len(bus) > 0 && bus[0] != nil {
+		gw.bus = bus[0]
+	}
+	return gw
 }
 
 // RegisterModule registra um modulo cognitivo no workspace
@@ -82,7 +102,90 @@ func (gw *GlobalWorkspace) RegisterModule(module CognitiveModule) {
 	defer gw.mu.Unlock()
 
 	gw.modules = append(gw.modules, module)
-	log.Printf("[CONSCIOUSNESS] Modulo registrado: %s", module.Name())
+	log.Info().Str("module", module.Name()).Msg("[CONSCIOUSNESS] Modulo registrado")
+}
+
+// Start inicia o GlobalWorkspace como Attention Scheduler do ThoughtBus.
+// Subscreve-se como listener global (*) e avalia cada pensamento
+// para decidir se merece o foco (broadcast para consciencia).
+func (gw *GlobalWorkspace) Start(ctx context.Context) {
+	if gw.bus == nil {
+		log.Warn().Msg("[CONSCIOUSNESS] GlobalWorkspace iniciado sem ThoughtBus (modo legado)")
+		return
+	}
+
+	// Subscrever a TODOS os pensamentos para competicao de atencao
+	gw.bus.Subscribe(Global, func(event ThoughtEvent) {
+		gw.evaluateAttention(event)
+	})
+
+	log.Info().Float64("threshold", gw.attentionThreshold).Msg("[CONSCIOUSNESS] Attention Scheduler iniciado")
+}
+
+// OnFocusChange regista callback chamado quando o foco da consciencia muda.
+// Usado para: enviar ao LLM (Gemini), actualizar UI, persistir em NietzscheDB.
+func (gw *GlobalWorkspace) OnFocusChange(cb func(ThoughtEvent)) {
+	gw.focusMu.Lock()
+	defer gw.focusMu.Unlock()
+	gw.onFocusChange = append(gw.onFocusChange, cb)
+}
+
+// evaluateAttention avalia se um ThoughtEvent merece o foco da consciencia.
+// Algoritmo de competicao: AttentionScore = (Salience * Energy) / (EnergyCost + epsilon)
+// Se score > threshold dinamico, o pensamento ganha o broadcast.
+func (gw *GlobalWorkspace) evaluateAttention(event ThoughtEvent) {
+	gw.focusMu.Lock()
+	defer gw.focusMu.Unlock()
+
+	// Calcular attention score: saliencia ajustada pelo custo energetico
+	// epsilon (0.1) evita divisao por zero e penaliza pensamentos sem custo declarado
+	score := event.Salience * (1.0 / (event.EnergyCost + 0.1))
+
+	if score > gw.attentionThreshold {
+		gw.currentFocus = &event
+		gw.broadcastToConsciousness(event)
+
+		// Dynamic thresholding: subir levemente o threshold apos cada focus
+		// para evitar explosao de activacao (homeostase cognitiva)
+		gw.attentionThreshold = gw.attentionThreshold*0.95 + score*0.05
+	}
+}
+
+// broadcastToConsciousness envia o pensamento vencedor para os consumidores.
+// Na arquitectura COS, isto significa: o LLM (Gemini) recebe contexto,
+// a UI recebe updates, e o NietzscheDB persiste o evento.
+func (gw *GlobalWorkspace) broadcastToConsciousness(event ThoughtEvent) {
+	log.Info().
+		Str("source", event.Source).
+		Str("type", string(event.Type)).
+		Float64("salience", event.Salience).
+		Msg("[CONSCIOUSNESS] Foco assumido")
+
+	for _, cb := range gw.onFocusChange {
+		go cb(event)
+	}
+}
+
+// GetCurrentFocus retorna o pensamento actualmente em foco (ou nil).
+func (gw *GlobalWorkspace) GetCurrentFocus() *ThoughtEvent {
+	gw.focusMu.Lock()
+	defer gw.focusMu.Unlock()
+	return gw.currentFocus
+}
+
+// SetAttentionThreshold ajusta o threshold do attention scheduler.
+// Valores mais altos = mais selectivo (menos pensamentos ganham foco).
+// Range recomendado: 0.1 (permissivo) a 0.8 (muito selectivo).
+func (gw *GlobalWorkspace) SetAttentionThreshold(threshold float64) {
+	gw.focusMu.Lock()
+	defer gw.focusMu.Unlock()
+	gw.attentionThreshold = threshold
+	log.Info().Float64("threshold", threshold).Msg("[CONSCIOUSNESS] Attention threshold ajustado")
+}
+
+// GetBus retorna o ThoughtBus associado (ou nil em modo legado).
+func (gw *GlobalWorkspace) GetBus() *ThoughtBus {
+	return gw.bus
 }
 
 // ProcessConsciously executa processamento consciente
@@ -135,7 +238,7 @@ func (gw *GlobalWorkspace) ProcessConsciously(ctx context.Context, input Convers
 			}
 			collected++
 		case <-collectCtx.Done():
-			log.Printf("[CONSCIOUSNESS] Timeout: %d/%d modulos responderam", collected, moduleCount)
+			log.Warn().Int("collected", collected).Int("total", moduleCount).Msg("[CONSCIOUSNESS] Timeout: nem todos os modulos responderam")
 			goto competition
 		}
 	}
@@ -150,9 +253,23 @@ competition:
 	// 3. Competicao: AttentionSpotlight seleciona vencedor
 	winner := gw.spotlight.SelectWinner(interpretations, bids)
 
-	// 4. Broadcast: vencedor e compartilhado (logging para agora)
-	log.Printf("[CONSCIOUSNESS] Vencedor: %s (conf=%.2f) - %s",
-		winner.ModuleName, winner.Confidence, winner.Content)
+	// 4. Broadcast: vencedor e compartilhado via ThoughtBus
+	log.Info().
+		Str("winner", winner.ModuleName).
+		Float64("confidence", winner.Confidence).
+		Str("content", truncate(winner.Content, 80)).
+		Msg("[CONSCIOUSNESS] Vencedor da competicao")
+
+	// Publicar vencedor no ThoughtBus para que outros modulos reajam
+	if gw.bus != nil {
+		gw.bus.Publish(ThoughtEvent{
+			Source:     "global_workspace",
+			Type:       Inference,
+			Payload:    winner,
+			Salience:   winner.Confidence,
+			EnergyCost: 0.1, // Baixo custo — ja foi processado
+		})
+	}
 
 	// 5. Integracao: combinar insights de todos os modulos
 	integrated := gw.synthesizeInsights(interpretations, winner)
@@ -225,7 +342,7 @@ func (gw *GlobalWorkspace) synthesizeInsights(all []*Interpretation, winner *Int
 	return insight
 }
 
-// GetStatistics retorna estatisticas do workspace
+// GetStatistics retorna estatisticas do workspace e do ThoughtBus
 func (gw *GlobalWorkspace) GetStatistics() map[string]interface{} {
 	gw.mu.RLock()
 	defer gw.mu.RUnlock()
@@ -235,18 +352,38 @@ func (gw *GlobalWorkspace) GetStatistics() map[string]interface{} {
 		moduleNames[i] = m.Name()
 	}
 
-	return map[string]interface{}{
+	stats := map[string]interface{}{
 		"engine":        "global_workspace",
 		"modules":       moduleNames,
 		"module_count":  len(gw.modules),
-		"spotlight":     map[string]float64{
+		"spotlight": map[string]float64{
 			"novelty_weight":  gw.spotlight.NoveltyWeight,
 			"emotion_weight":  gw.spotlight.EmotionWeight,
 			"conflict_weight": gw.spotlight.ConflictWeight,
 			"urgency_weight":  gw.spotlight.UrgencyWeight,
 		},
-		"status": "active",
+		"attention_threshold": gw.attentionThreshold,
+		"has_bus":             gw.bus != nil,
+		"status":              "active",
 	}
+
+	// Metricas do ThoughtBus (se activo)
+	if gw.bus != nil {
+		stats["thought_bus"] = gw.bus.Metrics()
+	}
+
+	// Foco actual
+	gw.focusMu.Lock()
+	if gw.currentFocus != nil {
+		stats["current_focus"] = map[string]interface{}{
+			"source":   gw.currentFocus.Source,
+			"type":     string(gw.currentFocus.Type),
+			"salience": gw.currentFocus.Salience,
+		}
+	}
+	gw.focusMu.Unlock()
+
+	return stats
 }
 
 // --- Funcoes heuristicas para scoring ---

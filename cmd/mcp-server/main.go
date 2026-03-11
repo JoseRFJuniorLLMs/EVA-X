@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // EVA-Mind MCP Server (stdio)
-// Bridges Claude Code ↔ EVA's 150+ tools via JSON-RPC over stdin/stdout.
-// Usage: claude mcp add eva-mind -- go run ./cmd/mcp-server/main.go
+// Bridges AI assistants ↔ EVA's 150+ tools via JSON-RPC over stdin/stdout.
 
 package main
 

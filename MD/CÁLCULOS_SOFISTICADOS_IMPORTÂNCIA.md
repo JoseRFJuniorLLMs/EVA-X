@@ -1,7 +1,7 @@
 # Cálculos Sofisticados de Importância — EVA-Mind
 
 **Data**: 17 de Fevereiro de 2026
-**Autor**: Claude Code
+**Autor**: José R F Júnior
 **Status**: ✅ Implementado e Testado
 
 ---
@@ -907,4 +907,4 @@ A solução:
 ---
 
 *Última atualização: 17 de Fevereiro de 2026*
-*Implementado por: Claude Code (Haiku 4.5)*
+*Implementado — EVA-Mind*
