@@ -193,10 +193,55 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 
 	// --- setupGemini: cria e configura um novo client Gemini ---
 	// Captura clientContext e memories do escopo externo — sao imutaveis apos esta linha.
-	// Tools DESABILITADAS — apenas memoria e contexto do paciente por enquanto.
-	// As ferramentas serao habilitadas progressivamente.
+	// Tools: carrega dos 7 swarms prioritarios (CRITICAL + MEDIUM), exclui LOW
+	// NOTA: 111 tools (12 swarms) causava queda. 7 swarms = ~66 tools, testando.
 	var toolDefs []tools.FunctionDeclaration
-	// toolDefs vazio = sem function calling, Gemini usa apenas voz + contexto
+	if s.swarmOrchestrator != nil {
+		for _, agent := range s.swarmOrchestrator.GetSwarms() {
+			// Filtrar: apenas CRITICAL (3) e MEDIUM (1) — exclui LOW (0)
+			if agent.Priority() < 1 {
+				continue // pula entertainment, external, educator, kids, scholar
+			}
+			for _, td := range agent.Tools() {
+				props := make(map[string]*tools.Property)
+				for key, val := range td.Parameters {
+					if pm, ok := val.(map[string]interface{}); ok {
+						p := &tools.Property{}
+						if t, ok := pm["type"].(string); ok {
+							p.Type = strings.ToUpper(t)
+						}
+						if d, ok := pm["description"].(string); ok {
+							p.Description = d
+						}
+						if eI, ok := pm["enum"].([]interface{}); ok {
+							for _, v := range eI {
+								if sv, ok := v.(string); ok {
+									p.Enum = append(p.Enum, sv)
+								}
+							}
+						} else if eS, ok := pm["enum"].([]string); ok {
+							p.Enum = eS
+						}
+						// Array type requires Items definition for Gemini
+						if p.Type == "ARRAY" {
+							p.Items = &tools.Property{Type: "STRING"}
+						}
+						props[key] = p
+					}
+				}
+				toolDefs = append(toolDefs, tools.FunctionDeclaration{
+					Name:        td.Name,
+					Description: td.Description,
+					Parameters:  &tools.FunctionParameters{Type: "OBJECT", Properties: props, Required: td.Required},
+				})
+			}
+		}
+		log.Info().Int("count", len(toolDefs)).Msg("[BROWSER] Tools carregadas (7 swarms prioritarios)")
+	}
+	if len(toolDefs) == 0 {
+		toolDefs = tools.GetToolDefinitions()
+		log.Warn().Msg("[BROWSER] Swarm indisponivel, fallback para 11 tools estaticas")
+	}
 
 	setupGemini := func() (*gemini.Client, error) {
 		client, err := gemini.NewClient(ctx, s.cfg)

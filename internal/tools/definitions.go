@@ -20,6 +20,7 @@ type Property struct {
 	Type        string   `json:"type"` // "STRING", "INTEGER", "BOOLEAN"
 	Description string   `json:"description"`
 	Enum        []string `json:"enum,omitempty"`
+	Items       *Property `json:"items,omitempty"` // Required for ARRAY type
 }
 
 // GetVitalsDefinition returns the schema for the GetVitals tool
