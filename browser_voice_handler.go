@@ -193,46 +193,10 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 
 	// --- setupGemini: cria e configura um novo client Gemini ---
 	// Captura clientContext e memories do escopo externo — sao imutaveis apos esta linha.
-	// Tool definitions para Gemini Function Calling — carrega TODAS do Swarm Orchestrator (111+ tools)
+	// Tools DESABILITADAS — apenas memoria e contexto do paciente por enquanto.
+	// As ferramentas serao habilitadas progressivamente.
 	var toolDefs []tools.FunctionDeclaration
-	if s.swarmOrchestrator != nil {
-		for _, agent := range s.swarmOrchestrator.GetSwarms() {
-			for _, td := range agent.Tools() {
-				props := make(map[string]*tools.Property)
-				for key, val := range td.Parameters {
-					if pm, ok := val.(map[string]interface{}); ok {
-						p := &tools.Property{}
-						if t, ok := pm["type"].(string); ok {
-							p.Type = strings.ToUpper(t)
-						}
-						if d, ok := pm["description"].(string); ok {
-							p.Description = d
-						}
-						if eI, ok := pm["enum"].([]interface{}); ok {
-							for _, v := range eI {
-								if sv, ok := v.(string); ok {
-									p.Enum = append(p.Enum, sv)
-								}
-							}
-						} else if eS, ok := pm["enum"].([]string); ok {
-							p.Enum = eS
-						}
-						props[key] = p
-					}
-				}
-				toolDefs = append(toolDefs, tools.FunctionDeclaration{
-					Name:        td.Name,
-					Description: td.Description,
-					Parameters:  &tools.FunctionParameters{Type: "OBJECT", Properties: props, Required: td.Required},
-				})
-			}
-		}
-		log.Info().Int("count", len(toolDefs)).Msg("[BROWSER] Tools carregadas do Swarm Orchestrator")
-	}
-	if len(toolDefs) == 0 {
-		toolDefs = tools.GetToolDefinitions()
-		log.Warn().Msg("[BROWSER] Swarm indisponivel, usando ferramentas estaticas (11)")
-	}
+	// toolDefs vazio = sem function calling, Gemini usa apenas voz + contexto
 
 	setupGemini := func() (*gemini.Client, error) {
 		client, err := gemini.NewClient(ctx, s.cfg)
