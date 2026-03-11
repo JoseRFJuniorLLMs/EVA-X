@@ -10,7 +10,7 @@ import (
 	"eva/internal/cortex/brain"
 	gemini "eva/internal/cortex/gemini"
 	evaSelf "eva/internal/cortex/self"
-	"eva/internal/cortex/voice/speaker"
+	// "eva/internal/cortex/voice/speaker" // DESABILITADO — diagnostico de cortes de voz
 	"eva/internal/tools"
 	"net/http"
 	"strings"
@@ -451,15 +451,18 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 
 	startReader(initialClient, 1)
 
-	// --- Speaker Recognition ---
-	if s.speakerSvc != nil {
-		s.speakerSvc.SetCallback(sessionID, func(sid string, msg speaker.SpeakerMessage) {
-			writeMu.Lock()
-			conn.WriteJSON(msg)
-			writeMu.Unlock()
-		})
-		defer s.speakerSvc.RemoveSession(sessionID)
-	}
+	// --- Speaker Recognition: DESABILITADO ---
+	// Desabilitado para diagnostico de cortes de voz.
+	// O callback envia JSON ao browser via writeMu, competindo com audio PCM.
+	// ProcessAudioChunk roda MFCC+timbre analysis em cada pacote, consumindo CPU.
+	// if s.speakerSvc != nil {
+	// 	s.speakerSvc.SetCallback(sessionID, func(sid string, msg speaker.SpeakerMessage) {
+	// 		writeMu.Lock()
+	// 		conn.WriteJSON(msg)
+	// 		writeMu.Unlock()
+	// 	})
+	// 	defer s.speakerSvc.RemoveSession(sessionID)
+	// }
 
 	// --- Goroutine: Browser -> Gemini ---
 	// Usa gen=0 no sinal para que o loop principal sempre o processe (e nunca o filtre).
@@ -500,9 +503,10 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 				pcmData, err := base64.StdEncoding.DecodeString(msg.Data)
 				if err == nil {
 					client.SendAudio(pcmData)
-					if s.speakerSvc != nil {
-						go s.speakerSvc.ProcessAudioChunk(sessionID, clientCPF, pcmData)
-					}
+					// Speaker analysis DESABILITADO — consome CPU e compete com writeMu
+					// if s.speakerSvc != nil {
+					// 	go s.speakerSvc.ProcessAudioChunk(sessionID, clientCPF, pcmData)
+					// }
 				}
 			case "video":
 				jpegData, err := base64.StdEncoding.DecodeString(msg.Data)
