@@ -168,6 +168,43 @@ func (db *DB) UpdateAgendamentoStatus(id int64, status string) error {
 	return nil
 }
 
+// CreateIdoso cria um novo registo de idoso no NietzscheDB.
+// AUDITORIA FIX 2026-03-12: Antes nao existia — o Register so criava User, nao Idoso.
+func (db *DB) CreateIdoso(nome, cpf, telefone string) (*Idoso, error) {
+	ctx := context.Background()
+	now := time.Now().Format(time.RFC3339)
+
+	encNome := crypto.Encrypt(nome)
+	encCPF := crypto.Encrypt(cpf)
+	encTel := crypto.Encrypt(telefone)
+	cpfHash := crypto.HashCPF(cpf)
+
+	id, err := db.insertRow(ctx, "idosos", map[string]interface{}{
+		"nome":             encNome,
+		"cpf":              encCPF,
+		"cpf_hash":         cpfHash,
+		"telefone":         encTel,
+		"ativo":            true,
+		"nivel_cognitivo":  "normal",
+		"tom_voz":          "padrao",
+		"criado_em":        now,
+		"atualizado_em":    now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create idoso: %w", err)
+	}
+
+	return &Idoso{
+		ID:             id,
+		Nome:           nome,
+		CPF:            cpf,
+		Telefone:       telefone,
+		Ativo:          true,
+		NivelCognitivo: "normal",
+		TomVoz:         "padrao",
+	}, nil
+}
+
 func (db *DB) GetIdosoByCPF(cpf string) (*Idoso, error) {
 	ctx := context.Background()
 

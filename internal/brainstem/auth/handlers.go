@@ -21,9 +21,13 @@ func NewHandler(db *database.DB, cfg *config.Config) *Handler {
 
 type RegisterRequest struct {
 	Name     string `json:"name"`
+	Nome     string `json:"nome"`     // Compatibilidade com frontend
 	Email    string `json:"email"`
 	Password string `json:"password"`
+	Senha    string `json:"senha"`    // Compatibilidade com frontend
+	CPF      string `json:"cpf"`      // AUDITORIA FIX 2026-03-12: CPF para criar Idoso
 	Role     string `json:"role"`
+	Tipo     string `json:"tipo"`     // Compatibilidade com frontend
 }
 
 func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
@@ -31,6 +35,17 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
+	}
+
+	// Compatibilidade: frontend envia "nome" e "senha" além de "name" e "password"
+	if req.Name == "" && req.Nome != "" {
+		req.Name = req.Nome
+	}
+	if req.Password == "" && req.Senha != "" {
+		req.Password = req.Senha
+	}
+	if req.Role == "" && req.Tipo != "" {
+		req.Role = req.Tipo
 	}
 
 	if req.Email == "" || req.Password == "" || req.Name == "" {
@@ -52,13 +67,39 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 
 	err = h.DB.CreateUser(req.Name, req.Email, hashedPwd, req.Role)
 	if err != nil {
-		// Log error in production
 		http.Error(w, "Failed to create user (email might be taken)", http.StatusConflict)
 		return
 	}
 
+	// AUDITORIA FIX 2026-03-12: Se CPF fornecido, criar também o registo de Idoso.
+	// Antes, o Register só criava User (tabela usuarios) e ignorava o CPF.
+	// Sem Idoso, o EVA não consegue buscar nome, medicamentos, persona, etc.
+	var idosoID int64
+	if req.CPF != "" {
+		// Verificar se já existe
+		existing, _ := h.DB.GetIdosoByCPF(req.CPF)
+		if existing == nil {
+			idoso, err := h.DB.CreateIdoso(req.Name, req.CPF, "")
+			if err != nil {
+				// Log but don't fail registration — User was already created
+				// log.Printf("⚠️ [Register] Failed to create Idoso for CPF: %v", err)
+			} else {
+				idosoID = idoso.ID
+			}
+		} else {
+			idosoID = existing.ID
+		}
+	}
+
+	resp := map[string]interface{}{
+		"message": "User registered successfully",
+	}
+	if idosoID > 0 {
+		resp["idoso_id"] = idosoID
+	}
+
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{"message": "User registered successfully"})
+	json.NewEncoder(w).Encode(resp)
 }
 
 type LoginRequest struct {

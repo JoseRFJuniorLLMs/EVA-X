@@ -983,6 +983,8 @@ func DefaultCollections() []nietzsche.CollectionConfig {
 		{Name: "eva_mind", Dim: 3072, Metric: "poincare"},
 		// Cache collection (key-value TTL cache, not vector storage)
 		{Name: "eva_cache", Dim: 2, Metric: "cosine"},
+		// Perception collection (2D semantic perception — camera/vision)
+		{Name: "eva_perceptions", Dim: 128, Metric: "poincare"},
 	}
 }
 
@@ -1043,6 +1045,12 @@ func (c *Client) EnsureCollections(ctx context.Context) error {
 		{"eva_mind", "node_type"},
 		{"eva_mind", "created_at"},
 		{"eva_mind", "patient_id"},
+		// eva_perceptions: 2D semantic perception
+		{"eva_perceptions", "node_label"},
+		{"eva_perceptions", "user_id"},
+		{"eva_perceptions", "timestamp"},
+		{"eva_perceptions", "scene_type"},
+		{"eva_perceptions", "category"},
 	}
 	for _, idx := range indexes {
 		if err := c.CreateIndex(ctx, idx.collection, idx.field); err != nil {

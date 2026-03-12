@@ -46,6 +46,7 @@ import (
 	"eva/internal/monitoring"
 	"eva/internal/motor/actions"
 	"eva/internal/motor/browser"
+	"eva/internal/motor/perception"
 	"eva/internal/motor/cron"
 	"eva/internal/motor/email"
 	"eva/internal/motor/filesystem"
@@ -165,6 +166,9 @@ type SignalingServer struct {
 	ramEngine          *ram.RAMEngine
 	gmailWatcher       *gmailpkg.Watcher
 	brainService       *brain.Service // FASE 1: Episodic memory with embeddings (vector + graph)
+
+	// Perception — 2D Semantic Perception (camera → NietzscheDB)
+	perceptionHandler *perception.PerceptionHandler
 
 	// COS — Cognitive Operating System
 	thoughtBus     *consciousness.ThoughtBus
@@ -687,6 +691,18 @@ func main() {
 	researchEng := research.NewResearchEngine(db)
 	log.Info().Msg("🔬 Research Engine inicializado")
 
+	// 7.17 Perception Engine (2D Semantic Perception — camera → NietzscheDB)
+	var perceptionHdl *perception.PerceptionHandler
+	if cfg.GoogleAPIKey != "" {
+		var pErr error
+		perceptionHdl, pErr = perception.NewPerceptionHandler(cfg.GoogleAPIKey, nzClient, 3*time.Second)
+		if pErr != nil {
+			log.Warn().Err(pErr).Msg("PerceptionHandler indisponivel — visao 2D desabilitada")
+		} else {
+			log.Info().Msg("PerceptionHandler inicializado — EVA tem olhos (visao semantica 2D)")
+		}
+	}
+
 	// 8. SignalingServer
 	server := &SignalingServer{
 		db:                 db,
@@ -716,6 +732,8 @@ func main() {
 		energyFeeder:       energyFeeder,
 		ramEngine:          ramEng,
 		brainService:       brainService, // FASE 1: episodic memory with embeddings
+		// Perception
+		perceptionHandler:  perceptionHdl,
 		// COS
 		thoughtBus:     thoughtBus,
 		memoryKernel:   memKernel,
@@ -724,6 +742,13 @@ func main() {
 		graphEvolution: graphEvol,
 		selfModel:      selfMdl,
 		cognitiveAPI:   cosAPI,
+	}
+
+	// Wire perception status into tools handler
+	if perceptionHdl != nil {
+		toolsHandler.SetPerceptionStatus(func() map[string]interface{} {
+			return perceptionHdl.GetStats()
+		})
 	}
 
 	// Gmail Watcher — DISABLED temporarily (Google OAuth requires valid HTTPS + domain)

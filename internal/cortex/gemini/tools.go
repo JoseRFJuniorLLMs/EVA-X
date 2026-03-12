@@ -105,7 +105,15 @@ func GetDefaultTools() []interface{} {
 				},
 				map[string]interface{}{
 					"name":        "open_camera_analysis",
-					"description": "Ativa a câmera do dispositivo do idoso para analisar visualmente um objeto, remédio ou ambiente",
+					"description": "Ativa a câmera e a perceção semântica 2D da EVA para analisar visualmente objetos, remédios, ambiente e fatores de risco",
+					"parameters": map[string]interface{}{
+						"type":       "object",
+						"properties": map[string]interface{}{},
+					},
+				},
+				map[string]interface{}{
+					"name":        "get_perception_status",
+					"description": "Retorna o que a EVA esta a ver pela camara: objetos detectados, tipo de cena, atividade e fatores de risco",
 					"parameters": map[string]interface{}{
 						"type":       "object",
 						"properties": map[string]interface{}{},

@@ -25,6 +25,7 @@ WHAT IS EVA-MIND
 
 	- Real-time bidirectional voice via WebSocket (Gemini Live API)
 	- Real-time camera and screen analysis for medical assistance
+	- 2D Semantic Perception (continuous object detection via Gemini Vision)
 	- Unified Graph & Vector Memory (NietzscheDB) with Hebbian learning
 	- Native Hyperbolic embeddings (Poincare ball model)
 	- Krylov subspace compression (1536D -> 64D, ~97% precision)
@@ -166,6 +167,9 @@ ARCHITECTURE
 	  filesystem/    - Sandboxed file access (read, write, search)
 	  selfcode/      - Self-programming (git branches, commit, test)
 	  vision/        - Medication identifier, WebSocket handler
+	  perception/   - 2D Semantic Perception engine (camera -> Gemini
+	                   Vision -> object detection -> NietzscheDB graph
+	                   in Poincare ball with TTL-based ego-cache)
 	  workers/       - Pattern worker, prediction worker
 
 	gemini/        - Lean Gemini WebSocket client (v1alpha, browser
@@ -398,6 +402,14 @@ NIETZSCHEDB COLLECTIONS
 
 	eva_cache             2D     cosine    Fast key-value cache for
 	                                       temporary data.
+
+	eva_perceptions       128D   poincare  2D Semantic Perception.
+	                                       Camera frames analyzed by
+	                                       Gemini Vision produce Scene2D
+	                                       and Object2D nodes. TTL-based
+	                                       ego-cache (30s). Spatial and
+	                                       temporal edges. Hebbian links
+	                                       to concepts in other collections.
 
 	malaria               3072D  poincare  Malaria Angola clinical data.
 	                                       Separate collection for the

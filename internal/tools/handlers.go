@@ -84,7 +84,12 @@ type ToolsHandler struct {
 	NotifyFunc        func(idosoID int64, msgType string, payload interface{})
 	browserListeners  map[int64]func(msgType string, payload interface{}) // Per-session browser WS listeners
 	browserListenerMu sync.RWMutex
+	perceptionStatus  PerceptionStatusFunc // 2D Semantic Perception status callback
 }
+
+// PerceptionStatusFunc returns the current perception state (scene, objects, etc).
+// Injected via SetPerceptionStatus to avoid import cycle with motor/perception.
+type PerceptionStatusFunc func() map[string]interface{}
 
 func NewToolsHandler(db *database.DB, pushService *push.FirebaseService, emailService *email.EmailService) *ToolsHandler {
 	return &ToolsHandler{
@@ -691,6 +696,9 @@ func (h *ToolsHandler) ExecuteTool(name string, args map[string]interface{}, ido
 		reason, _ := args["reason"].(string)
 		timeOfDay, _ := args["time_of_day"].(string)
 		return h.handleScanMedicationVisual(idosoID, reason, timeOfDay)
+
+	case "get_perception_status":
+		return h.handleGetPerceptionStatus()
 
 	case "analyze_voice_prosody":
 		analysisType, _ := args["analysis_type"].(string)
@@ -2791,4 +2799,30 @@ func (h *ToolsHandler) SetSecurityAdapter(sa *nietzscheInfra.SecurityAdapter) {
 
 func (h *ToolsHandler) SetWiederkehrAdapter(wa *nietzscheInfra.WiederkehrAdapter) {
 	h.wiederkehrAdapter = wa
+}
+
+// SetPerceptionStatus injects the perception status callback.
+func (h *ToolsHandler) SetPerceptionStatus(fn PerceptionStatusFunc) {
+	h.perceptionStatus = fn
+}
+
+// handleGetPerceptionStatus returns the current 2D semantic perception state.
+func (h *ToolsHandler) handleGetPerceptionStatus() (map[string]interface{}, error) {
+	if h.perceptionStatus == nil {
+		return map[string]interface{}{
+			"status":  "unavailable",
+			"message": "Percepcao visual nao esta ativa. A camara precisa estar ligada.",
+		}, nil
+	}
+
+	status := h.perceptionStatus()
+	if status == nil {
+		return map[string]interface{}{
+			"status":  "no_data",
+			"message": "Nenhuma cena analisada ainda. Aguardando frames da camara.",
+		}, nil
+	}
+
+	status["status"] = "active"
+	return status, nil
 }

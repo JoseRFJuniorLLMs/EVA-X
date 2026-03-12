@@ -143,13 +143,15 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 	log.Info().Str("session", sessionID).Str("cpf", clientCPF).Bool("hasContext", configMsg.Text != "").Msg("[BROWSER] Config recebida do cliente")
 
 	// idosoID persiste para toda a sessao — usado em ExecuteTool para contexto do paciente
-	var sessionIdosoID int64
+	var idosoID int64
+	var idosoNome string
 
 	// === BUSCAR PACIENTE POR CPF E CARREGAR CONTEXTO COMPLETO (Brain Service) ===
 	if clientCPF != "" && s.db != nil {
 		idoso, dbErr := s.db.GetIdosoByCPF(clientCPF)
 		if dbErr == nil && idoso != nil && idoso.ID > 0 {
-			sessionIdosoID = idoso.ID
+			idosoID = idoso.ID
+			idosoNome = idoso.Nome
 			log.Info().Str("session", sessionID).Str("nome", idoso.Nome).Int64("id", idoso.ID).Msg("[BROWSER] Paciente encontrado")
 
 			// Usar Brain Service para obter contexto completo (Lacan + medico + memorias + nome)
@@ -170,30 +172,51 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 	// === CARREGAR CONTEXTO E MEMORIAS ===
 	var memories []string
 
-	// 1. Iniciar sessao e carregar meta-cognicao (sessoes recentes, topicos, insights)
-	if s.evaMemory != nil {
+	if idosoID > 0 && s.brainService != nil {
+		// ✅ CAMINHO CORRETO: UnifiedRetrieval com contexto completo do paciente
+		prompt, _, err := s.brainService.GetSystemPrompt(ctx, idosoID)
+		if err == nil && prompt != "" {
+			clientContext = prompt
+			log.Info().Str("session", sessionID).Int64("idosoID", idosoID).Str("nome", idosoNome).Int("promptLen", len(prompt)).Msg("[BROWSER] Contexto Unificado (RSI) carregado — nome, medicamentos, persona incluídos")
+		} else {
+			log.Warn().Err(err).Str("session", sessionID).Msg("[BROWSER] Falha ao gerar contexto unificado — fallback para contexto genérico")
+			// Fallback: pelo menos incluir o nome no contexto genérico
+			if idosoNome != "" {
+				clientContext = "Voce e a EVA, assistente virtual inteligente. O paciente se chama " + idosoNome + ". Cumprimente-o pelo nome. Responda em portugues de forma clara e profissional.\n\n" + clientContext
+			}
+		}
+	} else {
+		// Fallback: sem CPF ou sem idosoID, usar contexto genérico com meta-cognição
+		// 1. Iniciar sessao e carregar meta-cognicao (sessoes recentes, topicos, insights)
+		if s.evaMemory != nil {
+			s.evaMemory.StartSession(ctx, sessionID)
+			metaCognition, err := s.evaMemory.LoadMetaCognition(ctx)
+			if err == nil && metaCognition != "" {
+				memories = []string{metaCognition}
+				log.Info().Str("session", sessionID).Int("len", len(metaCognition)).Msg("[BROWSER] Meta-cognicao carregada (modo generico)")
+			} else if err != nil {
+				log.Warn().Err(err).Str("session", sessionID).Msg("[BROWSER] Erro ao carregar meta-cognicao")
+			}
+		}
+
+		// 2. Carregar identidade (personalidade, memorias core, capacidades)
+		if s.coreMemory != nil {
+			identityCtx, err := s.coreMemory.GetIdentityContext(ctx)
+			if err == nil && identityCtx != "" {
+				clientContext = identityCtx + "\n\n---\n\n" + clientContext
+				log.Info().Str("session", sessionID).Int("len", len(identityCtx)).Msg("[BROWSER] Identidade carregada (modo generico)")
+			} else if err != nil {
+				log.Warn().Err(err).Str("session", sessionID).Msg("[BROWSER] Erro ao carregar identidade")
+			}
+		}
+	}
+
+	// Se temos idosoID, iniciar sessão de memória com contexto do utilizador
+	if idosoID > 0 && s.evaMemory != nil {
 		s.evaMemory.StartSession(ctx, sessionID)
-		metaCognition, err := s.evaMemory.LoadMetaCognition(ctx)
-		if err == nil && metaCognition != "" {
-			memories = []string{metaCognition}
-			log.Info().Str("session", sessionID).Int("len", len(metaCognition)).Msg("[BROWSER] Meta-cognicao carregada")
-		} else if err != nil {
-			log.Warn().Err(err).Str("session", sessionID).Msg("[BROWSER] Erro ao carregar meta-cognicao")
-		}
 	}
 
-	// 2. Carregar identidade (personalidade, memorias core, capacidades)
-	if s.coreMemory != nil {
-		identityCtx, err := s.coreMemory.GetIdentityContext(ctx)
-		if err == nil && identityCtx != "" {
-			clientContext = identityCtx + "\n\n---\n\n" + clientContext
-			log.Info().Str("session", sessionID).Int("len", len(identityCtx)).Msg("[BROWSER] Identidade carregada")
-		} else if err != nil {
-			log.Warn().Err(err).Str("session", sessionID).Msg("[BROWSER] Erro ao carregar identidade")
-		}
-	}
-
-	log.Info().Str("session", sessionID).Int("memories", len(memories)).Bool("hasIdentity", s.coreMemory != nil).Msg("[BROWSER] Contexto carregado")
+	log.Info().Str("session", sessionID).Int("memories", len(memories)).Bool("hasIdentity", s.coreMemory != nil).Int64("idosoID", idosoID).Str("nome", idosoNome).Msg("[BROWSER] Contexto carregado")
 
 	// --- setupGemini: cria e configura um novo client Gemini ---
 	// Captura clientContext e memories do escopo externo — sao imutaveis apos esta linha.
@@ -271,6 +294,14 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 	}
 
 	log.Info().Str("session", sessionID).Int("memories", len(memories)).Msg("Browser voice session started (cortex/gemini)")
+
+	// Start 2D Semantic Perception (camera frames → NietzscheDB)
+	if s.perceptionHandler != nil {
+		if err := s.perceptionHandler.Start(ctx, sessionID, 0); err != nil {
+			log.Warn().Err(err).Msg("[BROWSER] Perception handler start failed (non-fatal)")
+		}
+		defer s.perceptionHandler.Stop()
+	}
 
 	conn.WriteJSON(browserMessage{Type: "status", Text: "ready"})
 
@@ -357,7 +388,7 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 									}
 								}()
 
-								result, execErr := s.toolsHandler.ExecuteTool(n, a, sessionIdosoID)
+								result, execErr := s.toolsHandler.ExecuteTool(n, a, idosoID)
 								if execErr != nil {
 									log.Warn().Err(execErr).Str("tool", n).Msg("[BROWSER] Tool execution failed")
 									result = map[string]interface{}{"error": execErr.Error()}
@@ -422,7 +453,7 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 									Urgency:    "low",
 									Importance: 0.3,
 								}
-								if err := s.brainService.SaveEpisodicMemoryWithContext(sessionIdosoID, "assistant", t, time.Now(), false, memCtx); err != nil {
+								if err := s.brainService.SaveEpisodicMemoryWithContext(idosoID, "assistant", t, time.Now(), false, memCtx); err != nil {
 									log.Warn().Err(err).Msg("[BRAIN] Falha ao salvar resposta EVA em memória vetorial")
 								}
 							}(turn)
@@ -459,7 +490,7 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 									Urgency:    "low",
 									Importance: 0.5,
 								}
-								if err := s.brainService.SaveEpisodicMemoryWithContext(sessionIdosoID, "user", t, time.Now(), false, memCtx); err != nil {
+								if err := s.brainService.SaveEpisodicMemoryWithContext(idosoID, "user", t, time.Now(), false, memCtx); err != nil {
 									log.Warn().Err(err).Msg("[BRAIN] Falha ao salvar input do utilizador em memória vetorial")
 								}
 							}(text)
@@ -584,6 +615,10 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 				jpegData, err := base64.StdEncoding.DecodeString(msg.Data)
 				if err == nil {
 					client.SendImage(jpegData)
+					// Feed frame to 2D Semantic Perception pipeline (async, non-blocking)
+					if s.perceptionHandler != nil {
+						s.perceptionHandler.SubmitFrame(jpegData)
+					}
 				}
 			case "text":
 				if msg.Text != "" {
@@ -706,6 +741,7 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 			go func() {
 				data := evaSelf.SessionData{
 					SessionID:       sessionID,
+					PatientID:       idosoID, // AUDITORIA FIX 2026-03-12: Antes era 0 (nunca populado)
 					Transcript:      transcript,
 					DurationMinutes: duration,
 					EVAResponses:    evaResponsesCopy,
