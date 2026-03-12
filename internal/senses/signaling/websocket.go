@@ -87,6 +87,7 @@ type WebSocketSession struct {
 	ID           string
 	CPF          string
 	IdosoID      int64
+	Nome         string // ✅ FIX: Nome do paciente — antes era recebido em createSession() mas nunca armazenado
 	WSConn       *websocket.Conn
 	GeminiClient *gemini.Client
 	ctx          context.Context
@@ -1468,6 +1469,7 @@ func (s *SignalingServer) createSession(sessionID, cpf string, idosoID int64, no
 		ID:           sessionID,
 		CPF:          cpf,
 		IdosoID:      idosoID,
+		Nome:         nome, // ✅ FIX: Agora o nome do paciente é armazenado na sessão
 		WSConn:       conn,
 		GeminiClient: geminiClient,
 		ctx:          ctx,

@@ -230,6 +230,11 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 				continue // pula entertainment, external, educator, kids, scholar
 			}
 			for _, td := range agent.Tools() {
+				// Skip google_search_retrieval — now handled as built-in grounding tool
+				// in SendSetup(). As a function call it paused audio; as built-in it's parallel.
+				if td.Name == "google_search_retrieval" {
+					continue
+				}
 				props := make(map[string]*tools.Property)
 				for key, val := range td.Parameters {
 					if pm, ok := val.(map[string]interface{}); ok {

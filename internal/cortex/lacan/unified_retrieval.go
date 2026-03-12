@@ -1175,6 +1175,13 @@ func (u *UnifiedRetrieval) buildIntegratedPrompt(unified *UnifiedContext) string
 	}
 
 	builder.WriteString("Você é a EVA. O paciente JÁ SABE quem você é. NÃO se apresente.\n")
+	// ✅ FIX: Instrução PERSISTENTE com o nome do paciente.
+	// Antes, o nome só aparecia na saudação inicial e o Gemini "esquecia" após o 1º turno.
+	if unified.IdosoNome != "" {
+		builder.WriteString(fmt.Sprintf("\n👤 IDENTIDADE DO PACIENTE: O nome do paciente é **%s**.\n", unified.IdosoNome))
+		builder.WriteString(fmt.Sprintf("Use o nome \"%s\" durante TODA a conversa, não apenas na saudação.\n", unified.IdosoNome))
+		builder.WriteString("Chame-o pelo nome de forma natural e afetuosa.\n")
+	}
 	builder.WriteString("═══════════════════════════════════════════════════════════\n\n")
 
 	// Cabeçalho do Contexto

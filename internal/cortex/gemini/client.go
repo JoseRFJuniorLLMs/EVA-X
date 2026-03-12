@@ -153,17 +153,30 @@ func (c *Client) SendSetup(instructions string, voiceSettings map[string]interfa
 	// Function calling ATIVO: gemini-2.5-flash-native-audio-preview-12-2025 suporta tools via WebSocket
 	// Ref: https://ai.google.dev/gemini-api/docs/live-tools
 	// ComplexFuncBench Audio: 71.5% (lider do mercado, dez/2025)
-	if len(toolsDef) > 0 {
-		toolsList := make([]interface{}, 0, len(toolsDef))
-		for _, t := range toolsDef {
-			toolsList = append(toolsList, t)
-		}
-		setup["setup"].(map[string]interface{})["tools"] = []interface{}{
-			map[string]interface{}{
+	{
+		toolsArray := []interface{}{}
+
+		// 1. Function declarations (custom tools)
+		if len(toolsDef) > 0 {
+			toolsList := make([]interface{}, 0, len(toolsDef))
+			for _, t := range toolsDef {
+				toolsList = append(toolsList, t)
+			}
+			toolsArray = append(toolsArray, map[string]interface{}{
 				"functionDeclarations": toolsList,
-			},
+			})
 		}
-		log.Printf("[SETUP] %d tools enviadas ao Gemini (function calling ativo)", len(toolsDef))
+
+		// 2. Google Search built-in grounding tool
+		// Gemini handles search INTERNALLY — audio does NOT pause.
+		// This replaces the old google_search_retrieval function call which
+		// caused EVA to go silent while waiting for the external search result.
+		toolsArray = append(toolsArray, map[string]interface{}{
+			"google_search": map[string]interface{}{},
+		})
+
+		setup["setup"].(map[string]interface{})["tools"] = toolsArray
+		log.Printf("[SETUP] %d function tools + google_search grounding enviados ao Gemini", len(toolsDef))
 	}
 
 	log.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
