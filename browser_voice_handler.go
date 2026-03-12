@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"eva/internal/cortex/brain"
 	gemini "eva/internal/cortex/gemini"
 	evaSelf "eva/internal/cortex/self"
@@ -177,7 +178,14 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 		prompt, _, err := s.brainService.GetSystemPrompt(ctx, idosoID)
 		if err == nil && prompt != "" {
 			clientContext = prompt
-			log.Info().Str("session", sessionID).Int64("idosoID", idosoID).Str("nome", idosoNome).Int("promptLen", len(prompt)).Msg("[BROWSER] Contexto Unificado (RSI) carregado — nome, medicamentos, persona incluídos")
+			// ✅ FIX: NietzscheDB pode não ter o nome (collection idosos vazia),
+			// mas Postgres TEM. Injetar o nome do Postgres no prompt se estiver ausente.
+			if idosoNome != "" && !strings.Contains(clientContext, idosoNome) {
+				nameBlock := fmt.Sprintf("\n👤 IDENTIDADE DO PACIENTE: O nome do paciente é **%s**.\nUse o nome \"%s\" durante TODA a conversa. Chame-o pelo nome de forma natural e afetuosa.\n\n", idosoNome, idosoNome)
+				clientContext = nameBlock + clientContext
+				log.Info().Str("session", sessionID).Str("nome", idosoNome).Msg("[BROWSER] Nome injetado no prompt (Postgres fallback)")
+			}
+			log.Info().Str("session", sessionID).Int64("idosoID", idosoID).Str("nome", idosoNome).Int("promptLen", len(clientContext)).Msg("[BROWSER] Contexto Unificado (RSI) carregado — nome, medicamentos, persona incluídos")
 		} else {
 			log.Warn().Err(err).Str("session", sessionID).Msg("[BROWSER] Falha ao gerar contexto unificado — fallback para contexto genérico")
 			// Fallback: pelo menos incluir o nome no contexto genérico
