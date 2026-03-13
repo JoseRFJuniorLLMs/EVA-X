@@ -543,27 +543,20 @@ type CollectionInfo struct {
 	PointCount int64  `json:"point_count"`
 }
 
-// ListCollections lists all known NietzscheDB collections.
-func (s *SelfAwarenessService) ListCollections(_ context.Context) ([]CollectionInfo, error) {
+// ListCollections lists all NietzscheDB collections (real gRPC query).
+func (s *SelfAwarenessService) ListCollections(ctx context.Context) ([]CollectionInfo, error) {
 	if s.vectorAdapter == nil {
 		return nil, fmt.Errorf("vector adapter indisponivel")
 	}
 
-	knownCollections := []string{
-		"eva_learnings", "eva_codebase", "eva_self_knowledge", "eva_docs",
-		"signifier_chains", "speaker_embeddings",
-		"gurdjieff_teachings", "osho_insights", "ouspensky_fragments",
-		"nietzsche_aphorisms", "rumi_poems", "hafiz_poems",
-		"kabir_songs", "zen_koans", "sufi_stories",
-		"jung_concepts", "lacan_concepts", "marcus_aurelius",
-		"seneca_letters", "epictetus_discourses", "buddha_suttas",
+	cols, err := s.vectorAdapter.SDK().ListCollections(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("ListCollections gRPC: %w", err)
 	}
 
-	// NietzscheDB does not expose per-collection point counts yet,
-	// so we return the known collection names with zero counts.
-	infos := make([]CollectionInfo, 0, len(knownCollections))
-	for _, name := range knownCollections {
-		infos = append(infos, CollectionInfo{Name: name, PointCount: 0})
+	infos := make([]CollectionInfo, 0, len(cols))
+	for _, c := range cols {
+		infos = append(infos, CollectionInfo{Name: c.Name, PointCount: int64(c.NodeCount)})
 	}
 	return infos, nil
 }
@@ -615,9 +608,6 @@ func (s *SelfAwarenessService) GetSystemStats(ctx context.Context) (*SystemStats
 			stats.TotalMemories = memories
 		}
 
-		// NietzscheDB labels — hard-coded estimate since there is no
-		// information_schema equivalent in NietzscheDB.
-		stats.NietzscheLabels = 21
 	}
 
 	collections, err := s.ListCollections(ctx)

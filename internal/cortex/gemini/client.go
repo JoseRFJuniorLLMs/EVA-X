@@ -417,12 +417,15 @@ func (c *Client) handleToolCalls(toolCall map[string]interface{}) {
 
 // SendToolResponse envia resultado de ferramenta
 func (c *Client) SendToolResponse(name string, result map[string]interface{}) error {
+	// Adapt tool response for Gemini Native Audio (prevent freeze on large payloads)
+	safeResult := AdaptForAudio(name, result)
+
 	msg := map[string]interface{}{
 		"tool_response": map[string]interface{}{
 			"function_responses": []map[string]interface{}{
 				{
 					"name":     name,
-					"response": result,
+					"response": safeResult,
 				},
 			},
 		},

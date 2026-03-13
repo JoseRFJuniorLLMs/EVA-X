@@ -284,26 +284,52 @@ func (a *Agent) handleQueryDatabase(ctx context.Context, call swarm.ToolCall) (*
 }
 
 func (a *Agent) handleListCollections(ctx context.Context, call swarm.ToolCall) (*swarm.ToolResult, error) {
-	if a.svc == nil {
-		return &swarm.ToolResult{Success: false, Message: "Service nao inicializado"}, nil
+	if a.nietzscheClient == nil {
+		return &swarm.ToolResult{Success: false, Message: "NietzscheDB client nao inicializado"}, nil
 	}
 
-	collections, err := a.svc.ListCollections(ctx)
+	collections, err := a.nietzscheClient.ListCollections(ctx)
 	if err != nil {
-		return &swarm.ToolResult{Success: false, Message: fmt.Sprintf("Erro: %v", err)}, nil
+		return &swarm.ToolResult{Success: false, Message: fmt.Sprintf("Erro ListCollections: %v", err)}, nil
 	}
 
-	var lines []string
-	totalPoints := int64(0)
+	// Sort by NodeCount desc for top-5
+	type colEntry struct {
+		name  string
+		nodes uint64
+		edges uint64
+	}
+	entries := make([]colEntry, 0, len(collections))
+	totalNodes := uint64(0)
+	totalEdges := uint64(0)
 	for _, c := range collections {
-		lines = append(lines, fmt.Sprintf("- %s: %d pontos", c.Name, c.PointCount))
-		totalPoints += c.PointCount
+		entries = append(entries, colEntry{name: c.Name, nodes: c.NodeCount, edges: c.EdgeCount})
+		totalNodes += c.NodeCount
+		totalEdges += c.EdgeCount
+	}
+	// Sort descending by nodes
+	for i := 0; i < len(entries); i++ {
+		for j := i + 1; j < len(entries); j++ {
+			if entries[j].nodes > entries[i].nodes {
+				entries[i], entries[j] = entries[j], entries[i]
+			}
+		}
 	}
 
+	// Top 5 + summary
+	var top []string
+	limit := 5
+	if len(entries) < limit {
+		limit = len(entries)
+	}
+	for i := 0; i < limit; i++ {
+		top = append(top, fmt.Sprintf("%s: %d nos, %d edges", entries[i].name, entries[i].nodes, entries[i].edges))
+	}
+
+	msg := fmt.Sprintf("Tenho %d colecoes com %d nos e %d edges no total. As maiores: %s", len(collections), totalNodes, totalEdges, strings.Join(top, "; "))
 	return &swarm.ToolResult{
 		Success: true,
-		Message: fmt.Sprintf("Minhas %d colecoes vetoriais (%d pontos total):\n%s", len(collections), totalPoints, strings.Join(lines, "\n")),
-		Data:    map[string]interface{}{"collections": collections, "total_points": totalPoints},
+		Message: msg,
 	}, nil
 }
 

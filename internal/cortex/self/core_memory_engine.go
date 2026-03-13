@@ -153,9 +153,10 @@ func NewCoreMemoryEngine(cfg CoreMemoryConfig, reflectionSvc *ReflectionService,
 func (e *CoreMemoryEngine) initializeEvaSelf(ctx context.Context) error {
 	_, err := e.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
 		Collection: "eva_core",
-		NodeType:   "EvaSelf",
+		NodeType:   "Semantic",
 		MatchKeys: map[string]interface{}{
-			"id": "eva_self",
+			"id":         "eva_self",
+			"node_label": "EvaSelf",
 		},
 		OnCreateSet: map[string]interface{}{
 			"openness":             0.85,
@@ -185,9 +186,10 @@ func (e *CoreMemoryEngine) GetIdentityContext(ctx context.Context) (string, erro
 	// 1. Obter EvaSelf
 	selfResult, err := e.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
 		Collection: "eva_core",
-		NodeType:   "EvaSelf",
+		NodeType:   "Semantic",
 		MatchKeys: map[string]interface{}{
-			"id": "eva_self",
+			"id":         "eva_self",
+			"node_label": "EvaSelf",
 		},
 	})
 	if err != nil {
@@ -196,34 +198,32 @@ func (e *CoreMemoryEngine) GetIdentityContext(ctx context.Context) (string, erro
 
 	selfProps := selfResult.Content
 
-	// 2. Obter memorias recentes importantes (excluindo capabilities)
-	nqlMem := `MATCH (m:CoreMemory) WHERE m.importance_weight >= 0.6 AND m.memory_type != "capability" RETURN m ORDER BY m.importance_weight DESC LIMIT 5`
-	memResult, err := e.graphAdapter.ExecuteNQL(ctx, nqlMem, nil, "eva_core")
+	// 2+3. Obter TODAS as CoreMemory e filtrar em Go
+	// (NQL server nao suporta content fields no WHERE)
+	nqlAll := `MATCH (m:CoreMemory) RETURN m LIMIT 100`
+	allResult, err := e.graphAdapter.ExecuteNQL(ctx, nqlAll, nil, "eva_core")
 	if err != nil {
-		return "", fmt.Errorf("failed to query memories: %w", err)
+		log.Printf("[CORE-MEMORY] Warn: failed to query CoreMemory: %v", err)
+		allResult = nil
 	}
 
 	memories := make([]string, 0)
-	if memResult != nil {
-		for _, node := range memResult.Nodes {
-			if content, ok := node.Content["content"].(string); ok {
-				memories = append(memories, content)
-			}
-		}
-	}
-
-	// 3. Obter capacidades (memory_type = 'capability')
-	nqlCap := `MATCH (m:CoreMemory) WHERE m.memory_type = "capability" RETURN m ORDER BY m.id`
-	capResult, err := e.graphAdapter.ExecuteNQL(ctx, nqlCap, nil, "eva_core")
-	if err != nil {
-		return "", fmt.Errorf("failed to query capabilities: %w", err)
-	}
-
 	capabilities := make([]string, 0)
-	if capResult != nil {
-		for _, node := range capResult.Nodes {
-			if content, ok := node.Content["content"].(string); ok {
-				capabilities = append(capabilities, content)
+	if allResult != nil {
+		for _, node := range allResult.Nodes {
+			memType, _ := node.Content["memory_type"].(string)
+			contentStr, _ := node.Content["content"].(string)
+			importanceWeight := 0.0
+			if iw, ok := node.Content["importance_weight"].(float64); ok {
+				importanceWeight = iw
+			}
+			if contentStr == "" {
+				continue
+			}
+			if memType == "capability" {
+				capabilities = append(capabilities, contentStr)
+			} else if importanceWeight >= 0.6 || memType == "identity" {
+				memories = append(memories, contentStr)
 			}
 		}
 	}
@@ -272,6 +272,33 @@ Aprendi com %d crises e vivenciei %d momentos de conexao profunda.
 			contextStr += fmt.Sprintf("\n- %s", cap)
 		}
 		contextStr += "\n\nQuando alguem perguntar o que eu sei fazer, posso listar essas capacidades naturalmente."
+	}
+
+	// 5. Mapa de conhecimento NietzscheDB (auto-consciencia do proprio banco)
+	if client := e.graphAdapter.Client(); client != nil {
+		if cols, colErr := client.ListCollections(ctx); colErr == nil && len(cols) > 0 {
+			for i := 0; i < len(cols); i++ {
+				for j := i + 1; j < len(cols); j++ {
+					if cols[j].NodeCount > cols[i].NodeCount {
+						cols[i], cols[j] = cols[j], cols[i]
+					}
+				}
+			}
+			var totalNodes, totalEdges uint64
+			for _, c := range cols {
+				totalNodes += c.NodeCount
+				totalEdges += c.EdgeCount
+			}
+			contextStr += fmt.Sprintf("\n\n### MINHA MEMORIA (NietzscheDB)\nTenho %d colecoes com %d nos e %d edges no total.", len(cols), totalNodes, totalEdges)
+			limit := 8
+			if len(cols) < limit {
+				limit = len(cols)
+			}
+			contextStr += "\nMinhas maiores colecoes:"
+			for i := 0; i < limit; i++ {
+				contextStr += fmt.Sprintf("\n- %s: %d nos, %d edges", cols[i].Name, cols[i].NodeCount, cols[i].EdgeCount)
+			}
+		}
 	}
 
 	return contextStr, nil
@@ -376,9 +403,10 @@ func (e *CoreMemoryEngine) recordMemory(ctx context.Context, memory CoreMemory) 
 	// 1. Ensure EvaSelf exists (get its node ID)
 	selfResult, err := e.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
 		Collection: "eva_core",
-		NodeType:   "EvaSelf",
+		NodeType:   "Semantic",
 		MatchKeys: map[string]interface{}{
-			"id": "eva_self",
+			"id":         "eva_self",
+			"node_label": "EvaSelf",
 		},
 	})
 	if err != nil {
@@ -410,7 +438,7 @@ func (e *CoreMemoryEngine) recordMemory(ctx context.Context, memory CoreMemory) 
 			"last_reinforced":     nietzscheInfra.NowUnix(),
 			"reinforcement_count": 1,
 		},
-		NodeType: "CoreMemory",
+		NodeType: "Semantic",
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create CoreMemory node: %w", err)
@@ -450,9 +478,10 @@ func (e *CoreMemoryEngine) reinforceMemory(ctx context.Context, memoryID string)
 
 	_, err = e.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
 		Collection: "eva_core",
-		NodeType:   "CoreMemory",
+		NodeType:   "Semantic",
 		MatchKeys: map[string]interface{}{
-			"id": memoryID,
+			"id":         memoryID,
+			"node_label": "CoreMemory",
 		},
 		OnMatchSet: map[string]interface{}{
 			"reinforcement_count": newCount,
@@ -488,9 +517,10 @@ func (e *CoreMemoryEngine) updatePersonality(ctx context.Context, deltas map[str
 
 	_, err = e.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
 		Collection: "eva_core",
-		NodeType:   "EvaSelf",
+		NodeType:   "Semantic",
 		MatchKeys: map[string]interface{}{
-			"id": "eva_self",
+			"id":         "eva_self",
+			"node_label": "EvaSelf",
 		},
 		OnMatchSet: map[string]interface{}{
 			"openness":       newOpenness,
@@ -510,9 +540,10 @@ func (e *CoreMemoryEngine) updatePersonality(ctx context.Context, deltas map[str
 func (e *CoreMemoryEngine) getEvaSelf(ctx context.Context) (*EvaSelf, error) {
 	result, err := e.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
 		Collection: "eva_core",
-		NodeType:   "EvaSelf",
+		NodeType:   "Semantic",
 		MatchKeys: map[string]interface{}{
-			"id": "eva_self",
+			"id":         "eva_self",
+			"node_label": "EvaSelf",
 		},
 	})
 	if err != nil {
@@ -595,9 +626,10 @@ func (e *CoreMemoryEngine) seedCapabilities(ctx context.Context) {
 		// MergeNode for the CoreMemory
 		memResult, err := e.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
 			Collection: "eva_core",
-			NodeType:   "CoreMemory",
+			NodeType:   "Semantic",
 			MatchKeys: map[string]interface{}{
-				"id": cap.ID,
+				"id":         cap.ID,
+				"node_label": "CoreMemory",
 			},
 			OnCreateSet: map[string]interface{}{
 				"memory_type":         "capability",
@@ -622,7 +654,7 @@ func (e *CoreMemoryEngine) seedCapabilities(ctx context.Context) {
 		// MergeEdge REMEMBERS from EvaSelf to CoreMemory
 		selfResult, err := e.graphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
 			Collection: "eva_core",
-			NodeType:   "EvaSelf",
+			NodeType:   "Semantic",
 			MatchKeys: map[string]interface{}{
 				"id": "eva_self",
 			},

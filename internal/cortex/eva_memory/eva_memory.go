@@ -128,9 +128,10 @@ func (em *EvaMemory) StartSession(ctx context.Context, sessionID string) error {
 	now := time.Now()
 
 	_, err := em.graph.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
-		NodeType: "EvaSession",
+		NodeType: "Semantic",
 		MatchKeys: map[string]interface{}{
-			"id": sessionID,
+			"id":         sessionID,
+			"node_label": "EvaSession",
 		},
 		OnCreateSet: map[string]interface{}{
 			"started_at": now.Format(time.RFC3339),
@@ -184,9 +185,10 @@ func (em *EvaMemory) EndSession(ctx context.Context, sessionID string) error {
 	}
 
 	_, err = em.graph.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
-		NodeType: "EvaSession",
+		NodeType: "Semantic",
 		MatchKeys: map[string]interface{}{
-			"id": sessionID,
+			"id":         sessionID,
+			"node_label": "EvaSession",
 		},
 		OnMatchSet: map[string]interface{}{
 			"ended_at": now.Format(time.RFC3339),
@@ -218,12 +220,13 @@ func (em *EvaMemory) StoreTurn(ctx context.Context, sessionID, role, content str
 
 	// 2. Create the turn node
 	turnResult, err := em.graph.InsertNode(ctx, nietzsche.InsertNodeOpts{
-		NodeType: "EvaTurn",
+		NodeType: "Semantic",
 		Content: map[string]interface{}{
-			"id":        turnID,
-			"role":      role,
-			"content":   content,
-			"timestamp": now.Format(time.RFC3339),
+			"id":         turnID,
+			"node_label": "EvaTurn",
+			"role":       role,
+			"content":    content,
+			"timestamp":  now.Format(time.RFC3339),
 		},
 	})
 	if err != nil {
@@ -248,9 +251,10 @@ func (em *EvaMemory) StoreTurn(ctx context.Context, sessionID, role, content str
 		currentCount = int(tc)
 	}
 	_, err = em.graph.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
-		NodeType: "EvaSession",
+		NodeType: "Semantic",
 		MatchKeys: map[string]interface{}{
-			"id": sessionID,
+			"id":         sessionID,
+			"node_label": "EvaSession",
 		},
 		OnMatchSet: map[string]interface{}{
 			"turn_count": currentCount + 1,
@@ -275,9 +279,10 @@ func (em *EvaMemory) connectTopic(ctx context.Context, sessionNodeID, turnNodeID
 
 	// MERGE topic node
 	topicResult, err := em.graph.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
-		NodeType: "EvaTopic",
+		NodeType: "Semantic",
 		MatchKeys: map[string]interface{}{
-			"name": topicName,
+			"name":       topicName,
+			"node_label": "EvaTopic",
 		},
 		OnCreateSet: map[string]interface{}{
 			"frequency":  1,
@@ -460,9 +465,10 @@ func (em *EvaMemory) GenerateInsight(ctx context.Context, content, insightType s
 
 	// Create insight node
 	insightResult, err := em.graph.InsertNode(ctx, nietzsche.InsertNodeOpts{
-		NodeType: "EvaInsight",
+		NodeType: "Semantic",
 		Content: map[string]interface{}{
 			"id":         insightID,
+			"node_label": "EvaInsight",
 			"content":    content,
 			"type":       insightType,
 			"created_at": now,
@@ -475,9 +481,10 @@ func (em *EvaMemory) GenerateInsight(ctx context.Context, content, insightType s
 	// Connect to topic if provided
 	if topicName != "" {
 		topicResult, err := em.graph.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
-			NodeType: "EvaTopic",
+			NodeType: "Semantic",
 			MatchKeys: map[string]interface{}{
-				"name": topicName,
+				"name":       topicName,
+				"node_label": "EvaTopic",
 			},
 		})
 		if err == nil {
