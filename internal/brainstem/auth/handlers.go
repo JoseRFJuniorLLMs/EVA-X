@@ -65,7 +65,7 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		req.Role = "operator"
 	}
 
-	err = h.DB.CreateUser(req.Name, req.Email, hashedPwd, req.Role)
+	err = h.DB.CreateUser(req.Name, req.Email, hashedPwd, req.Role, req.CPF)
 	if err != nil {
 		http.Error(w, "Failed to create user (email might be taken)", http.StatusConflict)
 		return
@@ -104,6 +104,7 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 
 type LoginRequest struct {
 	Email    string `json:"email"`
+	CPF      string `json:"cpf"`
 	Password string `json:"password"`
 }
 
@@ -114,7 +115,20 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.DB.GetUserByEmail(req.Email)
+	var user *database.User
+	var err error
+
+	if req.CPF != "" {
+		// Login by CPF
+		user, err = h.DB.GetUserByCPF(req.CPF)
+	} else if req.Email != "" {
+		// Login by email (fallback)
+		user, err = h.DB.GetUserByEmail(req.Email)
+	} else {
+		http.Error(w, "CPF or email is required", http.StatusBadRequest)
+		return
+	}
+
 	if err != nil {
 		http.Error(w, "Server error", http.StatusInternalServerError)
 		return
@@ -147,6 +161,10 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"token":         token,
 		"refresh_token": refreshToken,
+		"tokens": map[string]interface{}{
+			"accessToken":  token,
+			"refreshToken": refreshToken,
+		},
 		"user": map[string]interface{}{
 			"id":    user.ID,
 			"name":  user.Name,

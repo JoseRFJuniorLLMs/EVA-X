@@ -7,12 +7,15 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 type User struct {
 	ID           int64      `json:"id"`
 	Name         string     `json:"name"`
 	Email        string     `json:"email"`
+	CPF          string     `json:"cpf,omitempty"`
 	PasswordHash string     `json:"-"` // Never send password hash in JSON
 	Role         string     `json:"role"`
 	LastLogin    *time.Time `json:"last_login"`
@@ -25,6 +28,7 @@ func contentToUser(m map[string]interface{}) *User {
 		ID:           getInt64(m, "id"),
 		Name:         getString(m, "nome"),
 		Email:        getString(m, "email"),
+		CPF:          getString(m, "cpf"),
 		PasswordHash: getString(m, "senha_hash"),
 		Role:         getString(m, "tipo"),
 		LastLogin:    getTimePtr(m, "last_login"),
@@ -33,10 +37,10 @@ func contentToUser(m map[string]interface{}) *User {
 	}
 }
 
-func (db *DB) CreateUser(name, email, passwordHash, role string) error {
+func (db *DB) CreateUser(name, email, passwordHash, role, cpf string) error {
 	ctx := context.Background()
 	now := time.Now().Format(time.RFC3339)
-	_, err := db.insertRow(ctx, "usuarios", map[string]interface{}{
+	row := map[string]interface{}{
 		"nome":          name,
 		"email":         email,
 		"senha_hash":    passwordHash,
@@ -44,7 +48,11 @@ func (db *DB) CreateUser(name, email, passwordHash, role string) error {
 		"criado_em":     now,
 		"atualizado_em": now,
 		"ativo":         true,
-	})
+	}
+	if cpf != "" {
+		row["cpf"] = cpf
+	}
+	_, err := db.insertRow(ctx, "usuarios", row)
 	if err != nil {
 		return fmt.Errorf("failed to create user: %w", err)
 	}
@@ -77,6 +85,44 @@ func (db *DB) GetUserByID(id int64) (*User, error) {
 		return nil, nil // Not found
 	}
 	return contentToUser(m), nil
+}
+
+func (db *DB) GetUserByCPF(cpf string) (*User, error) {
+	ctx := context.Background()
+
+	rows, err := db.queryNodesByLabel(ctx, "usuarios",
+		` AND n.cpf = $cpf`, map[string]interface{}{
+			"cpf": cpf,
+		}, 1)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user by cpf: %w", err)
+	}
+	if len(rows) == 0 {
+		return nil, nil // Not found
+	}
+	return contentToUser(rows[0]), nil
+}
+
+// SeedVisitor ensures a "Visitante" user+idoso with CPF 00000000000 exists.
+// Called once at startup so guests can log in without registration.
+func (db *DB) SeedVisitor() {
+	cpf := "00000000000"
+
+	// Check if visitor user already exists
+	existing, _ := db.GetUserByCPF(cpf)
+	if existing != nil {
+		return // already seeded
+	}
+
+	// Create visitor user (password = "visitante")
+	hashedPwd, err := bcrypt.GenerateFromPassword([]byte("visitante"), 14)
+	if err != nil {
+		return
+	}
+	_ = db.CreateUser("Visitante", "visitante@eva.local", string(hashedPwd), "operator", cpf)
+
+	// Create visitor idoso record
+	_, _ = db.CreateIdoso("Visitante", cpf, "")
 }
 
 func (db *DB) UpdateLastLogin(userID int64) error {

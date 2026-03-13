@@ -219,7 +219,7 @@ func (m *SituationalModulator) ProactiveDreamSimulation(ctx context.Context, pat
 	}
 
 	// 1. Find a seed node (most recent episodic memory for this patient)
-	nql := `MATCH (n) WHERE n.idoso_id = $pid AND n.type = 'EpisodicMemory' RETURN n.id ORDER BY n.timestamp DESC LIMIT 1`
+	nql := `MATCH (n) WHERE n.idoso_id = $pid AND n.type = "EpisodicMemory" RETURN n.id ORDER BY n.timestamp DESC LIMIT 1`
 	qr, err := m.graphAdapter.ExecuteNQL(ctx, nql, map[string]interface{}{"pid": patientID}, collection)
 	if err != nil || (qr != nil && len(qr.ScalarRows) == 0) {
 		return nil, fmt.Errorf("dream simulation: failed to find seed node: %v", err)

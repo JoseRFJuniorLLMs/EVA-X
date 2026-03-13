@@ -659,7 +659,7 @@ func (u *UnifiedRetrieval) getCapabilities(ctx context.Context) string {
 		return ""
 	}
 
-	nql := `MATCH (m:CoreMemory) WHERE m.memory_type = 'capability' RETURN m`
+	nql := `MATCH (m:CoreMemory) WHERE m.memory_type = "capability" RETURN m`
 	result, err := u.graph.ExecuteNQL(ctx, nql, nil, "eva_core")
 	if err != nil {
 		log.Printf("[CAPS] Failed to load capabilities: %v", err)

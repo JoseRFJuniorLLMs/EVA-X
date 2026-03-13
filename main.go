@@ -218,6 +218,9 @@ func main() {
 		log.Warn().Err(err).Msg("Failed to create eva_mind indexes (non-fatal)")
 	}
 
+	// Seed visitor user (CPF 00000000000) for guest login
+	db.SeedVisitor()
+
 	// Create adapters
 	graphAdapter := nietzscheInfra.NewGraphAdapter(nzClient, "patient_graph")
 	vectorAdapter := nietzscheInfra.NewVectorAdapter(nzClient)
