@@ -988,7 +988,7 @@ func (a *Agent) handleRecallMemory(ctx context.Context, call swarm.ToolCall) (*s
 		return &swarm.ToolResult{Success: false, Message: "NietzscheDB not available"}, nil
 	}
 
-	searchCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+	searchCtx, cancel := context.WithTimeout(ctx, 800*time.Millisecond)
 	defer cancel()
 
 	type memHit struct {
@@ -998,7 +998,7 @@ func (a *Agent) handleRecallMemory(ctx context.Context, call swarm.ToolCall) (*s
 	hitCh := make(chan memHit, 6) // max 2 per collection x 3
 	var wg sync.WaitGroup
 
-	collections := []string{"eva_mind", "eva_core", "patient_graph"}
+	collections := []string{"eva_mind"}  // Single collection for speed (<200ms)
 	for _, col := range collections {
 		wg.Add(1)
 		go func(collection string) {
