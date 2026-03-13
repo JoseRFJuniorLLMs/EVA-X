@@ -29,17 +29,89 @@ import (
 
 	nietzsche "nietzsche-sdk"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 )
 
 // EvaMemory gerencia a memoria meta-cognitiva da EVA via NietzscheDB
 type EvaMemory struct {
-	graph *nietzscheInfra.GraphAdapter
+	graph     *nietzscheInfra.GraphAdapter
+	mindGraph *nietzscheInfra.GraphAdapter // eva_mind collection for internalized memories
 }
 
 // New cria uma nova instancia de EvaMemory
 func New(graphAdapter *nietzscheInfra.GraphAdapter) *EvaMemory {
 	return &EvaMemory{graph: graphAdapter}
+}
+
+// SetMindAdapter injects the eva_mind graph adapter for InternalizeMemory.
+func (em *EvaMemory) SetMindAdapter(adapter *nietzscheInfra.GraphAdapter) {
+	em.mindGraph = adapter
+}
+
+// minInternalizeLen is the minimum content length for InternalizeMemory.
+// Messages shorter than this (e.g. "ok", "yes", "sim") are skipped.
+const minInternalizeLen = 10
+
+// InternalizeMemory stores a conversation memory as an Episodic node in eva_mind.
+// It creates a node with the given content, valence, and source. Energy defaults
+// to 0.5 for new memories. Coordinates are 3072-dimensional zeros (relational
+// data in poincare space — no real embedding). Trivial messages (< 10 chars)
+// are silently skipped.
+func (em *EvaMemory) InternalizeMemory(content string, valence float64, source string) error {
+	// Skip trivial messages
+	trimmed := strings.TrimSpace(content)
+	if len(trimmed) < minInternalizeLen {
+		return nil
+	}
+
+	adapter := em.mindGraph
+	if adapter == nil {
+		// Fallback to default graph adapter if mindGraph not set
+		adapter = em.graph
+	}
+	if adapter == nil {
+		return fmt.Errorf("no graph adapter available for InternalizeMemory")
+	}
+
+	nodeID := uuid.New().String()
+	now := time.Now()
+
+	// 3072-dimensional zero coords for relational data in poincare space
+	coords := make([]float64, 3072)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	_, err := adapter.InsertNode(ctx, nietzsche.InsertNodeOpts{
+		ID:       nodeID,
+		NodeType: "Episodic",
+		Energy:   0.5,
+		Coords:   coords,
+		Content: map[string]interface{}{
+			"content":    trimmed,
+			"valence":    valence,
+			"source":     source,
+			"created_at": now.Format(time.RFC3339),
+			"node_label": "ConversationMemory",
+		},
+	})
+	if err != nil {
+		log.Error().Err(err).
+			Str("node_id", nodeID).
+			Str("source", source).
+			Int("content_len", len(trimmed)).
+			Msg("[EVA-MEMORY] InternalizeMemory failed")
+		return fmt.Errorf("internalize memory: %w", err)
+	}
+
+	log.Debug().
+		Str("node_id", nodeID).
+		Str("source", source).
+		Float64("valence", valence).
+		Int("content_len", len(trimmed)).
+		Msg("[EVA-MEMORY] Memory internalized to eva_mind")
+	return nil
 }
 
 // InitSchema creates initial nodes/structure in NietzscheDB for the EVA graph.

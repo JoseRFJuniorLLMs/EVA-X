@@ -476,6 +476,14 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 								}
 							}(turn)
 						}
+						// Internalize EVA response to eva_mind
+						if s.evaMemory != nil {
+							go func(t string) {
+								if err := s.evaMemory.InternalizeMemory(t, 0.1, "conversation"); err != nil {
+									log.Warn().Err(err).Msg("[EVA-MIND] Falha ao internalizar resposta da EVA")
+								}
+							}(turn)
+						}
 						// Acumular transcript para ProcessSessionEnd (evolucao de personalidade)
 						transcriptMu.Lock()
 						transcriptAccum.WriteString("EVA: " + turn + "\n")
@@ -510,6 +518,14 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 								}
 								if err := s.brainService.SaveEpisodicMemoryWithContext(idosoID, "user", t, time.Now(), false, memCtx); err != nil {
 									log.Warn().Err(err).Msg("[BRAIN] Falha ao salvar input do utilizador em memória vetorial")
+								}
+							}(text)
+						}
+						// Internalize user input to eva_mind
+						if s.evaMemory != nil {
+							go func(t string) {
+								if err := s.evaMemory.InternalizeMemory(t, 0.0, "conversation"); err != nil {
+									log.Warn().Err(err).Msg("[EVA-MIND] Falha ao internalizar input do utilizador")
 								}
 							}(text)
 						}

@@ -3,6 +3,8 @@ bin/
 eva-mind
 eva-mind-linux
 eva-mind-test
+eva-server
+eva-x-linux
 aurora-linux
 *.exe
 *.exe~

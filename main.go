@@ -297,7 +297,10 @@ func main() {
 
 	// 6.1 EVA Meta-Cognitive Memory (NietzscheDB eva_core)
 	evaMemSvc := eva_memory.New(evaGraphAdapter)
-	log.Info().Msg("EVA Meta-Cognitive Memory inicializada (NietzscheDB eva_core)")
+	// Inject eva_mind adapter for InternalizeMemory (conversation memories)
+	evaMindAdapter := nietzscheInfra.NewGraphAdapter(nzClient, "eva_mind")
+	evaMemSvc.SetMindAdapter(evaMindAdapter)
+	log.Info().Msg("EVA Meta-Cognitive Memory inicializada (NietzscheDB eva_core + eva_mind)")
 
 	// 6.1.1 FASE 5: Unified Retrieval — Lacanian signifier tracking + context building
 	// Integrates FDPN, Zeta router, conflict synthesis, wisdom service, MCP, prompt cache.
