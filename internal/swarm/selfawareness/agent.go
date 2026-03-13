@@ -977,6 +977,7 @@ func truncate(s string, maxLen int) string {
 
 // handleRecallMemory searches across EVA's memory collections for relevant context.
 // This is the RAG mechanism for voice sessions - Gemini calls it automatically.
+// OPTIMIZED: 1.5s timeout, 1 result per collection, parallel GetNode.
 func (a *Agent) handleRecallMemory(ctx context.Context, call swarm.ToolCall) (*swarm.ToolResult, error) {
 	query, _ := call.Args["query"].(string)
 	if query == "" {
@@ -987,66 +988,77 @@ func (a *Agent) handleRecallMemory(ctx context.Context, call swarm.ToolCall) (*s
 		return &swarm.ToolResult{Success: false, Message: "NietzscheDB not available"}, nil
 	}
 
-	searchCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	searchCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
 	defer cancel()
 
-	var (
-		wg       sync.WaitGroup
-		resultMu sync.Mutex
-		memories []string
-	)
+	type memHit struct {
+		text string
+	}
+
+	hitCh := make(chan memHit, 6) // max 2 per collection x 3
+	var wg sync.WaitGroup
 
 	collections := []string{"eva_mind", "eva_core", "patient_graph"}
 	for _, col := range collections {
 		wg.Add(1)
 		go func(collection string) {
 			defer wg.Done()
-			ftsResults, err := a.nietzscheClient.FullTextSearch(searchCtx, query, collection, 3)
-			if err != nil {
+			// Only top 2 results per collection for speed
+			ftsResults, err := a.nietzscheClient.FullTextSearch(searchCtx, query, collection, 2)
+			if err != nil || len(ftsResults) == 0 {
 				return
 			}
+			// Parallel GetNode for all FTS hits
+			var nodeWg sync.WaitGroup
 			for _, fts := range ftsResults {
-				node, nErr := a.nietzscheClient.GetNode(searchCtx, fts.NodeID, collection)
-				if nErr != nil || !node.Found {
-					continue
-				}
-				text := extractRecallContent(node.Content, collection)
-				if text != "" {
-					resultMu.Lock()
-					memories = append(memories, text)
-					resultMu.Unlock()
-				}
+				nodeWg.Add(1)
+				go func(nodeID string) {
+					defer nodeWg.Done()
+					node, nErr := a.nietzscheClient.GetNode(searchCtx, nodeID, collection)
+					if nErr != nil || !node.Found {
+						return
+					}
+					text := extractRecallContent(node.Content, collection)
+					if text != "" {
+						hitCh <- memHit{text: text}
+					}
+				}(fts.NodeID)
 			}
+			nodeWg.Wait()
 		}(col)
 	}
 
-	wg.Wait()
+	// Close channel when all goroutines finish
+	go func() {
+		wg.Wait()
+		close(hitCh)
+	}()
 
-	if len(memories) == 0 {
+	// Collect results with dedup
+	seen := make(map[string]bool)
+	var unique []string
+	for hit := range hitCh {
+		key := hit.text
+		if len(key) > 80 {
+			key = key[:80]
+		}
+		if !seen[key] {
+			seen[key] = true
+			unique = append(unique, hit.text)
+		}
+		if len(unique) >= 3 {
+			break
+		}
+	}
+
+	if len(unique) == 0 {
 		return &swarm.ToolResult{
 			Success: true,
 			Message: "Nao encontrei memorias relevantes sobre isso.",
 		}, nil
 	}
 
-	// Deduplicate
-	seen := make(map[string]bool)
-	var unique []string
-	for _, m := range memories {
-		key := m
-		if len(key) > 80 {
-			key = key[:80]
-		}
-		if !seen[key] {
-			seen[key] = true
-			unique = append(unique, m)
-		}
-	}
-	if len(unique) > 5 {
-		unique = unique[:5]
-	}
-
-	msg := fmt.Sprintf("Encontrei %d memorias relevantes:\n%s", len(unique), strings.Join(unique, "\n"))
+	msg := fmt.Sprintf("Memorias relevantes:\n%s", strings.Join(unique, "\n"))
 	return &swarm.ToolResult{
 		Success: true,
 		Message: msg,
