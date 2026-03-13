@@ -916,10 +916,8 @@ Fluxo pos-sessao: anonimiza → reflexao LLM → CoreMemory → atualiza persona
 		},
 		{
 			Type: "concept", Key: "concept:creator", Title: "Criador do EVA-Mind",
-			Summary: "Jose R F Junior (web2ajax@gmail.com), CPF 64525430249, ID 1121. Desenvolvedor principal e arquiteto",
-			Content: `Nome: Jose R F Junior. Email: web2ajax@gmail.com. CPF: 64525430249. ID: 1121.
-Papel: Criador, desenvolvedor principal e arquiteto do EVA-Mind.
-Licenca: AGPL-3.0-or-later. Debug mode quando CPF detectado.`,
+			Summary: fmt.Sprintf("%s, Desenvolvedor principal e arquiteto", os.Getenv("CREATOR_NAME")),
+			Content: fmt.Sprintf("Criador e arquiteto do EVA-Mind. Debug mode quando CPF (via CREATOR_CPF env) detectado. Licenca: AGPL-3.0-or-later."),
 			Location: "main.go", Tags: `["criador"]`, Importance: 6,
 		},
 	}

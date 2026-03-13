@@ -308,11 +308,24 @@ func (e *CoreMemoryEngine) ProcessSessionEnd(ctx context.Context, data SessionDa
 			}
 		}
 
-		// Verificar duplicacao semantica
-		// TODO: Integrate SemanticDeduplicator.CheckDuplicate() when embedder interfaces are unified
+		// Verificar duplicacao semantica via KNN search
 		isDuplicate := false
 		existingID := ""
-		_ = embedding // Used for deduplication when integrated
+		if len(embedding) > 0 {
+			queryVec := make([]float64, len(embedding))
+			for i, f := range embedding {
+				queryVec[i] = float64(f)
+			}
+			knnResults, knnErr := e.graphAdapter.Client().KnnSearch(ctx, "eva_core", queryVec, 1)
+			if knnErr == nil && len(knnResults) > 0 {
+				// Poincaré distance: 0 = identical, small = very similar
+				if knnResults[0].Distance < 0.05 {
+					isDuplicate = true
+					existingID = knnResults[0].ID
+					log.Printf("[CoreMemory] Duplicate detected (distance=%.4f) for existing node %s, reinforcing instead", knnResults[0].Distance, existingID)
+				}
+			}
+		}
 
 		if isDuplicate {
 			// Reforcar memoria existente

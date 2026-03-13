@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"eva/internal/brainstem/database"
@@ -22,9 +23,15 @@ func main() {
 	db := database.NewNietzscheDB(sdk)
 	ctx := context.Background()
 
-	// Patient data
-	cpf := "64525430249"
-	nome := "Jose R F Junior"
+	// Patient data (from env vars, with fallbacks)
+	cpf := os.Getenv("CREATOR_CPF")
+	if cpf == "" {
+		cpf = "64525430249"
+	}
+	nome := os.Getenv("CREATOR_NAME")
+	if nome == "" {
+		nome = "Jose R F Junior"
+	}
 
 	content := map[string]interface{}{
 		"nome":                        crypto.Encrypt(nome),

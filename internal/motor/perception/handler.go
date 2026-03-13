@@ -203,12 +203,13 @@ func (ph *PerceptionHandler) processFrame(ctx context.Context, jpegData []byte) 
 	}
 
 	ph.framesAnalyzed.Add(1)
-	ph.lastScene.Store(scene)
 
-	// Deduplicate: skip if same frame hash as last stored
-	if prev := ph.lastScene.Load(); prev != nil && prev.FrameHash == scene.FrameHash && prev.Timestamp != scene.Timestamp {
+	// Deduplicate: skip if same frame hash as last stored scene
+	if prev := ph.lastScene.Load(); prev != nil && prev.FrameHash == scene.FrameHash {
 		return
 	}
+
+	ph.lastScene.Store(scene)
 
 	// Store in NietzscheDB
 	_, err = ph.store.StoreScene(ctx, scene, ph.userID)

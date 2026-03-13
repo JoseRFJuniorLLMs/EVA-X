@@ -71,7 +71,7 @@ type UnifiedRetrieval struct {
 // SEGURANÇA: CPF agora vem de variável de ambiente (fallback para valor padrão)
 var CREATOR_CPF = getCreatorCPF()
 
-const CREATOR_NAME = "Jose R F Junior" // Nome do Criador da Matrix
+var CREATOR_NAME = getCreatorName() // Nome do Criador da Matrix
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // 📚 COLEÇÕES PERSONALIZADAS - Agora dinâmicas via tabela idosos.colecoes
@@ -99,6 +99,14 @@ func getCreatorCPF() string {
 		return cpf
 	}
 	return "64525430249" // Fallback
+}
+
+// getCreatorName obtém nome do criador de variável de ambiente
+func getCreatorName() string {
+	if name := os.Getenv("CREATOR_NAME"); name != "" {
+		return name
+	}
+	return "Jose R F Junior" // Fallback
 }
 
 // IsCreatorCPF verifica se o CPF é do criador (com logs detalhados)
@@ -164,7 +172,7 @@ type UnifiedContext struct {
 	IdosoNome   string
 	IdosoCPF    string // CPF para identificação especial
 	IdosoIdioma string // Idioma preferido (pt-BR, en-US, es-ES, etc.)
-	IsDebugMode bool   // true se usuário é o Criador (José R F Junior)
+	IsDebugMode bool   // true se usuário é o Criador
 
 	// REAL (Corpo, Sintoma, Trauma)
 	MedicalContext   string // Do GraphRAG (NietzscheDB)
@@ -458,7 +466,7 @@ func (u *UnifiedRetrieval) BuildUnifiedContext(
 	cleanCPF := strings.ReplaceAll(strings.ReplaceAll(cpf, ".", ""), "-", "")
 	unified.IsDebugMode = (cleanCPF == CREATOR_CPF)
 	if unified.IsDebugMode {
-		log.Printf("🔓 [BuildUnifiedContext] MODO DEBUG ATIVADO para José R F Junior (idoso_id=%d)", idosoID)
+		log.Printf("🔓 [BuildUnifiedContext] MODO DEBUG ATIVADO para %s (idoso_id=%d)", CREATOR_NAME, idosoID)
 	}
 
 	// Log sabedoria

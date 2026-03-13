@@ -13,7 +13,7 @@ import (
 	"eva/internal/brainstem/database"
 )
 
-// DebugMode gerencia funcionalidades exclusivas para o Arquiteto da Matrix (José R F Junior)
+// DebugMode gerencia funcionalidades exclusivas para o Arquiteto da Matrix (Criador)
 type DebugMode struct {
 	db                 *database.DB
 	startTime          time.Time

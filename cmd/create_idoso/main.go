@@ -30,9 +30,15 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Creator data
-	nome := "Jose R F Junior"
-	cpf := "64525430249"
+	// Creator data (from env vars, with fallbacks)
+	nome := os.Getenv("CREATOR_NAME")
+	if nome == "" {
+		nome = "Jose R F Junior"
+	}
+	cpf := os.Getenv("CREATOR_CPF")
+	if cpf == "" {
+		cpf = "64525430249"
+	}
 	now := time.Now().Format(time.RFC3339)
 
 	// Encrypt fields

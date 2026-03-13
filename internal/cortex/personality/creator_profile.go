@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"eva/internal/brainstem/database"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -55,8 +56,15 @@ type CreatorMemory struct {
 	Importancia int
 }
 
-// CreatorCPF é o CPF do Criador
-const CreatorCPF = "64525430249"
+// CreatorCPF é o CPF do Criador (from env or fallback)
+var CreatorCPF = getCreatorCPFPersonality()
+
+func getCreatorCPFPersonality() string {
+	if cpf := os.Getenv("CREATOR_CPF"); cpf != "" {
+		return cpf
+	}
+	return "64525430249"
+}
 
 // CreatorProfileService gerencia o perfil do Criador
 type CreatorProfileService struct {

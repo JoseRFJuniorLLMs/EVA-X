@@ -14,11 +14,18 @@ import (
 	"time"
 )
 
+// NegationPattern represents a negation keyword and its semantic weight
+type NegationPattern struct {
+	Pattern string
+	Weight  float64 // higher = stronger negation
+}
+
 // LieDetector motor de detecção de inconsistências
 type LieDetector struct {
 	graph        *nietzscheInfra.GraphAdapter
 	lacanService *lacan.SignifierService
 	transnar     *transnar.Engine
+	ner          *EntityExtractor
 }
 
 // NewLieDetector cria um novo detector
@@ -26,11 +33,13 @@ func NewLieDetector(
 	graphAdapter *nietzscheInfra.GraphAdapter,
 	lacanService *lacan.SignifierService,
 	transnarEngine *transnar.Engine,
+	apiKey string,
 ) *LieDetector {
 	return &LieDetector{
 		graph:        graphAdapter,
 		lacanService: lacanService,
 		transnar:     transnarEngine,
+		ner:          NewEntityExtractor(apiKey, ""),
 	}
 }
 
@@ -45,94 +54,190 @@ func (d *LieDetector) Detect(
 
 	log.Printf("[LieDetector] Analisando: '%s'", statement)
 
-	// 1. Verificar contradições diretas
+	// 0. NER: Extrair entidades via Gemini e comparar com historico
+	entities, err := d.ner.ExtractEntities(ctx, statement)
+	if err != nil {
+		log.Printf("[LieDetector] NER extraction error (non-fatal): %v", err)
+	} else if len(entities) > 0 {
+		log.Printf("[LieDetector] NER: %d entities extracted", len(entities))
+
+		// Detectar contradicoes entre entidades do turno atual e historico
+		contradictions, err := d.ner.DetectEntityContradictions(ctx, userID, statement, entities)
+		if err != nil {
+			log.Printf("[LieDetector] Entity contradiction detection error: %v", err)
+		}
+		for _, c := range contradictions {
+			inconsistencies = append(inconsistencies, Inconsistency{
+				Type:       DirectContradiction,
+				Confidence: c.Confidence,
+				Statement:  statement,
+				GraphEvidence: []Evidence{
+					{
+						Fact:      fmt.Sprintf("Anterior: '%s' | Atual: '%s'", c.PreviousEntity.Value, c.CurrentEntity.Value),
+						Timestamp: time.Now(),
+						Source:    "NER Entity Comparison",
+						Metadata: map[string]interface{}{
+							"entity_type":    c.CurrentEntity.Type,
+							"previous_stmt":  c.PreviousStmt,
+							"current_stmt":   c.CurrentStmt,
+						},
+					},
+				},
+				Reasoning: c.Explanation,
+				Severity:  severityFromConfidence(c.Confidence),
+				Timestamp: time.Now(),
+			})
+			log.Printf("[LieDetector] NER contradiction: %s (%.0f%%)",
+				c.Explanation, c.Confidence*100)
+		}
+
+		// Registrar turno no historico APOS verificacao
+		d.ner.RecordTurn(userID, statement, entities)
+	}
+
+	// 1. Verificar contradições diretas (com NER integrado)
 	if contradiction := d.checkDirectContradiction(ctx, userID, statement); contradiction != nil {
 		inconsistencies = append(inconsistencies, *contradiction)
-		log.Printf("[LieDetector] ⚠️ Contradição direta detectada: %.0f%% confiança",
+		log.Printf("[LieDetector] Contradicao direta detectada: %.0f%% confianca",
 			contradiction.Confidence*100)
 	}
 
 	// 2. Verificar inconsistências temporais
 	if temporal := d.checkTemporalInconsistency(ctx, userID, statement); temporal != nil {
 		inconsistencies = append(inconsistencies, *temporal)
-		log.Printf("[LieDetector] ⏰ Inconsistência temporal: %.0f%% confiança",
+		log.Printf("[LieDetector] Inconsistencia temporal: %.0f%% confianca",
 			temporal.Confidence*100)
 	}
 
 	// 3. Verificar inconsistências emocionais
 	if emotional := d.checkEmotionalInconsistency(ctx, userID, statement); emotional != nil {
 		inconsistencies = append(inconsistencies, *emotional)
-		log.Printf("[LieDetector] 😔 Inconsistência emocional: %.0f%% confiança",
+		log.Printf("[LieDetector] Inconsistencia emocional: %.0f%% confianca",
 			emotional.Confidence*100)
 	}
 
 	// 4. Verificar gaps narrativos
 	if gap := d.checkNarrativeGap(ctx, userID, statement); gap != nil {
 		inconsistencies = append(inconsistencies, *gap)
-		log.Printf("[LieDetector] 📖 Gap narrativo: %.0f%% confiança",
+		log.Printf("[LieDetector] Gap narrativo: %.0f%% confianca",
 			gap.Confidence*100)
 	}
 
 	// 5. Verificar mudanças comportamentais
 	if behavioral := d.checkBehavioralChange(ctx, userID, statement); behavioral != nil {
 		inconsistencies = append(inconsistencies, *behavioral)
-		log.Printf("[LieDetector] 🔄 Mudança comportamental: %.0f%% confiança",
+		log.Printf("[LieDetector] Mudanca comportamental: %.0f%% confianca",
 			behavioral.Confidence*100)
 	}
 
 	if len(inconsistencies) == 0 {
-		log.Printf("[LieDetector] ✅ Nenhuma inconsistência detectada")
+		log.Printf("[LieDetector] Nenhuma inconsistencia detectada")
 	}
 
 	return inconsistencies
 }
 
-// checkDirectContradiction verifica contradições diretas
+// severityFromConfidence mapeia confianca para gravidade
+func severityFromConfidence(confidence float64) Severity {
+	switch {
+	case confidence >= 0.9:
+		return SeverityCritical
+	case confidence >= 0.8:
+		return SeverityHigh
+	case confidence >= 0.6:
+		return SeverityMedium
+	default:
+		return SeverityLow
+	}
+}
+
+// GetExtractedEntities retorna as entidades extraidas do ultimo turno (para uso externo)
+func (d *LieDetector) GetExtractedEntities(userID int64) []TurnEntities {
+	return d.ner.GetHistory(userID)
+}
+
+// checkDirectContradiction verifica contradições diretas usando NER + grafo
 func (d *LieDetector) checkDirectContradiction(
 	ctx context.Context,
 	userID int64,
 	statement string,
 ) *Inconsistency {
 
-	// Detectar padrões de negação absoluta
-	negationPatterns := []string{
-		"nunca", "jamais", "não tomei", "não fiz",
-		"não senti", "não tenho", "não tive",
+	// Detectar padrões de negação absoluta (com pesos)
+	negationPatterns := []NegationPattern{
+		{"nunca", 1.0},
+		{"jamais", 1.0},
+		{"não tomei", 0.9},
+		{"não fiz", 0.9},
+		{"não senti", 0.8},
+		{"não tenho", 0.8},
+		{"não tive", 0.8},
+		{"nao tomei", 0.9},
+		{"nao fiz", 0.9},
+		{"nenhum", 0.7},
+		{"nada", 0.7},
 	}
 
-	hasNegation := false
-	for _, pattern := range negationPatterns {
-		if strings.Contains(strings.ToLower(statement), pattern) {
-			hasNegation = true
-			break
+	maxWeight := 0.0
+	for _, np := range negationPatterns {
+		if strings.Contains(strings.ToLower(statement), np.Pattern) {
+			if np.Weight > maxWeight {
+				maxWeight = np.Weight
+			}
 		}
 	}
 
-	if !hasNegation {
-		return nil // Sem negação absoluta
+	if maxWeight == 0 {
+		return nil // Sem negacao absoluta
 	}
 
-	// Extrair possíveis entidades mencionadas
-	// TODO: Implementar NER (Named Entity Recognition)
-	// Por ora, buscar palavras-chave comuns
+	// NER: Extrair entidades da afirmacao atual para buscar no grafo
+	entities, err := d.ner.ExtractEntities(ctx, statement)
+	if err != nil {
+		log.Printf("[LieDetector] NER error in contradiction check: %v", err)
+	}
 
-	keywords := []string{"remédio", "medicamento", "dor", "médico", "consulta"}
+	// Buscar entidades extraidas no grafo
+	for _, ent := range entities {
+		searchTerm := ent.Normalized
+		if searchTerm == "" {
+			searchTerm = strings.ToLower(ent.Value)
+		}
 
-	for _, keyword := range keywords {
-		if strings.Contains(strings.ToLower(statement), keyword) {
-			// Buscar no grafo se há registro dessa entidade
-			evidence := d.queryGraphForEntity(ctx, userID, keyword)
+		evidence := d.queryGraphForEntity(ctx, userID, searchTerm)
+		if len(evidence) > 0 {
+			confidence := 0.85 * maxWeight
+			return &Inconsistency{
+				Type:          DirectContradiction,
+				Confidence:    confidence,
+				Statement:     statement,
+				GraphEvidence: evidence,
+				Reasoning: fmt.Sprintf(
+					"Paciente nega '%s' (%s), mas ha registro no grafo",
+					ent.Value, ent.Type,
+				),
+				Severity:  severityFromConfidence(confidence),
+				Timestamp: time.Now(),
+			}
+		}
+	}
 
-			if len(evidence) > 0 {
-				// Contradição encontrada!
-				return &Inconsistency{
-					Type:          DirectContradiction,
-					Confidence:    0.85, // Alta confiança
-					Statement:     statement,
-					GraphEvidence: evidence,
-					Reasoning:     "Afirmação contradiz registro no grafo",
-					Severity:      SeverityHigh,
-					Timestamp:     time.Now(),
+	// Fallback: buscar palavras-chave comuns se NER nao retornou entidades
+	if len(entities) == 0 {
+		keywords := []string{"remedio", "medicamento", "dor", "medico", "consulta"}
+		for _, keyword := range keywords {
+			if strings.Contains(strings.ToLower(statement), keyword) {
+				evidence := d.queryGraphForEntity(ctx, userID, keyword)
+				if len(evidence) > 0 {
+					return &Inconsistency{
+						Type:          DirectContradiction,
+						Confidence:    0.75,
+						Statement:     statement,
+						GraphEvidence: evidence,
+						Reasoning:     "Afirmacao contradiz registro no grafo (fallback keyword match)",
+						Severity:      SeverityMedium,
+						Timestamp:     time.Now(),
+					}
 				}
 			}
 		}

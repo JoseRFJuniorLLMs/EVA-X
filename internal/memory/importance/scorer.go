@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"sync"
 	"time"
 
 	"eva/internal/brainstem/database"
@@ -15,14 +16,44 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	// pageRankCacheTTL controls how long PageRank results are cached before recomputation.
+	pageRankCacheTTL = 10 * time.Minute
+
+	// pageRankDamping is the standard damping factor for PageRank.
+	pageRankDamping = 0.85
+
+	// pageRankMaxIter is the maximum number of PageRank iterations.
+	pageRankMaxIter = 20
+
+	// pageRankCollection is the NietzscheDB collection to run PageRank on.
+	pageRankCollection = "eva_mind"
+
+	// defaultCentrality is the fallback when PageRank is unavailable.
+	defaultCentrality = 0.5
+)
+
+// pageRankCache holds cached PageRank scores with a TTL.
+type pageRankCache struct {
+	mu        sync.RWMutex
+	scores    map[string]float64 // nodeUUID -> normalized score (0-1)
+	updatedAt time.Time
+}
+
 // Scorer calculates importance scores for memories
 type Scorer struct {
-	db *database.DB
+	db    *database.DB
+	cache pageRankCache
 }
 
 // NewScorer creates a new importance scorer
 func NewScorer(db *database.DB) *Scorer {
-	return &Scorer{db: db}
+	return &Scorer{
+		db: db,
+		cache: pageRankCache{
+			scores: make(map[string]float64),
+		},
+	}
 }
 
 // ImportanceFactors represents the components of importance
@@ -40,6 +71,80 @@ type MemoryImportance struct {
 	Score        float64
 	Factors      ImportanceFactors
 	CalculatedAt time.Time
+}
+
+// refreshPageRankIfStale recomputes PageRank scores if the cache has expired.
+// Safe for concurrent access. Only one goroutine will perform the refresh.
+func (s *Scorer) refreshPageRankIfStale(ctx context.Context) {
+	s.cache.mu.RLock()
+	fresh := time.Since(s.cache.updatedAt) < pageRankCacheTTL && len(s.cache.scores) > 0
+	s.cache.mu.RUnlock()
+	if fresh {
+		return
+	}
+
+	s.cache.mu.Lock()
+	defer s.cache.mu.Unlock()
+
+	// Double-check after acquiring write lock (another goroutine may have refreshed).
+	if time.Since(s.cache.updatedAt) < pageRankCacheTTL && len(s.cache.scores) > 0 {
+		return
+	}
+
+	nz := s.db.NzClient()
+	if nz == nil {
+		log.Warn().Msg("importance: NietzscheDB client unavailable, PageRank cache not refreshed")
+		return
+	}
+
+	result, err := nz.RunPageRank(ctx, pageRankCollection, pageRankDamping, pageRankMaxIter)
+	if err != nil {
+		log.Warn().Err(err).Msg("importance: PageRank query failed, keeping stale cache")
+		return
+	}
+
+	// Find max score for normalization to [0, 1].
+	var maxScore float64
+	for _, ns := range result.Scores {
+		if ns.Score > maxScore {
+			maxScore = ns.Score
+		}
+	}
+
+	scores := make(map[string]float64, len(result.Scores))
+	for _, ns := range result.Scores {
+		if maxScore > 0 {
+			scores[ns.NodeID] = ns.Score / maxScore
+		} else {
+			scores[ns.NodeID] = 0
+		}
+	}
+
+	s.cache.scores = scores
+	s.cache.updatedAt = time.Now()
+
+	log.Info().
+		Int("nodes", len(scores)).
+		Uint64("duration_ms", result.DurationMs).
+		Uint32("iterations", result.Iterations).
+		Msg("importance: PageRank cache refreshed")
+}
+
+// getGraphCentrality returns the PageRank-based centrality for a memory node.
+// Falls back to defaultCentrality if the node is not found or PageRank failed.
+func (s *Scorer) getGraphCentrality(ctx context.Context, memoryID int64) float64 {
+	s.refreshPageRankIfStale(ctx)
+
+	nodeUUID := s.db.NodeUUID("memories", memoryID)
+
+	s.cache.mu.RLock()
+	score, ok := s.cache.scores[nodeUUID]
+	s.cache.mu.RUnlock()
+
+	if !ok {
+		return defaultCentrality
+	}
+	return score
 }
 
 // CalculateImportance computes the importance score for a memory
@@ -84,10 +189,8 @@ func (s *Scorer) CalculateImportance(ctx context.Context, memoryID int64) (*Memo
 	// Exponential decay: recent = 1.0, 30 days ago = 0.5, 90 days = 0.1
 	factors.Recency = math.Exp(-daysSinceCreation / 30.0)
 
-	// 3. Graph Centrality: How connected in NietzscheDB graph
-	// TODO: Query NietzscheDB graph for degree centrality
-	// For now, use placeholder
-	factors.GraphCentrality = 0.5
+	// 3. Graph Centrality: PageRank from NietzscheDB (cached, refreshed every 10 min)
+	factors.GraphCentrality = s.getGraphCentrality(ctx, memoryID)
 
 	// 4. Emotional Intensity: Extract from metadata
 	emotionalIntensity := database.GetFloat64(memory, "emotional_intensity")
@@ -111,6 +214,9 @@ func (s *Scorer) CalculateImportance(ctx context.Context, memoryID int64) (*Memo
 
 // BatchCalculateImportance calculates importance for multiple memories
 func (s *Scorer) BatchCalculateImportance(ctx context.Context, memoryIDs []int64) ([]*MemoryImportance, error) {
+	// Pre-warm the PageRank cache once before processing the batch.
+	s.refreshPageRankIfStale(ctx)
+
 	results := make([]*MemoryImportance, 0, len(memoryIDs))
 
 	for _, id := range memoryIDs {

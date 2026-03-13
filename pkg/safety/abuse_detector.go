@@ -4,11 +4,21 @@
 package safety
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
 	"time"
+
+	nietzsche "nietzsche-sdk"
+
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 )
+
+// AlertFamilyFunc sends real notifications (push + email + SMS) to caregivers.
+// Matches the same signature as swarm.AlertFunc so callers can pass deps.AlertFamily directly.
+type AlertFamilyFunc func(ctx context.Context, userID int64, reason, severity string) error
 
 // AbuseDetector scans user input for signs of abuse or danger
 type AbuseDetector struct {
@@ -16,6 +26,8 @@ type AbuseDetector struct {
 	notifier     *GuardianNotifier
 	emergencyLog *EmergencyLogger
 	enabled      bool
+	alertFamily  AlertFamilyFunc
+	ndb          *nietzscheInfra.Client
 }
 
 // NewAbuseDetector creates a new abuse detector
@@ -170,19 +182,115 @@ func (d *AbuseDetector) logIncident(userID string, input string, result *ScanRes
 	})
 }
 
-// notifyAuthorities sends notifications to guardian and possibly authorities
+// notifyAuthorities sends real notifications to caregivers and persists the alert in NietzscheDB.
 func (d *AbuseDetector) notifyAuthorities(userID string, result *ScanResult) error {
-	if d.notifier == nil {
-		return fmt.Errorf("guardian notifier not configured")
-	}
-
 	message := fmt.Sprintf(
 		"ALERTA DE SEGURANÇA: Detectado possível risco para menor (keyword: %s). Severidade: %s. Ação imediata necessária.",
 		result.MatchedKeyword,
 		result.Severity,
 	)
 
-	return d.notifier.NotifyGuardian(userID, message, true)
+	var firstErr error
+
+	// 1. Send real notification via AlertFamily (push + email + SMS)
+	if d.alertFamily != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		// Map Severity to the string format expected by AlertFamily
+		severityStr := "alta"
+		if result.Severity == SeverityCritical {
+			severityStr = "critica"
+		}
+
+		// Parse userID to int64 for AlertFamily; use 0 if unparseable
+		var uid int64
+		fmt.Sscanf(userID, "%d", &uid)
+
+		if err := d.alertFamily(ctx, uid, message, severityStr); err != nil {
+			log.Printf("ABUSE ALERT: Failed to send real notification for user %s: %v", userID, err)
+			firstErr = fmt.Errorf("alertFamily failed: %w", err)
+		} else {
+			log.Printf("ABUSE ALERT: Real notification sent for user %s (severity=%s)", userID, result.Severity)
+		}
+	} else {
+		log.Printf("WARNING: AlertFamily not configured — abuse notification NOT sent for user %s", userID)
+	}
+
+	// 2. Fallback: also log via legacy GuardianNotifier if configured
+	if d.notifier != nil {
+		if err := d.notifier.NotifyGuardian(userID, message, true); err != nil {
+			log.Printf("ABUSE ALERT: GuardianNotifier fallback failed: %v", err)
+		}
+	}
+
+	// 3. Persist abuse alert as a node in NietzscheDB (patient_graph collection)
+	if d.ndb != nil {
+		if err := d.persistAbuseAlert(userID, result); err != nil {
+			log.Printf("ABUSE ALERT: Failed to persist alert in NietzscheDB: %v", err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("persistAbuseAlert failed: %w", err)
+			}
+		}
+	} else {
+		log.Printf("WARNING: NietzscheDB client not configured — abuse alert NOT persisted for user %s", userID)
+	}
+
+	return firstErr
+}
+
+// persistAbuseAlert stores the abuse detection as a Semantic node with edge in NietzscheDB.
+func (d *AbuseDetector) persistAbuseAlert(userID string, result *ScanResult) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	// Build content payload
+	content := map[string]interface{}{
+		"node_label": "AbuseAlert",
+		"type":       "abuse_detection",
+		"severity":   string(result.Severity),
+		"evidence":   result.MatchedKeyword,
+		"timestamp":  result.Timestamp.Format(time.RFC3339),
+		"patient_id": userID,
+	}
+
+	// Generate 3072-dim zero coords for relational data (patient_graph is 3072D poincare)
+	coords := make([]float64, 3072)
+
+	// Insert the abuse alert node
+	nodeResult, err := d.ndb.InsertNode(ctx, nietzsche.InsertNodeOpts{
+		NodeType:   "Semantic", // node_label "AbuseAlert" is in content
+		Content:    content,
+		Coords:     coords,
+		Energy:     1.0,
+		Collection: "patient_graph",
+	})
+	if err != nil {
+		return fmt.Errorf("InsertNode AbuseAlert: %w", err)
+	}
+
+	contentJSON, _ := json.Marshal(content)
+	log.Printf("ABUSE ALERT: Persisted node %s in patient_graph: %s", nodeResult.ID, string(contentJSON))
+
+	// Create edge: patient → abuse alert (ABUSE_DETECTED)
+	// The userID may be a node ID in patient_graph; create edge if it looks like a valid reference
+	if userID != "" {
+		_, err = d.ndb.InsertEdge(ctx, nietzsche.InsertEdgeOpts{
+			From:       userID,
+			To:         nodeResult.ID,
+			EdgeType:   "Association",
+			Weight:     1.0,
+			Collection: "patient_graph",
+		})
+		if err != nil {
+			// Edge creation failure is non-fatal — the node is already persisted
+			log.Printf("ABUSE ALERT: Failed to create ABUSE_DETECTED edge (from=%s to=%s): %v", userID, nodeResult.ID, err)
+		} else {
+			log.Printf("ABUSE ALERT: Created ABUSE_DETECTED edge from %s to %s", userID, nodeResult.ID)
+		}
+	}
+
+	return nil
 }
 
 // GetSafeResponse returns a safe response for the child
@@ -197,6 +305,17 @@ func (d *AbuseDetector) GetSafeResponse(severity Severity) string {
 	default:
 		return "Estou aqui para te ouvir. Você quer conversar sobre isso?"
 	}
+}
+
+// SetAlertFamily configures the real notification function (push + email + SMS).
+// Pass deps.AlertFamily from the swarm Dependencies.
+func (d *AbuseDetector) SetAlertFamily(fn AlertFamilyFunc) {
+	d.alertFamily = fn
+}
+
+// SetNietzscheClient configures NietzscheDB client for persisting abuse alerts.
+func (d *AbuseDetector) SetNietzscheClient(client *nietzscheInfra.Client) {
+	d.ndb = client
 }
 
 // Disable temporarily disables abuse detection (for testing only)

@@ -7,8 +7,12 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	"eva/internal/swarm"
+
+	nietzsche "nietzsche-sdk"
 )
 
 // Agent implementa o EmergencySwarm - PRIORIDADE MÁXIMA
@@ -100,7 +104,9 @@ func (a *Agent) handleAlertFamily(ctx context.Context, call swarm.ToolCall) (*sw
 		log.Printf("⚠️ [EMERGENCY] AlertFamily nao configurado — notificacao NAO enviada!")
 	}
 
-	_ = alertSent
+	// Persist emergency alert in NietzscheDB for history/audit
+	a.persistAlert(ctx, call.UserID, reason, severity, alertSent)
+
 	result := &swarm.ToolResult{
 		Success:     true,
 		Message:     fmt.Sprintf("Alerta enviado à família: %s (severidade: %s)", reason, severity),
@@ -139,6 +145,70 @@ func (a *Agent) handleAlertFamily(ctx context.Context, call swarm.ToolCall) (*sw
 	}
 
 	return result, nil
+}
+
+// persistAlert stores the emergency alert as a node in NietzscheDB and links it
+// to the patient via a HAD_EMERGENCY edge. Best-effort: errors are logged, never
+// propagated (the push notification is the critical path, not persistence).
+func (a *Agent) persistAlert(ctx context.Context, userID int64, reason, severity string, alertSent bool) {
+	deps := a.Deps()
+	if deps == nil || deps.Graph == nil {
+		log.Printf("⚠️ [EMERGENCY] Graph not available — alert not persisted to NietzscheDB")
+		return
+	}
+	ga, ok := deps.Graph.(*nietzscheInfra.GraphAdapter)
+	if !ok {
+		log.Printf("⚠️ [EMERGENCY] Graph is not *GraphAdapter — alert not persisted")
+		return
+	}
+
+	now := time.Now().UTC()
+
+	// 1. Insert the EmergencyAlert node (Energy=1.0, highest importance)
+	alertNode, err := ga.InsertNode(ctx, nietzsche.InsertNodeOpts{
+		NodeType:   "Semantic",
+		Energy:     1.0,
+		Collection: "patient_graph",
+		Content: map[string]interface{}{
+			"node_label":      "EmergencyAlert",
+			"severity":        severity,
+			"reason":          reason,
+			"timestamp":       now.Format(time.RFC3339),
+			"patient_id":      userID,
+			"alert_sent":      alertSent,
+			"response_status": "pending",
+		},
+	})
+	if err != nil {
+		log.Printf("❌ [EMERGENCY] Failed to persist alert node: %v", err)
+		return
+	}
+	log.Printf("✅ [EMERGENCY] Alert node persisted: id=%s", alertNode.ID)
+
+	// 2. Find patient node and link with HAD_EMERGENCY edge.
+	// Use NQL to locate the patient node by user_id in patient_graph.
+	patientNQL := `MATCH (n:Semantic) WHERE n.patient_id = $uid OR n.user_id = $uid RETURN n LIMIT 1`
+	qr, err := ga.ExecuteNQL(ctx, patientNQL, map[string]interface{}{
+		"uid": userID,
+	}, "patient_graph")
+	if err != nil || len(qr.Nodes) == 0 {
+		log.Printf("⚠️ [EMERGENCY] Patient node not found for userID=%d — edge not created", userID)
+		return
+	}
+
+	patientID := qr.Nodes[0].ID
+	edgeID, err := ga.InsertEdge(ctx, nietzsche.InsertEdgeOpts{
+		From:       patientID,
+		To:         alertNode.ID,
+		EdgeType:   "Association",
+		Weight:     1.0,
+		Collection: "patient_graph",
+	})
+	if err != nil {
+		log.Printf("❌ [EMERGENCY] Failed to create HAD_EMERGENCY edge: %v", err)
+		return
+	}
+	log.Printf("✅ [EMERGENCY] HAD_EMERGENCY edge created: %s → %s (edge=%s)", patientID, alertNode.ID, edgeID)
 }
 
 func (a *Agent) handleCallWebRTC(target string) swarm.ToolHandler {

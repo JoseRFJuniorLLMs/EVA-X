@@ -291,17 +291,37 @@ func (cde *ClinicalDecisionExplainer) generateRecommendations(prediction Clinica
 	return recommendations
 }
 
-// collectSupportingEvidence coleta evidencias de suporte
+// collectSupportingEvidence coleta evidencias de suporte do NietzscheDB
 func (cde *ClinicalDecisionExplainer) collectSupportingEvidence(patientID int64, features map[string]Feature) map[string]interface{} {
 	evidence := make(map[string]interface{})
 
-	// Buscar trechos de conversa recentes
+	// 1. Buscar avaliacoes clinicas recentes (PHQ-9, GAD-7, C-SSRS)
+	assessments := cde.getRecentClinicalAssessments(patientID, 5)
+	if len(assessments) > 0 {
+		evidence["clinical_assessments"] = assessments
+	}
+
+	// 2. Buscar logs de medicacao (compliance data)
+	medicationLogs := cde.getRecentMedicationLogs(patientID, 10)
+	if len(medicationLogs) > 0 {
+		evidence["medication_logs"] = medicationLogs
+		evidence["medication_compliance"] = cde.calculateComplianceRate(medicationLogs)
+	}
+
+	// 3. Buscar historico de alertas de emergencia (crisis history)
+	emergencyAlerts := cde.getRecentEmergencyAlerts(patientID, 5)
+	if len(emergencyAlerts) > 0 {
+		evidence["emergency_alerts"] = emergencyAlerts
+		evidence["crisis_history_count"] = len(emergencyAlerts)
+	}
+
+	// 4. Buscar trechos de conversa recentes
 	conversations := cde.getRecentConversations(patientID, 3)
 	if len(conversations) > 0 {
 		evidence["conversation_excerpts"] = conversations
 	}
 
-	// Buscar samples de audio (se houver voice features)
+	// 5. Buscar samples de audio (se houver voice features)
 	for name := range features {
 		if strings.Contains(strings.ToLower(name), "voice") {
 			audioSamples := cde.getRecentAudioSamples(patientID, 2)
@@ -312,7 +332,7 @@ func (cde *ClinicalDecisionExplainer) collectSupportingEvidence(patientID int64,
 		}
 	}
 
-	// Adicionar graficos de tendencias
+	// 6. Adicionar tendencias reais do grafo
 	evidence["graph_data"] = map[string]interface{}{
 		"mood_trend_7d":            cde.getMoodTrend(patientID, 7),
 		"medication_adherence_30d": cde.getMedicationAdherenceTrend(patientID, 30),
@@ -593,24 +613,285 @@ func (cde *ClinicalDecisionExplainer) getRecentConversations(patientID int64, li
 	return conversations
 }
 
-// Helper: buscar audio samples
+// Helper: buscar audio samples reais do NietzscheDB
 func (cde *ClinicalDecisionExplainer) getRecentAudioSamples(patientID int64, limit int) []string {
-	// Placeholder: retornar paths de audio se existirem
-	return []string{
-		fmt.Sprintf("s3://eva-audio/patient-%d/recent-1.wav", patientID),
-		fmt.Sprintf("s3://eva-audio/patient-%d/recent-2.wav", patientID),
+	rows, err := cde.db.QueryByLabel(cde.ctx, "voice_prosody_features",
+		" AND n.patient_id = $pid",
+		map[string]interface{}{"pid": patientID},
+		limit,
+	)
+	if err != nil || len(rows) == 0 {
+		return nil
+	}
+
+	var samples []string
+	for _, m := range rows {
+		audioURL := database.GetString(m, "audio_url")
+		if audioURL != "" {
+			samples = append(samples, audioURL)
+		} else {
+			// Fallback: referencia com timestamp
+			createdAt := database.GetString(m, "created_at")
+			samples = append(samples, fmt.Sprintf("voice-sample:patient-%d:%s", patientID, createdAt))
+		}
+	}
+	return samples
+}
+
+// Helper: tendencia de humor real via NietzscheDB (sinais vitais tipo humor)
+func (cde *ClinicalDecisionExplainer) getMoodTrend(patientID int64, days int) []int {
+	rows, err := cde.db.QueryByLabel(cde.ctx, "sinais_vitais",
+		" AND n.idoso_id = $pid AND n.tipo = $tipo",
+		map[string]interface{}{
+			"pid":  patientID,
+			"tipo": "humor",
+		},
+		0,
+	)
+	if err != nil || len(rows) == 0 {
+		// Fallback: tentar clinical_assessments com PHQ-9 para inferir humor
+		assessments, aErr := cde.db.QueryByLabel(cde.ctx, "clinical_assessments",
+			" AND n.patient_id = $pid AND n.assessment_type = $atype AND n.status = $status",
+			map[string]interface{}{
+				"pid":    patientID,
+				"atype":  "PHQ-9",
+				"status": "completed",
+			},
+			days,
+		)
+		if aErr != nil || len(assessments) == 0 {
+			return nil
+		}
+
+		// Converter PHQ-9 scores para escala de humor invertida (0-10)
+		var trend []int
+		for _, m := range assessments {
+			phq9 := database.GetFloat64(m, "total_score")
+			// PHQ-9 0-27 invertido para humor 0-10
+			mood := int(10.0 - (phq9/27.0)*10.0)
+			if mood < 0 {
+				mood = 0
+			}
+			trend = append(trend, mood)
+		}
+		return trend
+	}
+
+	// Extrair valores de humor dos sinais vitais
+	cutoff := time.Now().AddDate(0, 0, -days)
+	var trend []int
+	for _, m := range rows {
+		createdAt := database.GetTime(m, "created_at")
+		if !createdAt.IsZero() && createdAt.Before(cutoff) {
+			continue
+		}
+		val := database.GetFloat64(m, "valor")
+		if val > 0 {
+			trend = append(trend, int(val))
+		}
+	}
+
+	return trend
+}
+
+// Helper: tendencia de adesao medicamentosa real via NietzscheDB
+func (cde *ClinicalDecisionExplainer) getMedicationAdherenceTrend(patientID int64, days int) map[string]interface{} {
+	rows, err := cde.db.QueryByLabel(cde.ctx, "medication_logs",
+		" AND n.patient_id = $pid",
+		map[string]interface{}{"pid": patientID},
+		0,
+	)
+	if err != nil || len(rows) == 0 {
+		// Fallback: tentar com idoso_id
+		rows, err = cde.db.QueryByLabel(cde.ctx, "medication_logs",
+			" AND n.medication_id > $zero",
+			map[string]interface{}{"zero": float64(0)},
+			0,
+		)
+		if err != nil || len(rows) == 0 {
+			return map[string]interface{}{
+				"period_days":     days,
+				"total_doses":     0,
+				"taken_doses":     0,
+				"compliance_rate": 0.0,
+			}
+		}
+	}
+
+	cutoff := time.Now().AddDate(0, 0, -days)
+	totalDoses := 0
+	takenDoses := 0
+
+	for _, m := range rows {
+		createdAt := database.GetTime(m, "created_at")
+		if !createdAt.IsZero() && createdAt.Before(cutoff) {
+			continue
+		}
+		totalDoses++
+		takenAt := database.GetString(m, "taken_at")
+		if takenAt != "" {
+			takenDoses++
+		}
+	}
+
+	complianceRate := 0.0
+	if totalDoses > 0 {
+		complianceRate = float64(takenDoses) / float64(totalDoses)
+	}
+
+	return map[string]interface{}{
+		"period_days":     days,
+		"total_doses":     totalDoses,
+		"taken_doses":     takenDoses,
+		"compliance_rate": complianceRate,
 	}
 }
 
-// Helper: tendencia de humor
-func (cde *ClinicalDecisionExplainer) getMoodTrend(patientID int64, days int) []int {
-	// Placeholder: retornar array de scores de humor
-	// TODO: implementar query real
-	return []int{6, 5, 4, 4, 3, 3, 2}
+// ── Real NietzscheDB evidence queries ────────────────────────────────────
+
+// getRecentClinicalAssessments queries patient_graph for recent ClinicalAssessment nodes
+// (PHQ-9, GAD-7, C-SSRS scores) ordered by creation date.
+func (cde *ClinicalDecisionExplainer) getRecentClinicalAssessments(patientID int64, limit int) []map[string]interface{} {
+	rows, err := cde.db.QueryByLabel(cde.ctx, "clinical_assessments",
+		" AND n.patient_id = $pid AND n.status = $status",
+		map[string]interface{}{
+			"pid":    patientID,
+			"status": "completed",
+		},
+		limit,
+	)
+	if err != nil || len(rows) == 0 {
+		return nil
+	}
+
+	// Sort by created_at descending (most recent first)
+	sort.Slice(rows, func(i, j int) bool {
+		ti := database.GetTime(rows[i], "created_at")
+		tj := database.GetTime(rows[j], "created_at")
+		return ti.After(tj)
+	})
+
+	// Extract relevant fields for evidence
+	var assessments []map[string]interface{}
+	for _, m := range rows {
+		assessment := map[string]interface{}{
+			"assessment_type": database.GetString(m, "assessment_type"),
+			"total_score":     database.GetFloat64(m, "total_score"),
+			"created_at":      database.GetString(m, "created_at"),
+			"severity":        database.GetString(m, "severity"),
+		}
+
+		// Include C-SSRS specific fields if present
+		if database.GetString(m, "assessment_type") == "C-SSRS" {
+			assessment["suicidal_ideation"] = database.GetBool(m, "suicidal_ideation")
+			assessment["risk_level"] = database.GetString(m, "risk_level")
+		}
+
+		assessments = append(assessments, assessment)
+	}
+
+	return assessments
 }
 
-// Helper: tendencia de adesao medicamentosa
-func (cde *ClinicalDecisionExplainer) getMedicationAdherenceTrend(patientID int64, days int) string {
-	// Placeholder: retornar URL do grafico
-	return fmt.Sprintf("/api/graphs/medication-adherence/%d?days=%d", patientID, days)
+// getRecentMedicationLogs queries for MedicationLog nodes (compliance data).
+func (cde *ClinicalDecisionExplainer) getRecentMedicationLogs(patientID int64, limit int) []map[string]interface{} {
+	rows, err := cde.db.QueryByLabel(cde.ctx, "medication_logs",
+		" AND n.patient_id = $pid",
+		map[string]interface{}{"pid": patientID},
+		limit,
+	)
+	if err != nil || len(rows) == 0 {
+		return nil
+	}
+
+	// Sort by created_at descending
+	sort.Slice(rows, func(i, j int) bool {
+		ti := database.GetTime(rows[i], "created_at")
+		tj := database.GetTime(rows[j], "created_at")
+		return ti.After(tj)
+	})
+
+	var logs []map[string]interface{}
+	for _, m := range rows {
+		logEntry := map[string]interface{}{
+			"medication_id":       database.GetInt64(m, "medication_id"),
+			"taken_at":            database.GetString(m, "taken_at"),
+			"verification_method": database.GetString(m, "verification_method"),
+			"created_at":          database.GetString(m, "created_at"),
+		}
+		logs = append(logs, logEntry)
+	}
+
+	return logs
+}
+
+// calculateComplianceRate computes medication compliance from recent logs.
+func (cde *ClinicalDecisionExplainer) calculateComplianceRate(logs []map[string]interface{}) map[string]interface{} {
+	if len(logs) == 0 {
+		return map[string]interface{}{
+			"total":           0,
+			"taken":           0,
+			"compliance_rate": 0.0,
+			"status":          "unknown",
+		}
+	}
+
+	total := len(logs)
+	taken := 0
+	for _, m := range logs {
+		takenAt, _ := m["taken_at"].(string)
+		if takenAt != "" {
+			taken++
+		}
+	}
+
+	rate := float64(taken) / float64(total)
+	status := "normal"
+	if rate < 0.5 {
+		status = "critical"
+	} else if rate < 0.7 {
+		status = "concerning"
+	} else if rate < 0.85 {
+		status = "warning"
+	}
+
+	return map[string]interface{}{
+		"total":           total,
+		"taken":           taken,
+		"compliance_rate": rate,
+		"status":          status,
+	}
+}
+
+// getRecentEmergencyAlerts queries for EmergencyAlert nodes (crisis history).
+func (cde *ClinicalDecisionExplainer) getRecentEmergencyAlerts(patientID int64, limit int) []map[string]interface{} {
+	rows, err := cde.db.QueryByLabel(cde.ctx, "emergency_alerts",
+		" AND n.patient_id = $pid",
+		map[string]interface{}{"pid": patientID},
+		limit,
+	)
+	if err != nil || len(rows) == 0 {
+		return nil
+	}
+
+	// Sort by created_at descending
+	sort.Slice(rows, func(i, j int) bool {
+		ti := database.GetTime(rows[i], "created_at")
+		tj := database.GetTime(rows[j], "created_at")
+		return ti.After(tj)
+	})
+
+	var alerts []map[string]interface{}
+	for _, m := range rows {
+		alert := map[string]interface{}{
+			"alert_type":  database.GetString(m, "alert_type"),
+			"severity":    database.GetString(m, "severity"),
+			"description": database.GetString(m, "description"),
+			"created_at":  database.GetString(m, "created_at"),
+			"resolved":    database.GetBool(m, "resolved"),
+		}
+		alerts = append(alerts, alert)
+	}
+
+	return alerts
 }

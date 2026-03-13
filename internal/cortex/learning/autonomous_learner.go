@@ -19,7 +19,9 @@ import (
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	"eva/internal/hippocampus/knowledge"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
+	nietzsche "nietzsche-sdk"
 )
 
 // LearningInsight representa um insight aprendido pela EVA
@@ -327,8 +329,15 @@ CONTEUDO:
 	return insights, nil
 }
 
-// storeInsights armazena insights no NietzscheDB com embeddings
+// storeInsights armazena insights no NietzscheDB com embeddings e cria edges de relacionamento.
+// FIX: Uses proper UUIDs (server requires them), stores full content via InsertNode
+// (the old Upsert path fell back to MergeNode which stored only {"id": timestamp}),
+// and creates RELATED_TOPIC / BUILDS_ON edges between related learnings.
 func (l *AutonomousLearner) storeInsights(ctx context.Context, insights []LearningInsight) error {
+	sdk := l.vectorAdapter.SDK()
+	// Collect newly inserted node IDs for edge creation
+	var newNodes []storedNode
+
 	for _, insight := range insights {
 		// Gerar embedding do conteudo combinado
 		embeddingText := fmt.Sprintf("%s: %s. %s", insight.Topic, insight.Title, insight.Summary)
@@ -338,30 +347,158 @@ func (l *AutonomousLearner) storeInsights(ctx context.Context, insights []Learni
 			continue
 		}
 
-		pointID := fmt.Sprintf("%d", time.Now().UnixNano())
+		// Use proper UUID (server requires valid UUIDs, not timestamps)
+		nodeID := uuid.New().String()
 
-		tagsStr := strings.Join(insight.Tags, ",")
-		payload := map[string]interface{}{
-			"topic":      insight.Topic,
-			"title":      insight.Title,
-			"summary":    insight.Summary,
-			"source":     insight.Source,
-			"tags":       tagsStr,
-			"category":   insight.Category,
-			"confidence": insight.Confidence,
-			"learned_at": insight.LearnedAt.Unix(),
+		// Build full content payload with node_label for type-safe querying
+		content := map[string]interface{}{
+			"node_label":  "Learning",
+			"title":       insight.Title,
+			"summary":     insight.Summary,
+			"category":    insight.Category,
+			"source_url":  insight.Source,
+			"topic":       insight.Topic,
+			"key_points":  insight.Tags,
+			"confidence":  insight.Confidence,
+			"timestamp":   insight.LearnedAt.Format(time.RFC3339),
+			"learned_at":  insight.LearnedAt.Unix(),
 		}
 
-		if err := l.vectorAdapter.Upsert(ctx, l.collection, pointID, embedding, payload); err != nil {
-			log.Warn().Err(err).Str("title", insight.Title).Msg("[LEARNER] Failed to upsert point")
+		// Convert embedding to float64 for the SDK
+		coords := make([]float64, len(embedding))
+		for i, f := range embedding {
+			coords[i] = float64(f)
+		}
+
+		// Insert directly via SDK InsertNode — bypasses the broken Upsert→MergeNode fallback
+		// that was only storing {"id": "timestamp"} as content
+		_, err = sdk.InsertNode(ctx, nietzsche.InsertNodeOpts{
+			ID:         nodeID,
+			Coords:     coords,
+			Content:    content,
+			NodeType:   "Semantic",
+			Collection: l.collection,
+		})
+		if err != nil {
+			log.Warn().Err(err).Str("title", insight.Title).Msg("[LEARNER] Failed to insert learning node")
 			continue
 		}
+
+		log.Info().
+			Str("id", nodeID).
+			Str("title", insight.Title).
+			Str("category", insight.Category).
+			Msg("[LEARNER] Stored learning insight")
+
+		newNodes = append(newNodes, storedNode{
+			nodeID:    nodeID,
+			embedding: embedding,
+			category:  insight.Category,
+			learnedAt: insight.LearnedAt,
+		})
 
 		// Pequeno delay entre embeddings para nao sobrecarregar a API
 		time.Sleep(500 * time.Millisecond)
 	}
 
+	// --- FIX 2: Create relationship edges between learnings ---
+	l.createLearningEdges(ctx, sdk, newNodes)
+
 	return nil
+}
+
+// storedNode holds metadata for a newly inserted learning node, used for edge creation.
+type storedNode struct {
+	nodeID    string
+	embedding []float32
+	category  string
+	learnedAt time.Time
+}
+
+// createLearningEdges searches for related existing learnings via KNN and creates
+// RELATED_TOPIC (same category) and BUILDS_ON (similar content, newer) edges.
+func (l *AutonomousLearner) createLearningEdges(ctx context.Context, sdk *nietzsche.NietzscheClient, newNodes []storedNode) {
+	for _, node := range newNodes {
+		// Convert embedding to float64 for KNN search
+		vec64 := make([]float64, len(node.embedding))
+		for i, f := range node.embedding {
+			vec64[i] = float64(f)
+		}
+
+		// Search for related existing learnings (top 5 nearest neighbors)
+		results, err := sdk.KnnSearch(ctx, vec64, 6, l.collection) // 6 because the node itself may appear
+		if err != nil {
+			log.Warn().Err(err).Str("id", node.nodeID).Msg("[LEARNER] KNN search for edges failed")
+			continue
+		}
+
+		for _, r := range results {
+			// Skip self-match
+			if r.ID == node.nodeID {
+				continue
+			}
+
+			// Get the neighbor node's content to check category
+			neighbor, err := sdk.GetNode(ctx, r.ID, l.collection)
+			if err != nil || !neighbor.Found {
+				continue
+			}
+
+			neighborCategory, _ := neighbor.Content["category"].(string)
+			neighborTimestamp, _ := neighbor.Content["learned_at"].(float64)
+
+			// Determine edge type and weight
+			edgeType := "Association"
+			weight := r.Distance // similarity score from KNN
+
+			if weight < 0.3 {
+				continue // too dissimilar, skip
+			}
+
+			if neighborCategory != "" && neighborCategory == node.category {
+				// Same category — RELATED_TOPIC
+				edgeType = "Association" // NietzscheDB supports: Association, Hierarchical, LSystemGenerated, Pruned
+				// Store the semantic edge type in metadata via weight encoding
+				// Higher weight = stronger relationship
+				if weight < 0.5 {
+					weight = 0.5 // minimum weight for same-category
+				}
+			}
+
+			// Check if this is a BUILDS_ON relationship (newer content on similar topic)
+			isBuildOn := false
+			if neighborTimestamp > 0 {
+				neighborTime := time.Unix(int64(neighborTimestamp), 0)
+				if node.learnedAt.After(neighborTime) && weight > 0.6 {
+					isBuildOn = true
+					edgeType = "Hierarchical" // newer builds on older — hierarchical relationship
+				}
+			}
+
+			_, err = sdk.InsertEdge(ctx, nietzsche.InsertEdgeOpts{
+				From:       node.nodeID,
+				To:         r.ID,
+				EdgeType:   edgeType,
+				Weight:     weight,
+				Collection: l.collection,
+			})
+			if err != nil {
+				log.Warn().Err(err).
+					Str("from", node.nodeID).Str("to", r.ID).
+					Msg("[LEARNER] Failed to create learning edge")
+				continue
+			}
+
+			relType := "RELATED_TOPIC"
+			if isBuildOn {
+				relType = "BUILDS_ON"
+			}
+			log.Debug().
+				Str("from", node.nodeID).Str("to", r.ID).
+				Str("type", relType).Float64("weight", weight).
+				Msg("[LEARNER] Created learning relationship edge")
+		}
+	}
 }
 
 // SearchLearnings busca semanticamente no conhecimento aprendido

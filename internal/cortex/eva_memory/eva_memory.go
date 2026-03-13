@@ -75,11 +75,43 @@ func (em *EvaMemory) StartSession(ctx context.Context, sessionID string) error {
 	return nil
 }
 
-// EndSession finaliza uma sessao e gera resumo automatico
+// EndSession finaliza uma sessao e gera resumo automatico.
+// Sessions with 0 turns and duration < 5s are considered spam and deleted.
 func (em *EvaMemory) EndSession(ctx context.Context, sessionID string) error {
 	now := time.Now()
 
-	_, err := em.graph.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+	// Query the session to check turn_count and duration
+	nql := `MATCH (s:EvaSession) WHERE s.id = $sessionId RETURN s`
+	result, err := em.graph.ExecuteNQL(ctx, nql, map[string]interface{}{
+		"sessionId": sessionID,
+	}, "")
+	if err != nil || len(result.Nodes) == 0 {
+		log.Warn().Str("session", sessionID).Msg("[EVA-MEMORY] Sessao nao encontrada ao finalizar")
+		return err
+	}
+
+	node := result.Nodes[0]
+	turnCount := 0
+	if tc, ok := node.Content["turn_count"].(float64); ok {
+		turnCount = int(tc)
+	}
+
+	// Check session duration
+	durationOK := false
+	if startedStr, ok := node.Content["started_at"].(string); ok {
+		if startedAt, err := time.Parse(time.RFC3339, startedStr); err == nil {
+			durationOK = now.Sub(startedAt) >= 5*time.Second
+		}
+	}
+
+	// Skip persisting empty sessions: 0 turns AND duration < 5s
+	if turnCount == 0 && !durationOK {
+		log.Info().Str("session", sessionID).Msg("[EVA-MEMORY] Sessao vazia (0 turnos, <5s) — removendo spam")
+		_ = em.graph.DeleteNode(ctx, node.ID, "")
+		return nil
+	}
+
+	_, err = em.graph.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
 		NodeType: "EvaSession",
 		MatchKeys: map[string]interface{}{
 			"id": sessionID,

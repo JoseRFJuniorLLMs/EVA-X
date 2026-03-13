@@ -240,10 +240,17 @@ func (c *Client) Delete(ctx context.Context, collection string, key string) erro
 // ── Vector Search (KNN) ─────────────────────────────────────────────────────
 
 // InsertWithEmbedding inserts a node with a vector embedding into a collection.
+// Routes through c.InsertNode (not c.sdk.InsertNode) so that NormalizeNodeType
+// and node_label injection are applied consistently.
 func (c *Client) InsertWithEmbedding(ctx context.Context, collection string, id string,
 	embedding []float64, content interface{}, nodeType string) (nietzsche.NodeResult, error) {
 
-	return c.sdk.InsertNode(ctx, nietzsche.InsertNodeOpts{
+	// Ensure content is never nil — empty map is safer than null in storage.
+	if content == nil {
+		content = map[string]interface{}{}
+	}
+
+	return c.InsertNode(ctx, nietzsche.InsertNodeOpts{
 		ID:         id,
 		Coords:     embedding,
 		Content:    content,
@@ -288,6 +295,12 @@ func (c *Client) KnnSearchFiltered(ctx context.Context, collection string,
 // Custom node types (e.g. "Person") are normalized to "Semantic" with a
 // node_label content field injected automatically.
 func (c *Client) InsertNode(ctx context.Context, opts nietzsche.InsertNodeOpts) (nietzsche.NodeResult, error) {
+	// Guard against nil content — storing null in NietzscheDB makes nodes
+	// invisible to full-text search and metadata filters.
+	if opts.Content == nil {
+		opts.Content = map[string]interface{}{}
+	}
+
 	normalized, isCustom := NormalizeNodeType(opts.NodeType)
 	if isCustom {
 		log := logger.Nietzsche()

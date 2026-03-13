@@ -549,6 +549,7 @@ func main() {
 	selfAwareSvc := selfawareness.NewSelfAwarenessService(db, vectorAdapter, embedSvc, cfg)
 	selfAwareAgent := swarmself.New()
 	selfAwareAgent.SetService(selfAwareSvc)
+	selfAwareAgent.SetNietzscheClient(nzClient)
 	log.Info().Msg("Self-Awareness Service inicializado")
 
 	// 7.8.1 Krylov Subspace Memory (1536D → 64D compression via modified Gram-Schmidt)
@@ -576,12 +577,18 @@ func main() {
 			return actions.AlertFamilyWithSeverity(db, pushService, emailSvc, userID, reason, severity)
 		},
 	}
+	// Wellness agent with habit tracking + NietzscheDB graph edges
+	wellnessAgent := wellness.New()
+	wellnessAgent.SetHabitTracker(habitTracker)
+	evaMindGraphAdapter := nietzscheInfra.NewGraphAdapter(nzClient, "eva_mind")
+	wellnessAgent.SetGraphAdapter(evaMindGraphAdapter)
+
 	orchestrator := swarm.NewOrchestrator(swarmDeps)
 	if err := swarm.SetupAllSwarms(orchestrator,
 		clinical.New(),
 		emergency.New(),
 		entertainment.New(),
-		wellness.New(),
+		wellnessAgent,
 		productivity.New(),
 		swarmgoogle.New(),
 		external.New(),

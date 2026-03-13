@@ -267,9 +267,79 @@ func (db *DB) Count(ctx context.Context, label string, extraWhere string, params
 	return len(rows), nil
 }
 
+// MergeNode performs a MERGE (upsert) on a node in eva_mind.
+// Returns the node ID (created or matched).
+func (db *DB) MergeNode(ctx context.Context, table string, matchKeys map[string]interface{},
+	onCreateSet map[string]interface{}, onMatchSet map[string]interface{}) (string, bool, error) {
+	if db.nz == nil {
+		return "", false, fmt.Errorf("NietzscheDB not initialized")
+	}
+	mk := make(map[string]interface{}, len(matchKeys)+1)
+	for k, v := range matchKeys {
+		mk[k] = v
+	}
+	mk["node_label"] = table
+
+	ocs := make(map[string]interface{}, len(onCreateSet)+1)
+	for k, v := range onCreateSet {
+		ocs[k] = v
+	}
+	ocs["node_label"] = table
+
+	result, err := db.nz.MergeNode(ctx, nietzsche.MergeNodeOpts{
+		Collection:  evaMindCollection,
+		NodeType:    "Semantic",
+		MatchKeys:   mk,
+		OnCreateSet: ocs,
+		OnMatchSet:  onMatchSet,
+	})
+	if err != nil {
+		return "", false, err
+	}
+	return result.NodeID, result.Created, nil
+}
+
+// InsertEdge creates an edge between two nodes in eva_mind.
+// edgeType examples: "TRACKS_HABIT", "COMPLETED_ON", "Association".
+func (db *DB) InsertEdge(ctx context.Context, fromID, toID, edgeType string, weight float64) (string, error) {
+	if db.nz == nil {
+		return "", fmt.Errorf("NietzscheDB not initialized")
+	}
+	return db.nz.InsertEdge(ctx, nietzsche.InsertEdgeOpts{
+		From:       fromID,
+		To:         toID,
+		EdgeType:   edgeType,
+		Weight:     weight,
+		Collection: evaMindCollection,
+	})
+}
+
+// MergeEdge finds or creates an edge between two nodes in eva_mind (MERGE semantics).
+func (db *DB) MergeEdge(ctx context.Context, fromID, toID, edgeType string) (string, error) {
+	if db.nz == nil {
+		return "", fmt.Errorf("NietzscheDB not initialized")
+	}
+	result, err := db.nz.MergeEdge(ctx, nietzsche.MergeEdgeOpts{
+		Collection: evaMindCollection,
+		FromNodeID: fromID,
+		ToNodeID:   toID,
+		EdgeType:   edgeType,
+	})
+	if err != nil {
+		return "", err
+	}
+	return result.EdgeID, nil
+}
+
 // NzClient returns the underlying NietzscheDB client (for advanced operations).
 func (db *DB) NzClient() *nietzsche.NietzscheClient {
 	return db.nz
+}
+
+// NodeUUID returns the deterministic UUID for a (table, id) pair in eva_mind.
+// This is the same UUID used when storing/retrieving nodes.
+func (db *DB) NodeUUID(table string, pgID interface{}) string {
+	return nodeID(table, pgID)
 }
 
 // ── Exported type conversion helpers ────────────────────────────────────

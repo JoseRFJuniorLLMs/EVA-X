@@ -121,6 +121,7 @@ func (h *HabitTracker) LogHabit(ctx context.Context, idosoID int64, habitName st
 
 	now := time.Now()
 	timeOfDay := h.getTimeOfDay(now)
+	dateStr := now.Format("2006-01-02")
 
 	metadataJSON := "{}"
 	if metadata != nil {
@@ -164,10 +165,99 @@ func (h *HabitTracker) LogHabit(ctx context.Context, idosoID int64, habitName st
 	}
 	log.Printf("%s [HABITS] %s registrado para idoso %d: %s", status, habitName, idosoID, source)
 
+	// ── Graph edges: connect user → habit → completion event ──
+	go h.ensureHabitEdges(idosoID, habit, logID, habitName, dateStr, success)
+
 	// Atualizar padrões em background
 	go h.updatePatterns(idosoID, habit.ID)
 
 	return logEntry, nil
+}
+
+// ensureHabitEdges creates graph edges linking user → habit → completion event.
+// 1. MergeNode for user profile (node_label="UserProfile")
+// 2. MergeNode for habit definition (node_label="Habit")
+// 3. MergeNode for habit completion event (node_label="HabitLog", match on habit_name+date)
+// 4. Edge: user → habit (TRACKS_HABIT)
+// 5. Edge: habit → completion event (COMPLETED_ON)
+func (h *HabitTracker) ensureHabitEdges(idosoID int64, habit *Habit, logID int64, habitName, dateStr string, success bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	// 1. MergeNode: user profile
+	userNodeID, _, err := h.db.MergeNode(ctx, "UserProfile",
+		map[string]interface{}{"idoso_id": idosoID},
+		map[string]interface{}{
+			"idoso_id":   idosoID,
+			"created_at": time.Now().Format(time.RFC3339),
+		},
+		nil, // no update on match
+	)
+	if err != nil {
+		log.Printf("⚠️ [HABITS] MergeNode UserProfile failed: %v", err)
+		return
+	}
+
+	// 2. MergeNode: habit definition
+	habitNodeID, _, err := h.db.MergeNode(ctx, "Habit",
+		map[string]interface{}{
+			"habit_name": habitName,
+		},
+		map[string]interface{}{
+			"habit_name":  habitName,
+			"description": habit.Description,
+			"category":    habit.Category,
+			"created_at":  time.Now().Format(time.RFC3339),
+		},
+		nil,
+	)
+	if err != nil {
+		log.Printf("⚠️ [HABITS] MergeNode Habit failed: %v", err)
+		return
+	}
+
+	// 3. MergeNode: habit completion event (unique per habit_name + date)
+	completedStr := "false"
+	if success {
+		completedStr = "true"
+	}
+	habitLogNodeID, _, err := h.db.MergeNode(ctx, "HabitLog",
+		map[string]interface{}{
+			"habit_name": habitName,
+			"date":       dateStr,
+			"idoso_id":   idosoID,
+		},
+		map[string]interface{}{
+			"habit_name": habitName,
+			"date":       dateStr,
+			"idoso_id":   idosoID,
+			"completed":  completedStr,
+			"timestamp":  time.Now().Format(time.RFC3339),
+			"log_id":     logID,
+		},
+		map[string]interface{}{
+			"completed": completedStr,
+			"timestamp": time.Now().Format(time.RFC3339),
+			"log_id":    logID,
+		},
+	)
+	if err != nil {
+		log.Printf("⚠️ [HABITS] MergeNode HabitLog failed: %v", err)
+		return
+	}
+
+	// 4. Edge: user → habit (TRACKS_HABIT) — idempotent via MergeEdge
+	if _, err := h.db.MergeEdge(ctx, userNodeID, habitNodeID, "TRACKS_HABIT"); err != nil {
+		log.Printf("⚠️ [HABITS] MergeEdge TRACKS_HABIT failed: %v", err)
+	}
+
+	// 5. Edge: habit → completion event (COMPLETED_ON)
+	if _, err := h.db.MergeEdge(ctx, habitNodeID, habitLogNodeID, "COMPLETED_ON"); err != nil {
+		log.Printf("⚠️ [HABITS] MergeEdge COMPLETED_ON failed: %v", err)
+	}
+
+	log.Printf("✅ [HABITS] Graph edges created: user(%s) -TRACKS_HABIT-> habit(%s) -COMPLETED_ON-> log(%s)",
+		userNodeID[:8], habitNodeID[:8], habitLogNodeID[:8])
 }
 
 // LogMedication atalho para registrar medicamento

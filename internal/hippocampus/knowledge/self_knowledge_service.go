@@ -8,10 +8,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 
 	"eva/internal/brainstem/database"
 )
+
+// creatorCPF returns the creator CPF from env or fallback
+func creatorCPF() string {
+	if cpf := os.Getenv("CREATOR_CPF"); cpf != "" {
+		return cpf
+	}
+	return "64525430249"
+}
 
 // SelfKnowledgeService permite a EVA consultar conhecimento sobre si mesma
 type SelfKnowledgeService struct {
@@ -285,8 +294,9 @@ func sortEntriesByImportance(entries []*KnowledgeEntry) {
 // LogCreatorQuery registra consulta do criador sobre arquitetura
 func (s *SelfKnowledgeService) LogCreatorQuery(ctx context.Context) error {
 	// Update creator knowledge access in NietzscheDB
+	cpf := creatorCPF()
 	err := s.db.Update(ctx, "CreatorKnowledgeAccess",
-		map[string]interface{}{"creator_cpf": "64525430249"},
+		map[string]interface{}{"creator_cpf": cpf},
 		map[string]interface{}{
 			"last_architecture_query":    fmt.Sprintf("%v", strings.Replace(fmt.Sprintf("%v", ctx), " ", "", -1)),
 			"total_architecture_queries": "increment", // Note: NietzscheDB doesn't support increment natively
@@ -295,11 +305,11 @@ func (s *SelfKnowledgeService) LogCreatorQuery(ctx context.Context) error {
 		// Fallback: try to get current value and update
 		rows, qerr := s.db.QueryByLabel(ctx, "CreatorKnowledgeAccess",
 			" AND n.creator_cpf = $cpf",
-			map[string]interface{}{"cpf": "64525430249"}, 1)
+			map[string]interface{}{"cpf": cpf}, 1)
 		if qerr == nil && len(rows) > 0 {
 			currentCount := database.GetInt64(rows[0], "total_architecture_queries")
 			err = s.db.Update(ctx, "CreatorKnowledgeAccess",
-				map[string]interface{}{"creator_cpf": "64525430249"},
+				map[string]interface{}{"creator_cpf": cpf},
 				map[string]interface{}{
 					"total_architecture_queries": currentCount + 1,
 				})

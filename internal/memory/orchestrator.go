@@ -91,12 +91,30 @@ func (o *MemoryOrchestrator) IngestMemory(ctx context.Context, userID string, co
 		log.Debug().Msg("✅ Krylov: Subspace updated")
 	}
 
-	// STEP 4: Store in NietzscheDB vector (with compressed embedding)
-	// TODO: Store in NietzscheDB vector with compressed embedding
-	// This would require VectorAdapter integration
-
-	// STEP 5: Store in NietzscheDB
-	// TODO: Store episodic memory in database
+	// STEP 4: Store episodic memory in NietzscheDB (with compressed embedding)
+	if o.graphAdapter != nil {
+		now := time.Now()
+		nodeResult, err := o.graphAdapter.InsertNode(ctx, nietzsche.InsertNodeOpts{
+			NodeType: "Episodic",
+			Coords:   compressedEmbedding,
+			Energy:   1.0,
+			Content: map[string]interface{}{
+				"user_id":    userID,
+				"text":       content,
+				"timestamp":  now.Unix(),
+				"created_at": now.Format(time.RFC3339),
+				"source":     "memory_orchestrator",
+			},
+		})
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to persist memory in NietzscheDB")
+			// Non-critical: pipeline continues even if storage fails
+		} else {
+			log.Debug().
+				Str("node_id", nodeResult.ID).
+				Msg("✅ Memory persisted in NietzscheDB")
+		}
+	}
 
 	log.Info().
 		Str("user_id", userID).

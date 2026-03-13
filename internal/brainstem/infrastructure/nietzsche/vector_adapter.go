@@ -141,12 +141,15 @@ func (va *VectorAdapter) Upsert(ctx context.Context, collection string,
 
 	_, err := va.client.InsertWithEmbedding(ctx, collection, id, vec64, payload, nodeType)
 	if err != nil {
-		// Try merge if insert fails (node may already exist)
+		// Try merge if insert fails (node may already exist).
+		// OnCreateSet ensures content is stored even when creating a new node.
 		_, mergeErr := va.client.MergeNode(ctx, nietzsche.MergeNodeOpts{
-			Collection: collection,
-			NodeType:   nodeType,
-			MatchKeys:  map[string]interface{}{"id": id},
-			OnMatchSet: payload,
+			Collection:  collection,
+			NodeType:    nodeType,
+			MatchKeys:   map[string]interface{}{"id": id},
+			OnCreateSet: payload,
+			OnMatchSet:  payload,
+			Coords:      vec64,
 		})
 		if mergeErr != nil {
 			log.Error().Err(err).Str("collection", collection).Str("id", id).Msg("vector upsert failed")

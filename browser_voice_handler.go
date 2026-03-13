@@ -420,6 +420,11 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 								}
 								writeMu.Lock()
 								conn.WriteJSON(browserMessage{Type: "tool_event", Tool: n, ToolData: result, Status: status})
+								// If tool requests video activation, send explicit command to browser
+								if activate, _ := result["activate_video"].(bool); activate {
+									conn.WriteJSON(browserMessage{Type: "command", Text: "start_video_capture"})
+									log.Info().Str("tool", n).Msg("[BROWSER] Sent start_video_capture command to browser")
+								}
 								writeMu.Unlock()
 
 								log.Info().Str("tool", n).Str("status", status).Msg("[BROWSER] Tool call concluido")

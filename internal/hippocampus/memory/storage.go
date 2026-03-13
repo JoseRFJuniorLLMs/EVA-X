@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -19,9 +20,16 @@ import (
 // CONSTANTES DE SEGURANÇA
 // =============================================================================
 
-// CREATOR_CPF é o CPF do criador da EVA - Jose R F Junior
+// CREATOR_CPF é o CPF do criador da EVA
 // ÚNICA pessoa autorizada a usar funções administrativas de deleção de memórias
-const CREATOR_CPF = "64525430249"
+var CREATOR_CPF = getCreatorCPFMemory()
+
+func getCreatorCPFMemory() string {
+	if cpf := os.Getenv("CREATOR_CPF"); cpf != "" {
+		return cpf
+	}
+	return "64525430249"
+}
 
 // ErrUnauthorized é retornado quando alguém não autorizado tenta usar funções admin
 var ErrUnauthorized = errors.New("acesso negado: apenas o criador pode executar esta função")
@@ -272,7 +280,7 @@ func isCreator(cpf string) bool {
 
 // DeleteOld remove memórias mais antigas que X dias
 //
-// ⚠️  FUNÇÃO RESTRITA - Apenas Jose R F Junior (CPF: 64525430249) pode usar
+// ⚠️  FUNÇÃO RESTRITA - Apenas o Criador (CPF via CREATOR_CPF env) pode usar
 //
 // Esta função NÃO é chamada automaticamente pelo sistema.
 // Memórias são mantidas indefinidamente para preservar o contexto do paciente.
@@ -299,7 +307,7 @@ func (m *MemoryStore) DeleteOld(ctx context.Context, requesterCPF string, idosoI
 		return 0, ErrUnauthorized
 	}
 
-	log.Printf("🔧 [ADMIN] DeleteOld autorizado para criador Jose R F Junior")
+	log.Printf("🔧 [ADMIN] DeleteOld autorizado para o Criador")
 	log.Printf("🔧 [ADMIN] Parâmetros: idosoID=%d, olderThanDays=%d, minImportance=%.2f",
 		idosoID, olderThanDays, minImportance)
 
@@ -349,7 +357,7 @@ func (m *MemoryStore) DeleteOld(ctx context.Context, requesterCPF string, idosoI
 
 // DeleteAllMemories remove TODAS as memórias de um paciente
 //
-// ⚠️  FUNÇÃO RESTRITA - Apenas Jose R F Junior (CPF: 64525430249) pode usar
+// ⚠️  FUNÇÃO RESTRITA - Apenas o Criador (CPF via CREATOR_CPF env) pode usar
 // ⚠️  CUIDADO: Esta função é DESTRUTIVA e não pode ser desfeita!
 //
 // Usar apenas para:
@@ -364,7 +372,7 @@ func (m *MemoryStore) DeleteAllMemories(ctx context.Context, requesterCPF string
 		return 0, ErrUnauthorized
 	}
 
-	log.Printf("🔧 [ADMIN] DeleteAllMemories autorizado para criador Jose R F Junior")
+	log.Printf("🔧 [ADMIN] DeleteAllMemories autorizado para o Criador")
 	log.Printf("⚠️  [ADMIN] DELETANDO TODAS as memórias do idoso %d", idosoID)
 
 	rows, err := m.db.QueryByLabel(ctx, "episodic_memories",
@@ -397,7 +405,7 @@ func (m *MemoryStore) DeleteAllMemories(ctx context.Context, requesterCPF string
 
 // GetMemoryStats retorna estatísticas de memórias (função admin)
 //
-// ⚠️  FUNÇÃO RESTRITA - Apenas Jose R F Junior (CPF: 64525430249) pode usar
+// ⚠️  FUNÇÃO RESTRITA - Apenas o Criador (CPF via CREATOR_CPF env) pode usar
 func (m *MemoryStore) GetMemoryStats(ctx context.Context, requesterCPF string) (map[string]interface{}, error) {
 	if m.db == nil {
 		return nil, fmt.Errorf("NietzscheDB unavailable")

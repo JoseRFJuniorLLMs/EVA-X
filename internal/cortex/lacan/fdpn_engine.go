@@ -120,6 +120,11 @@ func (f *FDPNEngine) recordDemandInGraph(ctx context.Context, idosoID int64, add
 		return nil
 	}
 
+	// Skip recording when desire is indefinido and text is empty — avoids spam nodes in eva_core
+	if desire == string(DESEJO_INDEFINIDO) && strings.TrimSpace(text) == "" {
+		return nil
+	}
+
 	now := nietzscheInfra.NowUnix()
 
 	// 1. MERGE Person

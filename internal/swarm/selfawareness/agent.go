@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	svc "eva/internal/cortex/selfawareness"
@@ -631,6 +632,39 @@ func (a *Agent) handleMyEnergyStats(ctx context.Context, call swarm.ToolCall) (*
 	msg := fmt.Sprintf("Meus %d nos mais energeticos (%d total, PageRank em %dms, %d iteracoes):\n%s",
 		limit, len(scores), pr.DurationMs, pr.Iterations, strings.Join(lines, "\n"))
 
+	// --- Self-Observation: persist energy stats summary ---
+	var topNames []string
+	var relatedIDs []string
+	for _, e := range entries {
+		label := e.ID
+		if e.NodeType != "" {
+			label = fmt.Sprintf("%s(%s)", e.NodeType, e.ID[:8])
+		}
+		topNames = append(topNames, label)
+		relatedIDs = append(relatedIDs, e.ID)
+	}
+	topSummary := strings.Join(topNames, ", ")
+	if len(topSummary) > 300 {
+		topSummary = topSummary[:300] + "..."
+	}
+	var avgEnergy float32
+	for _, e := range entries {
+		avgEnergy += e.Energy
+	}
+	if len(entries) > 0 {
+		avgEnergy /= float32(len(entries))
+	}
+	observationSummary := fmt.Sprintf("Self-observation: top %d concepts are %s. PageRank ran in %dms (%d iterations, %d total nodes). Avg top energy: %.3f",
+		limit, topSummary, pr.DurationMs, pr.Iterations, len(scores), avgEnergy)
+	go a.storeSelfObservation(ctx, "energy_stats", observationSummary, map[string]interface{}{
+		"top_count":      limit,
+		"total_nodes":    len(scores),
+		"pagerank_ms":    pr.DurationMs,
+		"iterations":     pr.Iterations,
+		"avg_top_energy": avgEnergy,
+		"collection":     collection,
+	}, relatedIDs)
+
 	return &swarm.ToolResult{
 		Success: true,
 		Message: msg,
@@ -677,6 +711,25 @@ func (a *Agent) handleInvokeZaratustra(ctx context.Context, call swarm.ToolCall)
 		result.NodesUpdated, result.MeanEnergyBefore, result.MeanEnergyAfter, result.TotalEnergyDelta,
 		result.EchoesCreated, result.EchoesEvicted, result.TotalEchoes,
 		result.EliteCount, result.EliteThreshold, result.MeanEliteEnergy, result.MeanBaseEnergy)
+
+	// --- Self-Observation: persist evolution report ---
+	observationSummary := fmt.Sprintf("Evolution report: energy changed from %.3f to %.3f (delta: %.3f). %d nodes updated, %d echoes created, %d elite nodes (threshold %.3f). %d cycles in %dms.",
+		result.MeanEnergyBefore, result.MeanEnergyAfter, result.TotalEnergyDelta,
+		result.NodesUpdated, result.EchoesCreated, result.EliteCount, result.EliteThreshold,
+		result.CyclesRun, result.DurationMs)
+	go a.storeSelfObservation(ctx, "evolution", observationSummary, map[string]interface{}{
+		"cycles_run":         result.CyclesRun,
+		"duration_ms":        result.DurationMs,
+		"nodes_updated":      result.NodesUpdated,
+		"mean_energy_before": result.MeanEnergyBefore,
+		"mean_energy_after":  result.MeanEnergyAfter,
+		"total_energy_delta": result.TotalEnergyDelta,
+		"echoes_created":     result.EchoesCreated,
+		"echoes_evicted":     result.EchoesEvicted,
+		"elite_count":        result.EliteCount,
+		"elite_threshold":    result.EliteThreshold,
+		"collection":         collection,
+	}, result.EliteNodeIDs)
 
 	return &swarm.ToolResult{
 		Success:     true,
@@ -778,6 +831,25 @@ func (a *Agent) handleMyTopology(ctx context.Context, call swarm.ToolCall) (*swa
 		stats["node_count"], stats["edge_count"], stats["version"],
 		louvain.Iterations, louvain.DurationMs)
 
+	// --- Self-Observation: persist topology summary ---
+	observationSummary := fmt.Sprintf("Self-observation: %d communities detected (modularity: %.4f, largest: %d nodes). Mean depth: %.3f (%d nodes measured). Depth distribution: shallow=%d, medium=%d, deep=%d, abyss=%d. Graph: %v nodes, %v edges.",
+		louvain.CommunityCount, louvain.Modularity, louvain.LargestSize,
+		meanDepth, depthCount,
+		depthBuckets["shallow (0-0.3)"], depthBuckets["medium (0.3-0.6)"],
+		depthBuckets["deep (0.6-0.9)"], depthBuckets["abyss (0.9+)"],
+		stats["node_count"], stats["edge_count"])
+	go a.storeSelfObservation(ctx, "topology", observationSummary, map[string]interface{}{
+		"community_count": louvain.CommunityCount,
+		"modularity":      louvain.Modularity,
+		"largest_size":    louvain.LargestSize,
+		"mean_depth":      meanDepth,
+		"depth_buckets":   depthBuckets,
+		"node_count":      stats["node_count"],
+		"edge_count":      stats["edge_count"],
+		"louvain_ms":      louvain.DurationMs,
+		"collection":      collection,
+	}, nil)
+
 	return &swarm.ToolResult{
 		Success: true,
 		Message: msg,
@@ -793,6 +865,66 @@ func (a *Agent) handleMyTopology(ctx context.Context, call swarm.ToolCall) (*swa
 			"collection":      collection,
 		},
 	}, nil
+}
+
+// storeSelfObservation persists a SelfObservation node into eva_core and
+// optionally links it to related concept node IDs via SELF_OBSERVED edges.
+// This is fire-and-forget: errors are logged but do not block the caller.
+func (a *Agent) storeSelfObservation(ctx context.Context, observationType, summary string, metrics map[string]interface{}, relatedNodeIDs []string) {
+	if a.nietzscheClient == nil {
+		return
+	}
+
+	collection := "eva_core"
+	ts := time.Now().UTC().Format(time.RFC3339)
+
+	content := map[string]interface{}{
+		"node_label":       "SelfObservation",
+		"observation_type": observationType,
+		"summary":          summary,
+		"timestamp":        ts,
+	}
+	for k, v := range metrics {
+		content[k] = v
+	}
+
+	// 128-dim zero coords for relational data (eva_core is 128D poincare)
+	coords := make([]float64, 128)
+	// Shallow depth for self-observations (magnitude ~0.15)
+	coords[0] = 0.15
+
+	result, err := a.nietzscheClient.InsertNode(ctx, nietzsche.InsertNodeOpts{
+		Coords:     coords,
+		Content:    content,
+		NodeType:   "Semantic",
+		Energy:     0.6,
+		Collection: collection,
+	})
+	if err != nil {
+		log.Warn().Err(err).Str("type", observationType).Msg("[SELF-AWARE] Failed to store self-observation node")
+		return
+	}
+
+	observationID := result.ID
+	log.Info().Str("id", observationID).Str("type", observationType).Msg("[SELF-AWARE] Stored self-observation")
+
+	// Create SELF_OBSERVED edges to related concept nodes (best-effort, limit to 5)
+	limit := 5
+	if len(relatedNodeIDs) < limit {
+		limit = len(relatedNodeIDs)
+	}
+	for _, nodeID := range relatedNodeIDs[:limit] {
+		_, edgeErr := a.nietzscheClient.InsertEdge(ctx, nietzsche.InsertEdgeOpts{
+			From:       observationID,
+			To:         nodeID,
+			EdgeType:   "Association",
+			Weight:     0.7,
+			Collection: collection,
+		})
+		if edgeErr != nil {
+			log.Warn().Err(edgeErr).Str("from", observationID).Str("to", nodeID).Msg("[SELF-AWARE] Failed to create SELF_OBSERVED edge")
+		}
+	}
 }
 
 func truncate(s string, maxLen int) string {

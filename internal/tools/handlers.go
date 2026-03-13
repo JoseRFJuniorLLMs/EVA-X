@@ -700,6 +700,14 @@ func (h *ToolsHandler) ExecuteTool(name string, args map[string]interface{}, ido
 	case "get_perception_status":
 		return h.handleGetPerceptionStatus()
 
+	case "open_camera_analysis":
+		return map[string]interface{}{
+			"success":        true,
+			"message":        "Camera ativada para analise visual. Peça ao idoso para mostrar o objeto.",
+			"activate_video": true,
+			"command":        "start_video_capture",
+		}, nil
+
 	case "analyze_voice_prosody":
 		analysisType, _ := args["analysis_type"].(string)
 		audioSegmentFloat, _ := args["audio_segment_seconds"].(float64)

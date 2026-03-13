@@ -1,11 +1,27 @@
 package testutil
 
+import "os"
+
 // TestFixtures contém dados de teste comuns
 type TestFixtures struct{}
 
 // NewTestFixtures cria fixtures de teste
 func NewTestFixtures() *TestFixtures {
 	return &TestFixtures{}
+}
+
+func getTestCreatorName() string {
+	if name := os.Getenv("CREATOR_NAME"); name != "" {
+		return name
+	}
+	return "Jose R F Junior"
+}
+
+func getTestCreatorCPF() string {
+	if cpf := os.Getenv("CREATOR_CPF"); cpf != "" {
+		return cpf
+	}
+	return "64525430249"
 }
 
 // ======================================================
@@ -36,8 +52,8 @@ func (f *TestFixtures) GetTestIdoso() TestIdoso {
 func (f *TestFixtures) GetCreatorIdoso() TestIdoso {
 	return TestIdoso{
 		ID:       1,
-		Nome:     "Jose R F Junior",
-		CPF:      "64525430249",
+		Nome:     getTestCreatorName(),
+		CPF:      getTestCreatorCPF(),
 		Email:    "jose@example.com",
 		Telefone: "+5511888888888",
 	}

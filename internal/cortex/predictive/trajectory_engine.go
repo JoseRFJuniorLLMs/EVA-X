@@ -510,16 +510,157 @@ func (te *TrajectoryEngine) getCurrentState(patientID int64) (*PatientState, err
 		state.PHQ9Score = database.GetFloat64(rows[0], "score")
 	}
 
-	// Buscar adesao medicamentosa (placeholder)
-	state.MedicationAdherence = 0.65 // TODO: Integrar com sistema de medicacao
+	// Buscar adesao medicamentosa real via medication_logs dos ultimos 7 dias
+	state.MedicationAdherence = te.computeMedicationAdherence(ctx, patientID)
 
-	// Buscar sono medio (placeholder)
-	state.SleepHours = 5.5 // TODO: Integrar com monitoramento de sono
+	// Buscar sono medio: no dedicated sleep collection exists yet.
+	// Default to 7h (healthy baseline); override when sleep monitoring is available.
+	state.SleepHours = te.fetchSleepHours(ctx, patientID)
 
-	// Buscar isolamento (placeholder)
-	state.SocialIsolationDays = 3 // TODO: Calcular baseado em interacoes
+	// Buscar isolamento real: conta dias desde ultima interacao registrada
+	state.SocialIsolationDays = te.computeIsolationDays(ctx, patientID)
 
 	return state, nil
+}
+
+// computeMedicationAdherence calcula a adesao medicamentosa real nos ultimos 7 dias.
+// Ratio = doses tomadas / doses esperadas. Retorna 0.5 como fallback se nao ha dados.
+func (te *TrajectoryEngine) computeMedicationAdherence(ctx context.Context, patientID int64) float64 {
+	const defaultAdherence = 0.5
+	const lookbackDays = 7
+
+	// 1. Buscar medicamentos ativos do paciente
+	activeMeds, err := te.db.QueryByLabel(ctx, "medicamentos",
+		" AND n.idoso_id = $idoso_id",
+		map[string]interface{}{"idoso_id": patientID}, 0)
+	if err != nil || len(activeMeds) == 0 {
+		log.Printf("[TRAJECTORY] Sem medicamentos ativos para paciente %d, usando default %.2f", patientID, defaultAdherence)
+		return defaultAdherence
+	}
+
+	// 2. Contar medicamentos ativos e estimar doses esperadas por dia
+	activeMedIDs := make([]int64, 0, len(activeMeds))
+	expectedDosesPerDay := 0.0
+	for _, m := range activeMeds {
+		if database.GetBool(m, "ativo") {
+			medID := database.GetInt64(m, "id")
+			activeMedIDs = append(activeMedIDs, medID)
+			freq := database.GetString(m, "frequencia")
+			switch freq {
+			case "1x/dia":
+				expectedDosesPerDay += 1
+			case "2x/dia":
+				expectedDosesPerDay += 2
+			case "3x/dia":
+				expectedDosesPerDay += 3
+			default:
+				expectedDosesPerDay += 1 // assume 1x/dia se frequencia desconhecida
+			}
+		}
+	}
+
+	if len(activeMedIDs) == 0 || expectedDosesPerDay == 0 {
+		return defaultAdherence
+	}
+
+	totalExpected := expectedDosesPerDay * float64(lookbackDays)
+
+	// 3. Buscar logs de medicacao para cada medicamento ativo
+	cutoff := time.Now().AddDate(0, 0, -lookbackDays)
+	takenCount := 0.0
+
+	for _, medID := range activeMedIDs {
+		logRows, err := te.db.QueryByLabel(ctx, "medication_logs",
+			" AND n.medication_id = $med_id",
+			map[string]interface{}{"med_id": medID}, 0)
+		if err != nil {
+			log.Printf("[TRAJECTORY] Erro ao buscar medication_logs med %d: %v", medID, err)
+			continue
+		}
+		for _, logRow := range logRows {
+			takenAt := database.GetTime(logRow, "taken_at")
+			if takenAt.After(cutoff) {
+				takenCount++
+			}
+		}
+	}
+
+	adherence := takenCount / totalExpected
+	if adherence > 1.0 {
+		adherence = 1.0
+	}
+
+	log.Printf("[TRAJECTORY] Adesao medicamentosa paciente %d: %.2f (%.0f/%.0f doses em %dd)",
+		patientID, adherence, takenCount, totalExpected, lookbackDays)
+	return adherence
+}
+
+// fetchSleepHours busca dados de sono do paciente.
+// Consulta vital_signs do tipo "sono" se existirem; caso contrario retorna 7.0h (baseline saudavel).
+func (te *TrajectoryEngine) fetchSleepHours(ctx context.Context, patientID int64) float64 {
+	const defaultSleep = 7.0
+
+	// Tentar buscar registros de sono nos vital_signs (tipo "sono" ou "sleep")
+	rows, err := te.db.QueryByLabel(ctx, "vital_signs",
+		" AND n.idoso_id = $idoso_id AND n.tipo = $tipo",
+		map[string]interface{}{"idoso_id": patientID, "tipo": "sono"}, 5)
+	if err != nil || len(rows) == 0 {
+		// Sem dados de sono registrados — usar baseline saudavel
+		return defaultSleep
+	}
+
+	// Calcular media das ultimas leituras
+	total := 0.0
+	count := 0
+	for _, row := range rows {
+		val := database.GetFloat64(row, "valor_numerico")
+		if val > 0 {
+			total += val
+			count++
+		}
+	}
+
+	if count == 0 {
+		return defaultSleep
+	}
+
+	avgSleep := total / float64(count)
+	log.Printf("[TRAJECTORY] Sono medio paciente %d: %.1fh (%d registros)", patientID, avgSleep, count)
+	return avgSleep
+}
+
+// computeIsolationDays calcula dias sem interacao significativa.
+// Consulta interaction_cognitive_load para encontrar a ultima interacao do paciente.
+func (te *TrajectoryEngine) computeIsolationDays(ctx context.Context, patientID int64) int {
+	const defaultIsolation = 0
+
+	// Buscar interacoes recentes do paciente (ordenadas por mais recente primeiro via LIMIT)
+	rows, err := te.db.QueryByLabel(ctx, "interaction_cognitive_load",
+		" AND n.patient_id = $patient_id",
+		map[string]interface{}{"patient_id": patientID}, 0)
+	if err != nil || len(rows) == 0 {
+		// Sem historico de interacoes — assumir que nao ha isolamento (paciente pode ser novo)
+		log.Printf("[TRAJECTORY] Sem interacoes registradas para paciente %d, assumindo %d dias de isolamento",
+			patientID, defaultIsolation)
+		return defaultIsolation
+	}
+
+	// Encontrar a interacao mais recente
+	var lastInteraction time.Time
+	for _, row := range rows {
+		ts := database.GetTime(row, "timestamp")
+		if ts.After(lastInteraction) {
+			lastInteraction = ts
+		}
+	}
+
+	if lastInteraction.IsZero() {
+		return defaultIsolation
+	}
+
+	daysSince := int(time.Since(lastInteraction).Hours() / 24)
+	log.Printf("[TRAJECTORY] Isolamento paciente %d: %d dias desde ultima interacao", patientID, daysSince)
+	return daysSince
 }
 
 // identifyCriticalFactors identifica fatores criticos

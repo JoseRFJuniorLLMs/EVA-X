@@ -383,7 +383,7 @@ func (clo *CognitiveLoadOrchestrator) updateStateAfterInteraction(patientID int6
 		"high_intensity_count_24h": newHighIntensityCount,
 		"last_interaction_at":     now,
 		"rumination_detected":     ruminationDetected,
-		"rumination_count_24h":    0, // TODO: contar ruminacao
+		"rumination_count_24h":    clo.countRumination24h(patientID, load.TopicsDiscussed, load.LacanianSignifiers),
 		"emotional_saturation":    emotionalSaturation,
 		"fatigue_level":           fatigueLevel,
 		"updated_at":              now,
@@ -393,6 +393,9 @@ func (clo *CognitiveLoadOrchestrator) updateStateAfterInteraction(patientID int6
 		updates["last_high_intensity_at"] = newLastHighIntensityAt.Format(time.RFC3339)
 	}
 
+	// Compute 7-day load for both update and insert paths
+	updates["load_7d"] = clo.calculateLoad7d(patientID)
+
 	// Try update first
 	err = clo.db.Update(clo.ctx, "cognitive_load_state",
 		map[string]interface{}{"patient_id": patientID},
@@ -401,7 +404,6 @@ func (clo *CognitiveLoadOrchestrator) updateStateAfterInteraction(patientID int6
 	if err != nil {
 		// If update fails, insert
 		updates["patient_id"] = patientID
-		updates["load_7d"] = 0 // TODO: calcular load_7d
 		_, err = clo.db.Insert(clo.ctx, "cognitive_load_state", updates)
 	}
 
@@ -565,4 +567,88 @@ func (clo *CognitiveLoadOrchestrator) updateNietzscheDBCache(patientID int64) er
 
 	cacheKey := fmt.Sprintf("cognitive_load:%d:state", patientID)
 	return clo.cache.Set(clo.ctx, cacheKey, string(stateJSON), 5*time.Minute)
+}
+
+// countRumination24h counts how many interactions in the last 24h share topics
+// or Lacanian signifiers with the current interaction, indicating rumination.
+func (clo *CognitiveLoadOrchestrator) countRumination24h(patientID int64, topics []string, signifiers []string) int {
+	if len(topics) == 0 && len(signifiers) == 0 {
+		return 0
+	}
+
+	cutoff := time.Now().Add(-24 * time.Hour).Format(time.RFC3339)
+
+	rows, err := clo.db.QueryByLabel(clo.ctx, "interaction_cognitive_load",
+		" AND n.patient_id = $pid AND n.timestamp > $cutoff",
+		map[string]interface{}{
+			"pid":    patientID,
+			"cutoff": cutoff,
+		},
+		0,
+	)
+	if err != nil {
+		log.Printf("[COGNITIVE] Erro ao contar ruminacao 24h: %v", err)
+		return 0
+	}
+
+	matchCount := 0
+	for _, m := range rows {
+		storedTopicsStr := database.GetString(m, "topics_discussed")
+		storedSignifiersStr := database.GetString(m, "lacanian_signifiers")
+
+		hasOverlap := false
+		for _, topic := range topics {
+			if strings.Contains(storedTopicsStr, topic) {
+				hasOverlap = true
+				break
+			}
+		}
+		if !hasOverlap {
+			for _, sig := range signifiers {
+				if strings.Contains(storedSignifiersStr, sig) {
+					hasOverlap = true
+					break
+				}
+			}
+		}
+		if hasOverlap {
+			matchCount++
+		}
+	}
+
+	return matchCount
+}
+
+// calculateLoad7d computes the average cognitive load over the last 7 days
+// by querying all interaction records and averaging their cumulative_load_24h values.
+func (clo *CognitiveLoadOrchestrator) calculateLoad7d(patientID int64) float64 {
+	cutoff := time.Now().Add(-7 * 24 * time.Hour).Format(time.RFC3339)
+
+	rows, err := clo.db.QueryByLabel(clo.ctx, "interaction_cognitive_load",
+		" AND n.patient_id = $pid AND n.timestamp > $cutoff",
+		map[string]interface{}{
+			"pid":    patientID,
+			"cutoff": cutoff,
+		},
+		0,
+	)
+	if err != nil {
+		log.Printf("[COGNITIVE] Erro ao calcular load_7d: %v", err)
+		return 0
+	}
+
+	if len(rows) == 0 {
+		return 0
+	}
+
+	totalLoad := 0.0
+	for _, m := range rows {
+		totalLoad += database.GetFloat64(m, "cumulative_load_24h")
+	}
+
+	avg := totalLoad / float64(len(rows))
+	if avg > 1.0 {
+		avg = 1.0
+	}
+	return avg
 }
