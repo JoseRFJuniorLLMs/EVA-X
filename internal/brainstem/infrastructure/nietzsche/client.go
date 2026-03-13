@@ -789,6 +789,11 @@ func (c *Client) FullTextSearch(ctx context.Context, query, collection string, l
 	return c.sdk.FullTextSearch(ctx, query, collection, limit)
 }
 
+// FullTextSearchRich performs FTS + parallel GetNode in a single call.
+func (c *Client) FullTextSearchRich(ctx context.Context, query, collection string, limit uint32) ([]nietzsche.RichFtsResult, error) {
+	return c.sdk.FullTextSearchRich(ctx, query, collection, limit)
+}
+
 // HybridSearch combines full-text BM25 and vector KNN search.
 func (c *Client) HybridSearch(ctx context.Context, textQuery string, queryCoords []float64,
 	k uint32, textWeight, vectorWeight float64, collection string) ([]nietzsche.KnnResult, error) {

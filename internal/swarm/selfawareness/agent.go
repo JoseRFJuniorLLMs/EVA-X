@@ -1003,28 +1003,20 @@ func (a *Agent) handleRecallMemory(ctx context.Context, call swarm.ToolCall) (*s
 		wg.Add(1)
 		go func(collection string) {
 			defer wg.Done()
-			// Only top 2 results per collection for speed
-			ftsResults, err := a.nietzscheClient.FullTextSearch(searchCtx, query, collection, 2)
-			if err != nil || len(ftsResults) == 0 {
+			// FullTextSearchRich: FTS + parallel GetNode in single SDK call
+			richResults, err := a.nietzscheClient.FullTextSearchRich(searchCtx, query, collection, 2)
+			if err != nil || len(richResults) == 0 {
 				return
 			}
-			// Parallel GetNode for all FTS hits
-			var nodeWg sync.WaitGroup
-			for _, fts := range ftsResults {
-				nodeWg.Add(1)
-				go func(nodeID string) {
-					defer nodeWg.Done()
-					node, nErr := a.nietzscheClient.GetNode(searchCtx, nodeID, collection)
-					if nErr != nil || !node.Found {
-						return
-					}
-					text := extractRecallContent(node.Content, collection)
-					if text != "" {
-						hitCh <- memHit{text: text}
-					}
-				}(fts.NodeID)
+			for _, r := range richResults {
+				if !r.Found {
+					continue
+				}
+				text := extractRecallContent(r.Content, collection)
+				if text != "" {
+					hitCh <- memHit{text: text}
+				}
 			}
-			nodeWg.Wait()
 		}(col)
 	}
 
