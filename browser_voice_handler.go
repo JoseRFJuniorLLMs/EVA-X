@@ -155,16 +155,8 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 			idosoNome = idoso.Nome
 			log.Info().Str("session", sessionID).Str("nome", idoso.Nome).Int64("id", idoso.ID).Msg("[BROWSER] Paciente encontrado")
 
-			// Usar Brain Service para obter contexto completo (Lacan + medico + memorias + nome)
-			if s.brainService != nil {
-				systemPrompt, _, brainErr := s.brainService.GetSystemPrompt(ctx, idoso.ID)
-				if brainErr == nil && systemPrompt != "" {
-					clientContext = systemPrompt
-					log.Info().Str("session", sessionID).Int("len", len(systemPrompt)).Msg("[BROWSER] Contexto unificado carregado via Brain")
-				} else if brainErr != nil {
-					log.Warn().Err(brainErr).Str("session", sessionID).Msg("[BROWSER] Erro ao carregar contexto unificado - usando fallback")
-				}
-			}
+			// FIX: Removido GetSystemPrompt duplicado — a linha 178 ja faz esta chamada
+			// Isto poupava ~5s de queries NietzscheDB duplicadas no startup
 		} else if dbErr != nil {
 			log.Warn().Err(dbErr).Str("session", sessionID).Msg("[BROWSER] Erro ao buscar paciente por CPF")
 		}
@@ -535,6 +527,72 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 								primeCtx, primeCancel := context.WithTimeout(context.Background(), 5*time.Second)
 								defer primeCancel()
 								s.brainService.ProcessUserSpeech(primeCtx, idosoID, t, "neutral", "low", 5)
+							}(text)
+							// BACKGROUND MEMORY RECALL: busca paralela sem parar áudio
+							go func(userText string) {
+								// Só buscar se texto tem conteúdo suficiente
+								if len(userText) < 10 {
+									return
+								}
+								recallCtx, recallCancel := context.WithTimeout(context.Background(), 800*time.Millisecond)
+								defer recallCancel()
+
+								nzClient := s.db.NzClient()
+								if nzClient == nil {
+									return
+								}
+
+								// AQL RECALL — single gRPC round-trip
+								aqlQuery := fmt.Sprintf(`RECALL "%s" LIMIT 3`, userText)
+								results, _, aqlErr := nzClient.ExecuteAql(recallCtx, aqlQuery, "eva_mind")
+
+								var memories []string
+								if aqlErr != nil {
+									// Fallback: FTS
+									richResults, ftsErr := nzClient.FullTextSearchRich(recallCtx, userText, "eva_mind", 2)
+									if ftsErr != nil || len(richResults) == 0 {
+										return
+									}
+									for _, r := range richResults {
+										if !r.Found {
+											continue
+										}
+										for _, key := range []string{"content", "text", "summary"} {
+											if v, ok := r.Content[key]; ok {
+												if s, ok := v.(string); ok && len(s) > 10 {
+													if len(s) > 200 { s = s[:197] + "..." }
+													memories = append(memories, s)
+													break
+												}
+											}
+										}
+									}
+								} else {
+									for _, r := range results {
+										if r.Content != "" && len(r.Content) > 10 {
+											c := r.Content
+											if len(c) > 200 { c = c[:197] + "..." }
+											memories = append(memories, c)
+										}
+									}
+								}
+
+								if len(memories) == 0 {
+									return
+								}
+
+								// Injetar memórias no Gemini via clientContent (NÃO interrompe áudio)
+								memText := strings.Join(memories, "\n")
+								geminiMu.RLock()
+								c := geminiRef
+								geminiMu.RUnlock()
+								if c != nil {
+									if err := c.SendMemoryContext(memText); err != nil {
+										log.Warn().Err(err).Msg("[RECALL-BG] Falha ao injetar memórias")
+									} else {
+										log.Info().Int("count", len(memories)).Str("query", userText[:min(50, len(userText))]).Msg("[RECALL-BG] Memórias injetadas em background")
+									}
+								}
 							}(text)
 						}
 						// Acumular transcript do usuario

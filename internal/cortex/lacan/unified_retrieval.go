@@ -1326,14 +1326,18 @@ func (u *UnifiedRetrieval) buildIntegratedPrompt(unified *UnifiedContext) string
 	builder.WriteString("═══════════════════════════════════════════════════════════\n")
 
 
-	// Instrucao de recall automatico
-	builder.WriteString("\n### INSTRUCAO CRITICA DE MEMORIA\n")
-	builder.WriteString("Voce tem a ferramenta recall_memory para buscar nas suas memorias.\n")
-	builder.WriteString("QUANDO USAR: Se o utilizador mencionar passado, perguntar se lembra, ou nomes/eventos.\n")
-	builder.WriteString("COMO USAR: Diga 'Deixa eu verificar nas minhas lembrancas...' e chame recall_memory.\n")
-	builder.WriteString("IMPORTANTE: Continue falando NATURALMENTE apos chamar. Integre o resultado na conversa.\n")
-	builder.WriteString("Se nao encontrar, diga 'Nao encontrei nada sobre isso nas minhas memorias'.\n")
-	builder.WriteString("NAO fique em silencio. NUNCA pare de falar por causa de uma busca.\n")
+	// Instrucao de memoria — recall automatico em background
+	builder.WriteString("\n### SISTEMA DE MEMORIA (AUTOMATICO)\n")
+	builder.WriteString("Suas memorias e contexto do paciente JA ESTAO carregados acima neste prompt.\n")
+	builder.WriteString("Alem disso, um sistema AUTOMATICO busca memorias relevantes em background.\n")
+	builder.WriteString("Quando voce receber uma mensagem com [MEMORIA_RECUPERADA], integre naturalmente na conversa.\n")
+	builder.WriteString("Exemplo: se o utilizador perguntar algo e segundos depois chegar [MEMORIA_RECUPERADA],\n")
+	builder.WriteString("use essa informacao para complementar ou corrigir sua resposta de forma natural.\n")
+	builder.WriteString("NUNCA mencione '[MEMORIA_RECUPERADA]' em voz alta. Apenas USE a informacao.\n")
+	builder.WriteString("NUNCA pare de falar para buscar memorias. O sistema busca em paralelo por voce.\n")
+	builder.WriteString("Se o utilizador perguntar se voce lembra de algo: responda com o que sabe do contexto acima.\n")
+	builder.WriteString("Se nao souber, diga naturalmente que nao lembra no momento — a memoria pode chegar em segundos.\n")
+	builder.WriteString("NAO chame recall_memory como ferramenta. O recall acontece automaticamente.\n")
 
 	return builder.String()
 }

@@ -435,6 +435,34 @@ func (c *Client) SendToolResponse(name string, result map[string]interface{}) er
 	return c.conn.WriteJSON(msg)
 }
 
+
+// SendMemoryContext injeta contexto de memória no stream sem interromper áudio.
+// Usa clientContent com turn_complete=false para não disparar resposta imediata.
+// O Gemini recebe como contexto adicional e usa naturalmente na próxima fala.
+func (c *Client) SendMemoryContext(memoryText string) error {
+	if memoryText == "" {
+		return nil
+	}
+	msg := map[string]interface{}{
+		"client_content": map[string]interface{}{
+			"turn_complete": false,
+			"turns": []map[string]interface{}{
+				{
+					"role": "user",
+					"parts": []map[string]interface{}{
+						{
+							"text": "[MEMORIA_RECUPERADA]: " + memoryText,
+						},
+					},
+				},
+			},
+		},
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.conn.WriteJSON(msg)
+}
+
 // Close fecha conexão
 func (c *Client) Close() error {
 	if c.conn != nil {
