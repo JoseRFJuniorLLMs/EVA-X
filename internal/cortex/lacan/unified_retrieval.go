@@ -684,6 +684,32 @@ func (u *UnifiedRetrieval) getCapabilities(ctx context.Context) string {
 
 // getRecentMemories recupera memórias episódicas recentes
 // PERFORMANCE FIX: Adicionado timeout e agora busca falas diretas (episodic_memories)
+
+// humanTime formats a timestamp as a human-readable relative time reference.
+// Today: "hoje 15:04", Yesterday: "ontem 15:04", This week: "segunda 15:04",
+// Older: "11/mar 15:04"
+func humanTime(t time.Time) string {
+	now := time.Now()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	yesterday := today.AddDate(0, 0, -1)
+	weekAgo := today.AddDate(0, 0, -6)
+
+	hhmm := t.Format("15:04")
+
+	if t.After(today) || t.Equal(today) {
+		return "hoje " + hhmm
+	}
+	if t.After(yesterday) || t.Equal(yesterday) {
+		return "ontem " + hhmm
+	}
+	if t.After(weekAgo) {
+		dias := []string{"domingo", "segunda", "terca", "quarta", "quinta", "sexta", "sabado"}
+		return dias[t.Weekday()] + " " + hhmm
+	}
+	meses := []string{"", "jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"}
+	return fmt.Sprintf("%d/%s %s", t.Day(), meses[t.Month()], hhmm)
+}
+
 func (u *UnifiedRetrieval) getRecentMemories(ctx context.Context, idosoID int64, limit int) []string {
 	// PERFORMANCE: Timeout específico
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, queryTimeout)
@@ -733,7 +759,7 @@ func (u *UnifiedRetrieval) getRecentMemories(ctx context.Context, idosoID int64,
 				role = "Paciente"
 			}
 			memories = append(memories, fmt.Sprintf("[%s] %s: %s",
-				e.timestamp.Format("15:04"), role, e.content))
+				humanTime(e.timestamp), role, e.content))
 		}
 	}
 

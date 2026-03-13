@@ -369,6 +369,38 @@ func (em *EvaMemory) LoadMetaCognition(ctx context.Context) (string, error) {
 }
 
 // getRecentSessions retorna resumos das N sessoes mais recentes
+
+// humanTimeStr formats a RFC3339 string as human-readable relative time.
+func humanTimeStr(rfc3339 interface{}) string {
+	s, ok := rfc3339.(string)
+	if !ok || s == "" {
+		return "?"
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return s
+	}
+	now := time.Now()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	yesterday := today.AddDate(0, 0, -1)
+	weekAgo := today.AddDate(0, 0, -6)
+
+	hhmm := t.Format("15:04")
+
+	if t.After(today) || t.Equal(today) {
+		return "hoje " + hhmm
+	}
+	if t.After(yesterday) || t.Equal(yesterday) {
+		return "ontem " + hhmm
+	}
+	if t.After(weekAgo) {
+		dias := []string{"domingo", "segunda", "terca", "quarta", "quinta", "sexta", "sabado"}
+		return dias[t.Weekday()] + " " + hhmm
+	}
+	meses := []string{"", "jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"}
+	return fmt.Sprintf("%d/%s %s", t.Day(), meses[t.Month()], hhmm)
+}
+
 func (em *EvaMemory) getRecentSessions(ctx context.Context, limit int) ([]string, error) {
 	// Optimized: Try to get session and topics in fewer queries if possible,
 	// or at least simplify the BFS logic.
@@ -400,7 +432,7 @@ func (em *EvaMemory) getRecentSessions(ctx context.Context, limit int) ([]string
 			}
 		}
 
-		results = append(results, fmt.Sprintf("- %v (%v turnos): %s", started, turnCount, topicList))
+		results = append(results, fmt.Sprintf("- %s (%v turnos): %s", humanTimeStr(started), turnCount, topicList))
 	}
 	return results, nil
 }
