@@ -6,7 +6,6 @@ package selfawareness
 import (
 	"context"
 	"encoding/json"
-		"sync"
 	"fmt"
 	"sort"
 	"strings"
@@ -975,9 +974,8 @@ func truncate(s string, maxLen int) string {
 }
 
 
-// handleRecallMemory searches across EVA's memory collections for relevant context.
-// This is the RAG mechanism for voice sessions - Gemini calls it automatically.
-// OPTIMIZED: 1.5s timeout, 1 result per collection, parallel GetNode.
+// handleRecallMemory searches EVA's memory using AQL (Agent Cognition Language).
+// Single gRPC round-trip: server parses AQL, executes FTS internally, returns content.
 func (a *Agent) handleRecallMemory(ctx context.Context, call swarm.ToolCall) (*swarm.ToolResult, error) {
 	query, _ := call.Args["query"].(string)
 	if query == "" {
@@ -991,88 +989,64 @@ func (a *Agent) handleRecallMemory(ctx context.Context, call swarm.ToolCall) (*s
 	searchCtx, cancel := context.WithTimeout(ctx, 800*time.Millisecond)
 	defer cancel()
 
-	type memHit struct {
-		text string
-	}
-
-	hitCh := make(chan memHit, 6) // max 2 per collection x 3
-	var wg sync.WaitGroup
-
-	collections := []string{"eva_mind"}  // Single collection for speed (<200ms)
-	for _, col := range collections {
-		wg.Add(1)
-		go func(collection string) {
-			defer wg.Done()
-			// FullTextSearchRich: FTS + parallel GetNode in single SDK call
-			richResults, err := a.nietzscheClient.FullTextSearchRich(searchCtx, query, collection, 2)
-			if err != nil || len(richResults) == 0 {
-				return
+	// AQL RECALL — single round-trip to NietzscheDB server
+	aqlQuery := fmt.Sprintf(`RECALL "%s" LIMIT 3`, query)
+	results, verb, err := a.nietzscheClient.ExecuteAql(searchCtx, aqlQuery, "eva_mind")
+	if err != nil {
+		// Fallback to FullTextSearchRich if AQL fails
+		richResults, ftsErr := a.nietzscheClient.FullTextSearchRich(searchCtx, query, "eva_mind", 2)
+		if ftsErr != nil || len(richResults) == 0 {
+			return &swarm.ToolResult{
+				Success: true,
+				Message: "Nao encontrei memorias relevantes sobre isso.",
+			}, nil
+		}
+		var memories []string
+		for _, r := range richResults {
+			if !r.Found {
+				continue
 			}
-			for _, r := range richResults {
-				if !r.Found {
-					continue
-				}
-				text := extractRecallContent(r.Content, collection)
-				if text != "" {
-					hitCh <- memHit{text: text}
+			for _, key := range []string{"content", "text", "summary", "description"} {
+				if v, ok := r.Content[key]; ok {
+					if s, ok := v.(string); ok && len(s) > 10 {
+						if len(s) > 200 {
+							s = s[:197] + "..."
+						}
+						memories = append(memories, s)
+						break
+					}
 				}
 			}
-		}(col)
+		}
+		if len(memories) == 0 {
+			return &swarm.ToolResult{Success: true, Message: "Nao encontrei memorias relevantes."}, nil
+		}
+		msg := fmt.Sprintf("Memorias (fallback FTS):\n%s", strings.Join(memories, "\n"))
+		return &swarm.ToolResult{Success: true, Message: msg}, nil
 	}
 
-	// Close channel when all goroutines finish
-	go func() {
-		wg.Wait()
-		close(hitCh)
-	}()
-
-	// Collect results with dedup
-	seen := make(map[string]bool)
-	var unique []string
-	for hit := range hitCh {
-		key := hit.text
-		if len(key) > 80 {
-			key = key[:80]
-		}
-		if !seen[key] {
-			seen[key] = true
-			unique = append(unique, hit.text)
-		}
-		if len(unique) >= 3 {
-			break
-		}
-	}
-
-	if len(unique) == 0 {
+	if len(results) == 0 {
 		return &swarm.ToolResult{
 			Success: true,
 			Message: "Nao encontrei memorias relevantes sobre isso.",
 		}, nil
 	}
 
-	msg := fmt.Sprintf("Memorias relevantes:\n%s", strings.Join(unique, "\n"))
+	var memories []string
+	for _, r := range results {
+		if r.Content != "" && len(r.Content) > 10 {
+			memories = append(memories, r.Content)
+		}
+	}
+
+	if len(memories) == 0 {
+		return &swarm.ToolResult{Success: true, Message: "Nao encontrei memorias relevantes."}, nil
+	}
+
+	_ = verb // "RECALL"
+	msg := fmt.Sprintf("Memorias relevantes:\n%s", strings.Join(memories, "\n"))
 	return &swarm.ToolResult{
 		Success: true,
 		Message: msg,
 	}, nil
-}
-
-// extractRecallContent extracts readable text from FTS result content.
-func extractRecallContent(content map[string]interface{}, collection string) string {
-	for _, key := range []string{"content", "text", "summary", "description", "self_description"} {
-		if v, ok := content[key]; ok {
-			if s, ok := v.(string); ok && len(s) > 10 {
-				if len(s) > 200 {
-					s = s[:197] + "..."
-				}
-				return s
-			}
-		}
-	}
-	label, _ := content["node_label"].(string)
-	name, _ := content["name"].(string)
-	if label != "" && name != "" {
-		return fmt.Sprintf("[%s] %s: %s", collection, label, name)
-	}
-	return ""
 }

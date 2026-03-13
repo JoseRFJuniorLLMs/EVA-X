@@ -794,6 +794,11 @@ func (c *Client) FullTextSearchRich(ctx context.Context, query, collection strin
 	return c.sdk.FullTextSearchRich(ctx, query, collection, limit)
 }
 
+// ExecuteAql sends an AQL query to NietzscheDB for server-side execution.
+func (c *Client) ExecuteAql(ctx context.Context, query, collection string) ([]nietzsche.AqlResult, string, error) {
+	return c.sdk.ExecuteAql(ctx, query, collection)
+}
+
 // HybridSearch combines full-text BM25 and vector KNN search.
 func (c *Client) HybridSearch(ctx context.Context, textQuery string, queryCoords []float64,
 	k uint32, textWeight, vectorWeight float64, collection string) ([]nietzsche.KnnResult, error) {
