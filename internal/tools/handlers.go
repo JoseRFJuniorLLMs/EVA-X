@@ -1212,6 +1212,22 @@ func (h *ToolsHandler) ExecuteTool(name string, args map[string]interface{}, ido
 	case "nietzsche_dream_explore":
 		return h.handleDreamExplore(idosoID, args)
 
+	// ============================================================================
+	// 🧠 PROPRIOCEPTION — Cognitive Self-Awareness
+	// ============================================================================
+
+	case "brain_scan":
+		return h.handleBrainScan(idosoID, args)
+
+	case "feel_the_graph":
+		return h.handleFeelTheGraph(idosoID, args)
+
+	case "internalize_memory":
+		return h.handleInternalizeMemory(idosoID, args)
+
+	case "reorganize_thoughts":
+		return h.handleReorganizeThoughts(idosoID, args)
+
 	// Phase V — Cognitive Interference
 	case "nietzsche_hydrate_path":
 		return h.handleHydratePath(idosoID, args)

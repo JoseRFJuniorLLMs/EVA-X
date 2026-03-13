@@ -39,6 +39,7 @@ import (
 	"eva/internal/motor/actions"
 	"eva/internal/motor/email"
 	"eva/internal/persona"
+	"eva/internal/senses/proprioception"
 	"eva/internal/tools"
 	vdefs "eva/internal/voice"
 	"eva/pkg/types"
@@ -251,6 +252,9 @@ type SignalingServer struct {
 	sessions         sync.Map
 	clients          sync.Map
 
+	// 🧠 Propriocepção Cognitiva — estado do grafo no System Prompt
+	proprioceptionEngine *proprioception.Engine
+
 	// 🧠 Brain Service (Core Logic) - FIX ERRO #5
 	brain interface {
 		GetSystemPrompt(ctx context.Context, idosoID int64) (string, error)
@@ -384,6 +388,12 @@ func NewSignalingServer(
 	if nietzscheGraph != nil {
 		server.knowledge = knowledge.NewGraphReasoningService(cfg, nietzscheGraph, ctxService)
 		log.Printf("✅ Graph Reasoning Service (NietzscheDB + Thinking) inicializado")
+	}
+
+	// ✅ NOVO: Inicializar Propriocepção Cognitiva (Estado do Grafo no System Prompt)
+	if nietzscheClient != nil {
+		server.proprioceptionEngine = proprioception.New(nietzscheClient)
+		log.Println("🧠 Signaling: Proprioception Engine initialized — graph state in system prompt")
 	}
 
 	// ✅ NOVO: Inicializar Brain Service (Postgres + NietzscheDB Memory)
@@ -2129,8 +2139,14 @@ INSTRUÇÃO: %s
 		}
 	}
 
+	// 6.5. PROPRIOCEPÇÃO — Estado do Grafo NietzscheDB
+	graphState := ""
+	if s.proprioceptionEngine != nil {
+		graphState = "\n\n" + s.proprioceptionEngine.GetGraphState(context.Background())
+	}
+
 	// 7. ANEXAR DOSSIÊ E HISTÓRIA AO FINAL
-	finalInstructions := instructions + agentProtocol + safetyProtocol + dossier + storySection
+	finalInstructions := instructions + agentProtocol + safetyProtocol + graphState + dossier + storySection
 
 	log.Printf("✅ [BuildInstructions] Instruções finais geradas (%d chars)", len(finalInstructions))
 	return finalInstructions

@@ -281,6 +281,89 @@ func ChangeUserDirectiveDefinition() FunctionDeclaration {
 	}
 }
 
+// ============================================================================
+// Proprioception Tools — Cognitive Self-Awareness
+// ============================================================================
+
+// BrainScanDefinition returns the schema for the brain scan proprioception tool
+func BrainScanDefinition() FunctionDeclaration {
+	return FunctionDeclaration{
+		Name:        "brain_scan",
+		Description: "Sente o estado actual do grafo de conhecimento. Retorna total de nós/edges por collection, conceitos mais influentes, e uso de recursos. Usa para responder 'como estás?' com dados reais.",
+		Parameters: &FunctionParameters{
+			Type:       "OBJECT",
+			Properties: map[string]*Property{},
+			Required:   []string{},
+		},
+	}
+}
+
+// FeelTheGraphDefinition returns the schema for the feel_the_graph proprioceptive read tool
+func FeelTheGraphDefinition() FunctionDeclaration {
+	return FunctionDeclaration{
+		Name:        "feel_the_graph",
+		Description: "Sente os nós mais próximos de um conceito numa collection. Leitura pura — sem escrita. Combina busca textual e vetorial para encontrar os 3 nós mais relevantes.",
+		Parameters: &FunctionParameters{
+			Type: "OBJECT",
+			Properties: map[string]*Property{
+				"collection": {
+					Type:        "STRING",
+					Description: "Nome da collection a pesquisar",
+				},
+				"query": {
+					Type:        "STRING",
+					Description: "Conceito ou pergunta em texto natural",
+				},
+			},
+			Required: []string{"collection", "query"},
+		},
+	}
+}
+
+// InternalizeMemoryDefinition returns the schema for the internalize_memory tool
+func InternalizeMemoryDefinition() FunctionDeclaration {
+	return FunctionDeclaration{
+		Name:        "internalize_memory",
+		Description: "Guarda uma memória em eva_mind com valência emocional. NUNCA escreve nas collections core. Requer confirmação explícita do utilizador antes de chamar.",
+		Parameters: &FunctionParameters{
+			Type: "OBJECT",
+			Properties: map[string]*Property{
+				"content": {
+					Type:        "STRING",
+					Description: "Conteúdo da memória a guardar (texto descritivo)",
+				},
+				"valence": {
+					Type:        "STRING",
+					Description: "Valência emocional: número entre -1.0 (aversão) e 1.0 (preferência). Ex: '-0.7' para algo negativo, '0.8' para algo positivo.",
+				},
+				"confirm": {
+					Type:        "BOOLEAN",
+					Description: "OBRIGATÓRIO true — EVA deve anunciar o que vai guardar e receber confirmação antes de chamar esta tool",
+				},
+			},
+			Required: []string{"content", "valence", "confirm"},
+		},
+	}
+}
+
+// ReorganizeThoughtsDefinition returns the schema for the reorganize_thoughts tool
+func ReorganizeThoughtsDefinition() FunctionDeclaration {
+	return FunctionDeclaration{
+		Name:        "reorganize_thoughts",
+		Description: "Acciona reconsolidação (sleep) numa collection não-core. Optimiza embeddings Poincaré via gradient descent. Assíncrono — EVA não bloqueia.",
+		Parameters: &FunctionParameters{
+			Type: "OBJECT",
+			Properties: map[string]*Property{
+				"target_collection": {
+					Type:        "STRING",
+					Description: "Collection a reorganizar (apenas não-core: culture_galaxies, eva_mind, eva_learnings, etc.)",
+				},
+			},
+			Required: []string{"target_collection"},
+		},
+	}
+}
+
 // GetToolDefinitions returns all available tool definitions
 func GetToolDefinitions() []FunctionDeclaration {
 	return []FunctionDeclaration{
@@ -295,5 +378,10 @@ func GetToolDefinitions() []FunctionDeclaration {
 		SubmitGAD7ResponseDefinition(),
 		SubmitCSSRSResponseDefinition(),
 		ChangeUserDirectiveDefinition(),
+		// Proprioception tools
+		BrainScanDefinition(),
+		FeelTheGraphDefinition(),
+		InternalizeMemoryDefinition(),
+		ReorganizeThoughtsDefinition(),
 	}
 }
