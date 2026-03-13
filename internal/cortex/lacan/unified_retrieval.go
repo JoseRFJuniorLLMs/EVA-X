@@ -1325,6 +1325,16 @@ func (u *UnifiedRetrieval) buildIntegratedPrompt(unified *UnifiedContext) string
 	builder.WriteString("Use este contexto como suas próprias memórias e insights.\n")
 	builder.WriteString("═══════════════════════════════════════════════════════════\n")
 
+
+	// Instrucao de recall automatico
+	builder.WriteString("\n### INSTRUCAO CRITICA DE MEMORIA\n")
+	builder.WriteString("Voce tem a ferramenta recall_memory. USE-A AUTOMATICAMENTE quando:\n")
+	builder.WriteString("- O utilizador mencionar algo do passado (ontem, semana passada, da outra vez)\n")
+	builder.WriteString("- Perguntar se voce lembra de algo\n")
+	builder.WriteString("- Mencionar nomes, medicamentos, eventos que podem estar na memoria\n")
+	builder.WriteString("- Contexto historico ajudaria a responder melhor\n")
+	builder.WriteString("NAO espere o utilizador pedir. Chame recall_memory ANTES de responder.\n")
+
 	return builder.String()
 }
 

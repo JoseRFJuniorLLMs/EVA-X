@@ -6,6 +6,7 @@ package selfawareness
 import (
 	"context"
 	"encoding/json"
+		"sync"
 	"fmt"
 	"sort"
 	"strings"
@@ -210,6 +211,19 @@ func (a *Agent) registerTools() {
 			},
 		},
 	}, a.handleMyTopology)
+
+	// 13. recall_memory — Automatic memory recall (RAG per turn)
+	a.RegisterTool(swarm.ToolDefinition{
+		Name:        "recall_memory",
+		Description: "Busca nas minhas memorias e no perfil do utilizador por informacoes relevantes ao que foi dito. IMPORTANTE: Chame esta ferramenta AUTOMATICAMENTE sempre que o utilizador mencionar algo do passado, perguntar se voce lembra de algo, ou quando contexto historico ajudaria na resposta. Nao espere o utilizador pedir explicitamente.",
+		Parameters: map[string]interface{}{
+			"query": map[string]interface{}{
+				"type":        "string",
+				"description": "Palavras-chave ou frase para buscar nas memorias (ex: 'medicamento ontem', 'nome da filha', 'ultima consulta')",
+			},
+		},
+		Required: []string{"query"},
+	}, a.handleRecallMemory)
 }
 
 // --- Tool Handlers ---
@@ -958,4 +972,103 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+
+// handleRecallMemory searches across EVA's memory collections for relevant context.
+// This is the RAG mechanism for voice sessions - Gemini calls it automatically.
+func (a *Agent) handleRecallMemory(ctx context.Context, call swarm.ToolCall) (*swarm.ToolResult, error) {
+	query, _ := call.Args["query"].(string)
+	if query == "" {
+		return &swarm.ToolResult{Success: false, Message: "query is required"}, nil
+	}
+
+	if a.nietzscheClient == nil {
+		return &swarm.ToolResult{Success: false, Message: "NietzscheDB not available"}, nil
+	}
+
+	searchCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+
+	var (
+		wg       sync.WaitGroup
+		resultMu sync.Mutex
+		memories []string
+	)
+
+	collections := []string{"eva_mind", "eva_core", "patient_graph"}
+	for _, col := range collections {
+		wg.Add(1)
+		go func(collection string) {
+			defer wg.Done()
+			ftsResults, err := a.nietzscheClient.FullTextSearch(searchCtx, query, collection, 3)
+			if err != nil {
+				return
+			}
+			for _, fts := range ftsResults {
+				node, nErr := a.nietzscheClient.GetNode(searchCtx, fts.NodeID, collection)
+				if nErr != nil || !node.Found {
+					continue
+				}
+				text := extractRecallContent(node.Content, collection)
+				if text != "" {
+					resultMu.Lock()
+					memories = append(memories, text)
+					resultMu.Unlock()
+				}
+			}
+		}(col)
+	}
+
+	wg.Wait()
+
+	if len(memories) == 0 {
+		return &swarm.ToolResult{
+			Success: true,
+			Message: "Nao encontrei memorias relevantes sobre isso.",
+		}, nil
+	}
+
+	// Deduplicate
+	seen := make(map[string]bool)
+	var unique []string
+	for _, m := range memories {
+		key := m
+		if len(key) > 80 {
+			key = key[:80]
+		}
+		if !seen[key] {
+			seen[key] = true
+			unique = append(unique, m)
+		}
+	}
+	if len(unique) > 5 {
+		unique = unique[:5]
+	}
+
+	msg := fmt.Sprintf("Encontrei %d memorias relevantes:\n%s", len(unique), strings.Join(unique, "\n"))
+	return &swarm.ToolResult{
+		Success: true,
+		Message: msg,
+	}, nil
+}
+
+// extractRecallContent extracts readable text from FTS result content.
+func extractRecallContent(content map[string]interface{}, collection string) string {
+	for _, key := range []string{"content", "text", "summary", "description", "self_description"} {
+		if v, ok := content[key]; ok {
+			if s, ok := v.(string); ok && len(s) > 10 {
+				if len(s) > 200 {
+					s = s[:197] + "..."
+				}
+				return s
+			}
+		}
+	}
+	label, _ := content["node_label"].(string)
+	name, _ := content["name"].(string)
+	if label != "" && name != "" {
+		return fmt.Sprintf("[%s] %s: %s", collection, label, name)
+	}
+	return ""
 }

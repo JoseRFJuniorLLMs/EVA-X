@@ -529,6 +529,14 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 								}
 							}(text)
 						}
+						// FDPN: Spread activation nas memorias relevantes
+						if s.brainService != nil {
+							go func(t string) {
+								primeCtx, primeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+								defer primeCancel()
+								s.brainService.ProcessUserSpeech(primeCtx, idosoID, t, "neutral", "low", 5)
+							}(text)
+						}
 						// Acumular transcript do usuario
 						transcriptMu.Lock()
 						transcriptAccum.WriteString("Usuario: " + text + "\n")
