@@ -192,22 +192,55 @@ func (h *ToolsHandler) handleFeelTheGraph(idosoID int64, args map[string]interfa
 		return map[string]interface{}{"error": "NietzscheDB client não disponível"}, nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Full-text search — most relevant for natural language queries
-	results, err := h.nietzscheClient.FullTextSearch(ctx, query, collection, 3)
-	if err != nil {
-		log.Printf("[PROPRIOCEPTION] feel_the_graph full-text error: %v", err)
-		results = nil
+	nodes := make([]map[string]interface{}, 0, 5)
+	seen := make(map[string]bool)
+
+	// Strategy 1: KNN vector search (if embedFunc available)
+	if h.embedFunc != nil {
+		vec32, err := h.embedFunc(ctx, query)
+		if err == nil && len(vec32) > 0 {
+			vec64 := make([]float64, len(vec32))
+			for i, v := range vec32 {
+				vec64[i] = float64(v)
+			}
+			knnResults, err := h.nietzscheClient.KnnSearch(ctx, collection, vec64, 5)
+			if err == nil {
+				for _, r := range knnResults {
+					if !seen[r.ID] {
+						seen[r.ID] = true
+						nodes = append(nodes, map[string]interface{}{
+							"id":     r.ID,
+							"score":  r.Distance,
+							"method": "knn",
+						})
+					}
+				}
+			} else {
+				log.Printf("[PROPRIOCEPTION] feel_the_graph KNN error: %v", err)
+			}
+		} else {
+			log.Printf("[PROPRIOCEPTION] feel_the_graph embedding error: %v", err)
+		}
 	}
 
-	nodes := make([]map[string]interface{}, 0, 3)
-	for _, r := range results {
-		nodes = append(nodes, map[string]interface{}{
-			"id":    r.NodeID,
-			"score": r.Score,
-		})
+	// Strategy 2: Full-text search (BM25 fallback/complement)
+	ftsResults, err := h.nietzscheClient.FullTextSearch(ctx, query, collection, 3)
+	if err != nil {
+		log.Printf("[PROPRIOCEPTION] feel_the_graph full-text error: %v", err)
+	} else {
+		for _, r := range ftsResults {
+			if !seen[r.NodeID] {
+				seen[r.NodeID] = true
+				nodes = append(nodes, map[string]interface{}{
+					"id":     r.NodeID,
+					"score":  r.Score,
+					"method": "fts",
+				})
+			}
+		}
 	}
 
 	elapsed := time.Since(start)
@@ -218,7 +251,7 @@ func (h *ToolsHandler) handleFeelTheGraph(idosoID int64, args map[string]interfa
 		"nodes":      nodes,
 		"count":      len(nodes),
 		"latency_ms": elapsed.Milliseconds(),
-		"message":    fmt.Sprintf("Encontrei %d nós próximos de '%s' em %s.", len(nodes), query, collection),
+		"message":    fmt.Sprintf("Encontrei %d nós próximos de '%s' em %s (KNN+FTS).", len(nodes), query, collection),
 	}, nil
 }
 
@@ -273,10 +306,24 @@ func (h *ToolsHandler) handleInternalizeMemory(idosoID int64, args map[string]in
 		"created_at": time.Now().Format(time.RFC3339),
 	}
 
-	// Magnitude encodes valence intensity: neutral=0.3, strong=0.6
-	magnitude := 0.3 + abs64(valence)*0.3
-	coords := make([]float64, 128)
-	coords[0] = magnitude
+	// Generate real 3072D embedding if embedFunc is available
+	coords := make([]float64, 3072)
+	if h.embedFunc != nil {
+		vec32, err := h.embedFunc(ctx, content)
+		if err == nil && len(vec32) > 0 {
+			for i := 0; i < len(vec32) && i < 3072; i++ {
+				coords[i] = float64(vec32[i])
+			}
+			log.Printf("[PROPRIOCEPTION] Real 3072D embedding generated for internalize_memory")
+		} else {
+			log.Printf("[PROPRIOCEPTION] Embedding failed, using magnitude fallback: %v", err)
+			// Magnitude fallback: encode valence intensity in first coord
+			coords[0] = 0.3 + abs64(valence)*0.3
+		}
+	} else {
+		// No embedFunc: magnitude fallback
+		coords[0] = 0.3 + abs64(valence)*0.3
+	}
 
 	result, err := h.nietzscheClient.InsertNode(ctx, nietzsche.InsertNodeOpts{
 		Content:    contentMap,

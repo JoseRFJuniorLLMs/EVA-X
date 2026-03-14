@@ -377,6 +377,7 @@ func (l *AutonomousLearner) storeInsights(ctx context.Context, insights []Learni
 			Coords:     coords,
 			Content:    content,
 			NodeType:   "Semantic",
+			Energy:     0.7,
 			Collection: l.collection,
 		})
 		if err != nil {

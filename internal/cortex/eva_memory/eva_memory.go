@@ -37,6 +37,7 @@ import (
 type EvaMemory struct {
 	graph     *nietzscheInfra.GraphAdapter
 	mindGraph *nietzscheInfra.GraphAdapter // eva_mind collection for internalized memories
+	embedFunc func(ctx context.Context, text string) ([]float32, error)
 }
 
 // New cria uma nova instancia de EvaMemory
@@ -49,15 +50,20 @@ func (em *EvaMemory) SetMindAdapter(adapter *nietzscheInfra.GraphAdapter) {
 	em.mindGraph = adapter
 }
 
+// SetEmbedFunc injects the vector generation dependency for real embeddings
+func (em *EvaMemory) SetEmbedFunc(embedFunc func(ctx context.Context, text string) ([]float32, error)) {
+	em.embedFunc = embedFunc
+}
+
 // minInternalizeLen is the minimum content length for InternalizeMemory.
 // Messages shorter than this (e.g. "ok", "yes", "sim") are skipped.
 const minInternalizeLen = 10
 
 // InternalizeMemory stores a conversation memory as an Episodic node in eva_mind.
 // It creates a node with the given content, valence, and source. Energy defaults
-// to 0.5 for new memories. Coordinates are 3072-dimensional zeros (relational
-// data in poincare space — no real embedding). Trivial messages (< 10 chars)
-// are silently skipped.
+// to 0.5 for new memories. If embedFunc is present, it generates a real 3072D vector.
+// Otherwise, coords are left zero (or handled by hash fallback in the infra layer).
+// Trivial messages (< 10 chars) are silently skipped.
 func (em *EvaMemory) InternalizeMemory(content string, valence float64, source string) error {
 	// Skip trivial messages
 	trimmed := strings.TrimSpace(content)
@@ -77,11 +83,42 @@ func (em *EvaMemory) InternalizeMemory(content string, valence float64, source s
 	nodeID := uuid.New().String()
 	now := time.Now()
 
-	// 3072-dimensional zero coords for relational data in poincare space
-	coords := make([]float64, 3072)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+
+	// 3072-dimensional zero coords for relational data in poincare space (fallback)
+	coords := make([]float64, 3072)
+
+	// FASE 1 P1-E FIX: Generate actual contextual embeddings for eva_mind
+	if em.embedFunc != nil {
+		// Retry up to 2 times with backoff on transient failures
+		var vec32 []float32
+		var embedErr error
+		for attempt := 0; attempt < 3; attempt++ {
+			vec32, embedErr = em.embedFunc(ctx, trimmed)
+			if embedErr == nil && len(vec32) > 0 {
+				break
+			}
+			if attempt < 2 {
+				time.Sleep(time.Duration(500*(attempt+1)) * time.Millisecond)
+			}
+		}
+		if embedErr == nil && len(vec32) > 0 {
+			maxDim := 3072
+			if len(vec32) < maxDim {
+				maxDim = len(vec32)
+			}
+			for i := 0; i < maxDim; i++ {
+				coords[i] = float64(vec32[i])
+			}
+			log.Info().Str("node_id", nodeID).Int("dim", len(vec32)).Msg("[EVA-MEMORY] Real embedding generated for eva_mind")
+		} else {
+			log.Warn().Err(embedErr).Str("node_id", nodeID).Int("content_len", len(trimmed)).
+				Msg("[EVA-MEMORY] Embedding generation failed after 3 attempts — node stored with zero coords (KNN will not find it)")
+		}
+	} else {
+		log.Warn().Msg("[EVA-MEMORY] embedFunc is nil — InternalizeMemory storing zero-vector node (KNN disabled)")
+	}
 
 	_, err := adapter.InsertNode(ctx, nietzsche.InsertNodeOpts{
 		ID:       nodeID,
@@ -198,7 +235,41 @@ func (em *EvaMemory) EndSession(ctx context.Context, sessionID string) error {
 	if err != nil {
 		log.Error().Err(err).Str("session", sessionID).Msg("[EVA-MEMORY] Falha ao finalizar sessao")
 	}
+
+	// P1-C FIX: Prevent infinite accumulation of EvaSession and EvaTurn nodes
+	// by pruning sessions older than the top 20 most recent ones asynchronously.
+	go em.pruneOldSessions(context.Background(), 20)
+
 	return err
+}
+
+// pruneOldSessions maintains only the N most recent completed sessions, deleting older ones
+// and their associated EvaTurn nodes to prevent infinite graph database accumulation (P1-C).
+func (em *EvaMemory) pruneOldSessions(ctx context.Context, keep int) {
+	// NQL SKIP is used to fetch all sessions strictly older than our 'keep' threshold.
+	nql := fmt.Sprintf(`MATCH (s:EvaSession) WHERE s.status = "completed" RETURN s ORDER BY s.started_at DESC SKIP %d`, keep)
+	result, err := em.graph.ExecuteNQL(ctx, nql, nil, "")
+	if err != nil || len(result.Nodes) == 0 {
+		return
+	}
+
+	pruned := 0
+	for _, node := range result.Nodes {
+		// Find and delete associated turns using BFS
+		turnIDs, err := em.graph.BfsWithEdgeType(ctx, node.ID, "HAS_TURN", 1, "")
+		if err == nil {
+			for _, tid := range turnIDs {
+				_ = em.graph.DeleteNode(ctx, tid, "")
+			}
+		}
+		// Delete the session node itself
+		_ = em.graph.DeleteNode(ctx, node.ID, "")
+		pruned++
+	}
+
+	if pruned > 0 {
+		log.Info().Int("pruned_sessions", pruned).Msg("[EVA-MEMORY] Cleaned up old session nodes to prevent infinite accumulation")
+	}
 }
 
 // StoreTurn salva um turno de conversa (user ou assistant) no grafo

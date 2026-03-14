@@ -303,6 +303,12 @@ func main() {
 	// Inject eva_mind adapter for InternalizeMemory (conversation memories)
 	evaMindAdapter := nietzscheInfra.NewGraphAdapter(nzClient, "eva_mind")
 	evaMemSvc.SetMindAdapter(evaMindAdapter)
+	
+	// P1-E FIX: Inject real embedding generation for eva_mind
+	if embedSvc != nil {
+		evaMemSvc.SetEmbedFunc(embedSvc.GenerateEmbedding)
+	}
+	
 	log.Info().Msg("EVA Meta-Cognitive Memory inicializada (NietzscheDB eva_core + eva_mind)")
 
 	// 6.1.1 FASE 5: Unified Retrieval — Lacanian signifier tracking + context building
@@ -631,8 +637,58 @@ func main() {
 
 	// COS Phase 1: Memory Kernel
 	memKernel := consciousness.NewMemoryKernel(thoughtBus, consciousness.DefaultMemoryKernelConfig())
+	memKernel.SetPersistenceCallbacks(
+		func(t *consciousness.MemoryTrace) error {
+			// Persist energy and activation changes to NietzscheDB (eva_core)
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			_, err := evaGraphAdapter.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+				NodeType: "Semantic",
+				MatchKeys: map[string]interface{}{"id": t.ID},
+				OnMatchSet: map[string]interface{}{
+					"energy":     t.Energy,
+					"activation": t.Activation,
+					"zone":       string(t.Zone),
+				},
+			})
+			return err
+		},
+		func(query *consciousness.MemoryQuery) ([]*consciousness.MemoryTrace, error) {
+			// P3-C: Single Source of Truth — Fetch latest energy from DB
+			if len(query.IDs) == 0 {
+				return nil, nil
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+
+			nql := "MATCH (n) WHERE n.id IN $ids RETURN n"
+			params := map[string]interface{}{"ids": query.IDs}
+			
+			qr, err := evaGraphAdapter.ExecuteNQL(ctx, nql, params, "eva_core")
+			if err != nil {
+				return nil, err
+			}
+
+			var results []*consciousness.MemoryTrace
+			for _, n := range qr.Nodes {
+				results = append(results, &consciousness.MemoryTrace{
+					ID:         n.ID,
+					Energy:     float64(n.Energy),
+					Activation: float64(n.HausdorffLocal), // Using HausdorffLocal as activation proxy if not explicit
+				})
+			}
+			// If HausdorffLocal is not what we want, we can check Content
+			for i, n := range qr.Nodes {
+				if act, ok := n.Content["activation"].(float64); ok {
+					results[i].Activation = act
+				}
+			}
+
+			return results, nil
+		},
+	)
 	memKernel.Start(appCtx)
-	log.Info().Msg("🧠 COS: Memory Kernel iniciado (WM/EM/SM/PM + spreading activation)")
+	log.Info().Msg("🧠 COS: Memory Kernel iniciado (WM/EM/SM/PM + spreading activation + DB sync)")
 
 	// COS Phase 4: Cognitive Daemons
 	daemonMgr := consciousness.NewDefaultDaemons(thoughtBus, globalWS, memKernel)
@@ -933,6 +989,53 @@ func main() {
 			}
 		}()
 		autonomousLearner.Start(ctx)
+	}()
+
+	// Auto-index eva_codebase and eva_docs if empty (background, non-blocking)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().Interface("panic", r).Msg("CRITICO: Auto-indexer panic")
+			}
+		}()
+		// Wait 30s for server to stabilize
+		time.Sleep(30 * time.Second)
+		if selfAwareSvc == nil {
+			return
+		}
+		idxCtx := context.Background()
+		// Check if eva_codebase is empty
+		cols, err := nzClient.ListCollections(idxCtx)
+		if err != nil {
+			log.Warn().Err(err).Msg("[AUTO-INDEX] Failed to list collections")
+			return
+		}
+		codebaseEmpty, docsEmpty := true, true
+		for _, c := range cols {
+			if c.Name == "eva_codebase" && c.NodeCount > 0 {
+				codebaseEmpty = false
+			}
+			if c.Name == "eva_docs" && c.NodeCount > 0 {
+				docsEmpty = false
+			}
+		}
+		basePath := "."
+		if codebaseEmpty {
+			n, err := selfAwareSvc.IndexCodebase(idxCtx, basePath)
+			if err != nil {
+				log.Warn().Err(err).Msg("[AUTO-INDEX] eva_codebase indexing failed")
+			} else {
+				log.Info().Int("files", n).Msg("[AUTO-INDEX] eva_codebase indexed")
+			}
+		}
+		if docsEmpty {
+			n, err := selfAwareSvc.IndexDocs(idxCtx, basePath)
+			if err != nil {
+				log.Warn().Err(err).Msg("[AUTO-INDEX] eva_docs indexing failed")
+			} else {
+				log.Info().Int("files", n).Msg("[AUTO-INDEX] eva_docs indexed")
+			}
+		}
 	}()
 
 	// Memory Scheduler (nightly REM consolidation 3AM + Krylov maintenance 6h)
