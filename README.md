@@ -1549,6 +1549,55 @@ MONITORING
 	38+ total Prometheus metrics.
 
 
+CHANGELOG (2026-03-14) — RAIO-X MEMORY PIPELINE FIX
+-----------------------------------------------------
+
+	6-bug fix targeting all issues found in the RAIO-X diagnostic.
+	EVA's memory was structurally wired but functionally broken:
+	zero episodic memories, broken KNN, empty collections.
+
+	FIX 1: Dimension mismatch in proprioception (128D -> 3072D)
+	  - internalize_memory was creating 128D zero-vectors for
+	    the eva_mind collection (configured as 3072D poincare).
+	  - KNN search always failed due to dimension mismatch.
+	  - Now generates real 3072D embeddings via embedFunc.
+	  - File: internal/tools/proprioception_handlers.go
+
+	FIX 2: feel_the_graph now uses KNN + BM25 hybrid search
+	  - Was BM25-only (full-text), returned empty when FTS index
+	    had no matches or query contained only stop words.
+	  - Now tries KNN vector search first (3072D embeddings),
+	    then complements with BM25 results (deduped).
+	  - File: internal/tools/proprioception_handlers.go
+
+	FIX 3: InternalizeMemory retry with backoff
+	  - Single embedding API failure left nodes with zero-vector
+	    coords permanently (invisible to KNN in Poincare space).
+	  - Now retries 3 times with 500ms/1000ms backoff.
+	  - WARN-level logging when embedFunc is nil or all retries fail.
+	  - File: internal/cortex/eva_memory/eva_memory.go
+
+	FIX 4: Auto-indexing for eva_codebase and eva_docs
+	  - Collections were defined in DefaultCollections() but never
+	    populated (required manual CLI: cmd/index_code/main.go).
+	  - Now auto-indexes .go files (AST parsing) and .md files
+	    (chunked) on startup if collections are empty.
+	  - Runs in background goroutine after 30s stabilization delay.
+	  - File: main.go
+
+	FIX 5: Autonomous learner Energy field
+	  - InsertNode calls were missing Energy parameter.
+	  - Now sets Energy: 0.7 for learning nodes.
+	  - File: internal/cortex/learning/autonomous_learner.go
+
+	FIX 6: eva_learnings cleanup
+	  - 37 stub nodes (only {"id": "timestamp"}, zero embeddings)
+	    dropped and collection recreated on VM.
+	  - New learnings will have full content + proper 3072D vectors.
+
+	Deployed to VM (eva-x restarted 2026-03-14 22:30 UTC).
+
+
 CHANGELOG (2026-03-10) — MEMORY AUDIT FIX
 -------------------------------------------
 
