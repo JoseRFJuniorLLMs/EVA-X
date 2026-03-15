@@ -659,7 +659,8 @@ func (mk *MemoryKernel) SyncFromDB() {
 // applyDecay aplica decay a todas as memorias
 func (mk *MemoryKernel) applyDecay() {
 	mk.mu.Lock()
-	defer mk.mu.Unlock()
+	// NOTE: manual Unlock() below (line ~701) to release before async sync.
+	// Do NOT add defer mk.mu.Unlock() here — causes double-unlock fatal crash.
 
 	now := time.Now()
 
