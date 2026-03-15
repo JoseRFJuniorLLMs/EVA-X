@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"eva/internal/brainstem/database"
+	"eva/internal/cortex/aql"
 
 	"github.com/gorilla/mux"
 	"github.com/rs/zerolog/log"
@@ -38,6 +39,7 @@ type Server struct {
 	router       *mux.Router
 	embedFunc    EmbeddingFunc
 	vectorSearch VectorSearchFunc
+	aqlExecutor  *aql.Executor
 }
 
 // NewServer creates a new MCP server
@@ -65,6 +67,11 @@ func (s *Server) SetVectorSearchFunc(f VectorSearchFunc) {
 	s.vectorSearch = f
 }
 
+// SetAqlExecutor sets the AQL executor for cognitive memory operations.
+func (s *Server) SetAqlExecutor(executor *aql.Executor) {
+	s.aqlExecutor = executor
+}
+
 // setupRoutes configures MCP endpoints
 func (s *Server) setupRoutes() {
 	// Resources endpoints
@@ -74,6 +81,7 @@ func (s *Server) setupRoutes() {
 	// Tools endpoints
 	s.router.HandleFunc("/mcp/tools/remember", s.rememberTool).Methods("POST")
 	s.router.HandleFunc("/mcp/tools/recall", s.recallTool).Methods("POST")
+	s.router.HandleFunc("/mcp/tools/aql", s.aqlTool).Methods("POST")
 
 	// Prompts endpoints
 	s.router.HandleFunc("/mcp/prompts", s.listPrompts).Methods("GET")
@@ -455,6 +463,50 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		next.ServeHTTP(w, r)
+	})
+}
+
+// aqlTool executes an AQL statement via the AQL executor.
+func (s *Server) aqlTool(w http.ResponseWriter, r *http.Request) {
+	if s.aqlExecutor == nil {
+		http.Error(w, `{"error":"AQL executor not configured"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	var req struct {
+		Statement  string `json:"statement"`
+		Collection string `json:"collection"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request"}`, http.StatusBadRequest)
+		return
+	}
+	if req.Statement == "" {
+		http.Error(w, `{"error":"statement required"}`, http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	result, err := s.aqlExecutor.ExecuteRaw(ctx, req.Statement)
+	if err != nil {
+		log.Error().Err(err).Str("statement", req.Statement).Msg("[MCP-AQL] execution failed")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": fmt.Sprintf("AQL execution failed: %v", err),
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "ok",
+		"verb":   result.Metadata.Verb,
+		"count":  result.Metadata.Count,
+		"nodes":  result.Nodes,
+		"edges":  result.Edges,
 	})
 }
 

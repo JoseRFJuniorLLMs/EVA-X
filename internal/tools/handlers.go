@@ -10,6 +10,7 @@ import (
 	"eva/internal/brainstem/oauth"
 	"eva/internal/brainstem/push"
 	"eva/internal/cortex/alert"
+	"eva/internal/cortex/aql"
 	"eva/internal/cortex/llm"
 	"eva/internal/cortex/skills"
 	"eva/internal/hippocampus/habits"
@@ -81,6 +82,7 @@ type ToolsHandler struct {
 	swarmRouter       SwarmRouter                       // ✅ Bridge para swarm orchestrator (tools sem case no switch)
 	securityAdapter   *nietzscheInfra.SecurityAdapter   // ✅ NietzscheDB Security (RBAC + Encryption)
 	wiederkehrAdapter *nietzscheInfra.WiederkehrAdapter // ✅ NietzscheDB Wiederkehr (Daemons)
+	aqlExecutor       *aql.Executor                    // ✅ AQL Executor (Agent Query Language)
 	NotifyFunc        func(idosoID int64, msgType string, payload interface{})
 	browserListeners  map[int64]func(msgType string, payload interface{}) // Per-session browser WS listeners
 	browserListenerMu sync.RWMutex
@@ -259,6 +261,24 @@ func (h *ToolsHandler) SetEvaCoreAdapter(adapter *nietzscheInfra.GraphAdapter) {
 // SetEmbedFunc configura a funcao de embeddings (text → vector)
 func (h *ToolsHandler) SetEmbedFunc(fn EmbedFunc) {
 	h.embedFunc = fn
+	// Also wire the embed func into the AQL executor if available
+	if h.aqlExecutor != nil {
+		h.aqlExecutor.SetEmbedFunc(aql.EmbedFunc(fn))
+	}
+}
+
+// SetAqlExecutor configures the AQL (Agent Query Language) executor.
+func (h *ToolsHandler) SetAqlExecutor(executor *aql.Executor) {
+	h.aqlExecutor = executor
+	// If embed func already set, wire it in
+	if h.embedFunc != nil {
+		h.aqlExecutor.SetEmbedFunc(aql.EmbedFunc(h.embedFunc))
+	}
+}
+
+// AqlExecutor returns the AQL executor for external use.
+func (h *ToolsHandler) AqlExecutor() *aql.Executor {
+	return h.aqlExecutor
 }
 
 // SetDebugMode habilita/desabilita novas ferramentas (debug only)
@@ -1240,6 +1260,37 @@ func (h *ToolsHandler) ExecuteTool(name string, args map[string]interface{}, ido
 
 	case "nietzsche_curvature_anomalies":
 		return h.handleCurvatureAnomalies(idosoID, args)
+
+	// ============================================================================
+	// 🧬 AQL — Agent Query Language (Cognitive Intent Verbs)
+	// ============================================================================
+
+	case "aql_execute":
+		return h.handleAqlExecute(idosoID, args)
+
+	case "aql_recall":
+		return h.handleAqlRecall(idosoID, args)
+
+	case "aql_imprint":
+		return h.handleAqlImprint(idosoID, args)
+
+	case "aql_associate":
+		return h.handleAqlAssociate(idosoID, args)
+
+	case "aql_trace":
+		return h.handleAqlTrace(idosoID, args)
+
+	case "aql_resonate":
+		return h.handleAqlResonate(idosoID, args)
+
+	case "aql_dream":
+		return h.handleAqlDream(idosoID, args)
+
+	case "aql_distill":
+		return h.handleAqlDistill(idosoID, args)
+
+	case "aql_fade":
+		return h.handleAqlFade(idosoID, args)
 
 	default:
 		// Bridge para swarm orchestrator — tools registradas nos swarm agents

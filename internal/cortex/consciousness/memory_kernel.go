@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"eva/internal/cortex/aql"
+
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 )
@@ -103,6 +105,9 @@ type MemoryKernel struct {
 	// Callbacks para persistencia (NietzscheDB bridge)
 	onStore    func(trace *MemoryTrace) error
 	onRetrieve func(query *MemoryQuery) ([]*MemoryTrace, error)
+
+	// AQL executor for cognitive memory operations (optional)
+	aqlExecutor *aql.Executor
 }
 
 // MemoryKernelConfig configuracao do kernel de memoria
@@ -189,6 +194,12 @@ func (mk *MemoryKernel) SetPersistenceCallbacks(
 	mk.onRetrieve = onRetrieve
 }
 
+// SetAqlExecutor sets the AQL executor for cognitive memory persistence.
+// When set, Store() also calls AQL IMPRINT and Associate() calls AQL ASSOCIATE.
+func (mk *MemoryKernel) SetAqlExecutor(executor *aql.Executor) {
+	mk.aqlExecutor = executor
+}
+
 // Store armazena uma memoria no kernel e publica evento no ThoughtBus
 func (mk *MemoryKernel) Store(trace *MemoryTrace) error {
 	if trace.ID == "" {
@@ -222,6 +233,32 @@ func (mk *MemoryKernel) Store(trace *MemoryTrace) error {
 	if mk.onStore != nil {
 		if err := mk.onStore(trace); err != nil {
 			log.Error().Err(err).Str("id", trace.ID).Msg("[MemoryKernel] Falha ao persistir memoria")
+		}
+	}
+
+	// AQL IMPRINT — persist via cognitive intent layer
+	if mk.aqlExecutor != nil {
+		epistemicType := aql.Experience
+		switch zone {
+		case SemanticMemory:
+			epistemicType = aql.Pattern
+		case ProceduralMemory:
+			epistemicType = aql.Pattern
+		case WorkingMemory:
+			epistemicType = aql.Signal
+		}
+		ctx := context.Background()
+		if mk.ctx != nil {
+			ctx = mk.ctx
+		}
+		_, aqlErr := mk.aqlExecutor.Execute(ctx, &aql.Statement{
+			Verb:      aql.VerbImprint,
+			Content:   trace.Content,
+			Epistemic: epistemicType,
+			Energy:    float32(trace.Energy),
+		})
+		if aqlErr != nil {
+			log.Warn().Err(aqlErr).Str("id", trace.ID).Msg("[MemoryKernel] AQL IMPRINT falhou")
 		}
 	}
 
@@ -350,6 +387,22 @@ func (mk *MemoryKernel) Associate(traceID1, traceID2 string, strength float64) {
 
 	oldStrength2 := t2.Associations[traceID1]
 	t2.Associations[traceID1] = oldStrength2 + strength*(1.0-oldStrength2)
+
+	// AQL ASSOCIATE — persist Hebbian link via cognitive intent layer
+	if mk.aqlExecutor != nil {
+		ctx := context.Background()
+		if mk.ctx != nil {
+			ctx = mk.ctx
+		}
+		_, aqlErr := mk.aqlExecutor.Execute(ctx, &aql.Statement{
+			Verb: aql.VerbAssociate,
+			From: traceID1,
+			To:   traceID2,
+		})
+		if aqlErr != nil {
+			log.Warn().Err(aqlErr).Str("from", traceID1).Str("to", traceID2).Msg("[MemoryKernel] AQL ASSOCIATE falhou")
+		}
+	}
 }
 
 // Consolidate move memorias de working memory para episodic/semantic

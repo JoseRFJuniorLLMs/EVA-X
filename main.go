@@ -18,6 +18,7 @@ import (
 	"eva/internal/brainstem/oauth"
 	"eva/internal/brainstem/push"
 	"eva/internal/cortex/alert"
+	"eva/internal/cortex/aql"
 	"eva/internal/cortex/brain"
 	"eva/internal/cortex/consciousness"
 	"eva/internal/cortex/eva_memory"
@@ -541,6 +542,13 @@ func main() {
 	})
 	toolsHandler.SetSkillsService(skillsSvc)
 	log.Info().Msgf("🧩 Skills Service: %s (%d skills carregadas)", cfg.SkillsDir, len(skillsSvc.List()))
+
+	// AQL Executor (Agent Query Language — cognitive intent verbs)
+	if nzClient != nil {
+		aqlExec := aql.NewExecutor(nzClient.SDK())
+		toolsHandler.SetAqlExecutor(aqlExec)
+		log.Info().Msg("🧬 AQL Executor inicializado (13 verbos cognitivos)")
+	}
 
 	// NietzscheDB eva_core collection (gRPC :50051)
 	toolsHandler.SetEvaCoreAdapter(evaGraphAdapter)
