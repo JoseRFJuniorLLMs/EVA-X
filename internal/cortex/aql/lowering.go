@@ -9,8 +9,10 @@ package aql
 import (
 	"context"
 	"fmt"
+	"log"
 	"math"
 	"strings"
+	"time"
 
 	nietzsche "nietzsche-sdk"
 )
@@ -56,20 +58,35 @@ func (e *Executor) executeRecall(ctx context.Context, stmt *Statement) (*Cogniti
 		}
 	}
 
-	// Side-effect: boost energy of accessed nodes (set to current+0.03, capped)
+	// Side-effect: boost energy of accessed nodes (async, non-blocking)
 	sideEffects := []string{"BoostAccessedNodes"}
+	nodeIDs := make([]string, 0, len(nodes))
 	for _, n := range nodes {
 		if n.ID != "" {
-			// GetNode to read current energy, then boost
-			nr, getErr := e.client.GetNode(ctx, n.ID, col)
-			if getErr == nil && nr.Found {
-				newEnergy := nr.Energy + 0.03
-				if newEnergy > 1.0 {
-					newEnergy = 1.0
-				}
-				_ = e.client.UpdateEnergy(ctx, n.ID, newEnergy, col)
-			}
+			nodeIDs = append(nodeIDs, n.ID)
 		}
+	}
+	if len(nodeIDs) > 0 {
+		go func(ids []string, collection string) {
+			bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			for _, id := range ids {
+				nr, getErr := e.client.GetNode(bgCtx, id, collection)
+				if getErr != nil {
+					log.Printf("[AQL/RECALL] GetNode %s failed: %v", id, getErr)
+					continue
+				}
+				if nr.Found {
+					newEnergy := nr.Energy + 0.03
+					if newEnergy > 1.0 {
+						newEnergy = 1.0
+					}
+					if err := e.client.UpdateEnergy(bgCtx, id, newEnergy, collection); err != nil {
+						log.Printf("[AQL/RECALL] UpdateEnergy %s failed: %v", id, err)
+					}
+				}
+			}
+		}(nodeIDs, col)
 	}
 
 	if nodes == nil {
@@ -189,18 +206,34 @@ func (e *Executor) executeTrace(ctx context.Context, stmt *Statement) (*Cognitiv
 		}
 	}
 
-	// Side-effect: boost all nodes on path
+	// Side-effect: boost all nodes on path (async, non-blocking)
+	pathIDs := make([]string, 0, len(nodes))
 	for _, n := range nodes {
 		if n.ID != "" {
-			nr, getErr := e.client.GetNode(ctx, n.ID, col)
-			if getErr == nil && nr.Found {
-				newEnergy := nr.Energy + 0.02
-				if newEnergy > 1.0 {
-					newEnergy = 1.0
-				}
-				_ = e.client.UpdateEnergy(ctx, n.ID, newEnergy, col)
-			}
+			pathIDs = append(pathIDs, n.ID)
 		}
+	}
+	if len(pathIDs) > 0 {
+		go func(ids []string, collection string) {
+			bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			for _, id := range ids {
+				nr, getErr := e.client.GetNode(bgCtx, id, collection)
+				if getErr != nil {
+					log.Printf("[AQL/TRACE] GetNode %s failed: %v", id, getErr)
+					continue
+				}
+				if nr.Found {
+					newEnergy := nr.Energy + 0.02
+					if newEnergy > 1.0 {
+						newEnergy = 1.0
+					}
+					if err := e.client.UpdateEnergy(bgCtx, id, newEnergy, collection); err != nil {
+						log.Printf("[AQL/TRACE] UpdateEnergy %s failed: %v", id, err)
+					}
+				}
+			}
+		}(pathIDs, col)
 	}
 
 	return &CognitiveResult{
@@ -268,14 +301,18 @@ func (e *Executor) executeImprint(ctx context.Context, stmt *Statement) (*Cognit
 		if stmt.EdgeType != "" {
 			edgeType = stmt.EdgeType
 		}
-		_, _ = e.client.InsertEdge(ctx, nietzsche.InsertEdgeOpts{
+		_, linkErr := e.client.InsertEdge(ctx, nietzsche.InsertEdgeOpts{
 			From:       insertResult.ID,
 			To:         stmt.LinkTo,
 			EdgeType:   edgeType,
 			Weight:     1.0,
 			Collection: col,
 		})
-		sideEffects = append(sideEffects, "CreateAssociationEdge")
+		if linkErr != nil {
+			log.Printf("[AQL/IMPRINT] InsertEdge %s→%s failed: %v", insertResult.ID, stmt.LinkTo, linkErr)
+		} else {
+			sideEffects = append(sideEffects, "CreateAssociationEdge")
+		}
 	}
 
 	return &CognitiveResult{
@@ -375,17 +412,26 @@ func (e *Executor) executeFade(ctx context.Context, stmt *Statement) (*Cognitive
 
 	var faded []CognitiveNode
 	for _, nodeID := range stmt.NodeIDs {
-		// Read current energy, then reduce
 		nr, err := e.client.GetNode(ctx, nodeID, col)
-		if err != nil || !nr.Found {
+		if err != nil {
+			log.Printf("[AQL/FADE] GetNode %s failed: %v", nodeID, err)
+			continue
+		}
+		if !nr.Found {
+			log.Printf("[AQL/FADE] Node %s not found, skipping", nodeID)
 			continue
 		}
 		newEnergy := nr.Energy - 0.2
 		if newEnergy < 0.01 {
-			// Below threshold: delete
-			_ = e.client.DeleteNode(ctx, nodeID, col)
+			if delErr := e.client.DeleteNode(ctx, nodeID, col); delErr != nil {
+				log.Printf("[AQL/FADE] DeleteNode %s failed: %v", nodeID, delErr)
+				continue
+			}
 		} else {
-			_ = e.client.UpdateEnergy(ctx, nodeID, newEnergy, col)
+			if upErr := e.client.UpdateEnergy(ctx, nodeID, newEnergy, col); upErr != nil {
+				log.Printf("[AQL/FADE] UpdateEnergy %s failed: %v", nodeID, upErr)
+				continue
+			}
 		}
 		faded = append(faded, CognitiveNode{ID: nodeID, Energy: newEnergy})
 	}
@@ -411,7 +457,14 @@ func (e *Executor) executeDescend(ctx context.Context, stmt *Statement) (*Cognit
 
 	seedID := recallResult.Nodes[0].ID
 
-	// BFS to find deeper neighbors
+	// Get source node magnitude for filtering
+	sourceNode, err := e.client.GetNode(ctx, seedID, col)
+	if err != nil {
+		return nil, fmt.Errorf("DESCEND GetNode failed: %w", err)
+	}
+	sourceMag := vectorMagnitude(sourceNode.Embedding)
+
+	// BFS to find neighbors, then filter to DEEPER (higher magnitude)
 	depth := uint32(2)
 	if stmt.Depth > 0 {
 		depth = uint32(stmt.Depth)
@@ -423,7 +476,22 @@ func (e *Executor) executeDescend(ctx context.Context, stmt *Statement) (*Cognit
 
 	var nodes []CognitiveNode
 	for _, id := range visitedIDs {
-		nodes = append(nodes, CognitiveNode{ID: id})
+		if id == seedID {
+			continue
+		}
+		nr, getErr := e.client.GetNode(ctx, id, col)
+		if getErr != nil || !nr.Found {
+			continue
+		}
+		mag := vectorMagnitude(nr.Embedding)
+		// DESCEND: keep nodes with higher magnitude (deeper in Poincaré)
+		if mag > sourceMag {
+			nodes = append(nodes, CognitiveNode{
+				ID:        id,
+				Magnitude: float32(mag),
+				Metadata:  map[string]interface{}{"magnitude": mag, "depth_delta": mag - sourceMag},
+			})
+		}
 	}
 
 	return &CognitiveResult{Nodes: nodes}, nil
@@ -432,8 +500,52 @@ func (e *Executor) executeDescend(ctx context.Context, stmt *Statement) (*Cognit
 // ── ASCEND — navigate to abstractions (lower magnitude) ──────────────
 
 func (e *Executor) executeAscend(ctx context.Context, stmt *Statement) (*CognitiveResult, error) {
-	// Same traversal as DESCEND; future: filter by magnitude < source
-	return e.executeDescend(ctx, stmt)
+	col := e.collection(stmt)
+
+	recallResult, err := e.executeRecall(ctx, &Statement{
+		Verb: VerbRecall, Query: stmt.Query, Collection: col, Limit: 1,
+	})
+	if err != nil || len(recallResult.Nodes) == 0 {
+		return &CognitiveResult{Nodes: []CognitiveNode{}}, nil
+	}
+
+	seedID := recallResult.Nodes[0].ID
+	sourceNode, err := e.client.GetNode(ctx, seedID, col)
+	if err != nil {
+		return nil, fmt.Errorf("ASCEND GetNode failed: %w", err)
+	}
+	sourceMag := vectorMagnitude(sourceNode.Embedding)
+
+	depth := uint32(2)
+	if stmt.Depth > 0 {
+		depth = uint32(stmt.Depth)
+	}
+	visitedIDs, err := e.client.Bfs(ctx, seedID, nietzsche.TraversalOpts{MaxDepth: depth}, col)
+	if err != nil {
+		return nil, fmt.Errorf("ASCEND BFS failed: %w", err)
+	}
+
+	var nodes []CognitiveNode
+	for _, id := range visitedIDs {
+		if id == seedID {
+			continue
+		}
+		nr, getErr := e.client.GetNode(ctx, id, col)
+		if getErr != nil || !nr.Found {
+			continue
+		}
+		mag := vectorMagnitude(nr.Embedding)
+		// ASCEND: keep nodes with lower magnitude (more abstract, closer to origin)
+		if mag < sourceMag {
+			nodes = append(nodes, CognitiveNode{
+				ID:        id,
+				Magnitude: float32(mag),
+				Metadata:  map[string]interface{}{"magnitude": mag, "depth_delta": sourceMag - mag},
+			})
+		}
+	}
+
+	return &CognitiveResult{Nodes: nodes}, nil
 }
 
 // ── ORBIT — find peers at same depth ────────────────────────────────
@@ -441,15 +553,54 @@ func (e *Executor) executeAscend(ctx context.Context, stmt *Statement) (*Cogniti
 func (e *Executor) executeOrbit(ctx context.Context, stmt *Statement) (*CognitiveResult, error) {
 	col := e.collection(stmt)
 
-	// Find source via KNN (peers are neighbors at similar magnitude)
 	recallResult, err := e.executeRecall(ctx, &Statement{
-		Verb: VerbRecall, Query: stmt.Query, Collection: col, Limit: 20,
+		Verb: VerbRecall, Query: stmt.Query, Collection: col, Limit: 1,
+	})
+	if err != nil || len(recallResult.Nodes) == 0 {
+		return &CognitiveResult{Nodes: []CognitiveNode{}}, nil
+	}
+
+	seedID := recallResult.Nodes[0].ID
+	sourceNode, err := e.client.GetNode(ctx, seedID, col)
+	if err != nil {
+		return nil, fmt.Errorf("ORBIT GetNode failed: %w", err)
+	}
+	sourceMag := vectorMagnitude(sourceNode.Embedding)
+
+	// KNN finds nearest neighbors, then filter by similar magnitude (±20%)
+	knnResult, err := e.executeRecall(ctx, &Statement{
+		Verb: VerbRecall, Query: stmt.Query, Collection: col, Limit: 30,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("ORBIT search failed: %w", err)
 	}
 
-	return &CognitiveResult{Nodes: recallResult.Nodes}, nil
+	tolerance := sourceMag * 0.2
+	if tolerance < 0.05 {
+		tolerance = 0.05
+	}
+
+	var nodes []CognitiveNode
+	for _, n := range knnResult.Nodes {
+		if n.ID == seedID {
+			continue
+		}
+		nr, getErr := e.client.GetNode(ctx, n.ID, col)
+		if getErr != nil || !nr.Found {
+			continue
+		}
+		mag := vectorMagnitude(nr.Embedding)
+		// ORBIT: keep nodes at similar magnitude (±tolerance)
+		if math.Abs(mag-sourceMag) <= tolerance {
+			nodes = append(nodes, CognitiveNode{
+				ID:        n.ID,
+				Magnitude: float32(mag),
+				Metadata:  map[string]interface{}{"magnitude": mag, "mag_delta": math.Abs(mag - sourceMag)},
+			})
+		}
+	}
+
+	return &CognitiveResult{Nodes: nodes}, nil
 }
 
 // ── DREAM — creative recombination / sleep cycle ────────────────────
@@ -518,6 +669,16 @@ func (e *Executor) executeImagine(ctx context.Context, stmt *Statement) (*Cognit
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
+
+// vectorMagnitude computes the Euclidean norm of a Poincaré embedding.
+// In the Poincaré ball, magnitude ∝ depth in hierarchy.
+func vectorMagnitude(coords []float64) float64 {
+	var sumSq float64
+	for _, c := range coords {
+		sumSq += c * c
+	}
+	return math.Sqrt(sumSq)
+}
 
 func float32ToFloat64(v []float32) []float64 {
 	out := make([]float64, len(v))
