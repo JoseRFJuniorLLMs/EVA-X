@@ -624,56 +624,47 @@ func (a *Agent) handleMyEnergyStats(ctx context.Context, call swarm.ToolCall) (*
 		collection = "eva_core"
 	}
 
-	log.Info().Str("collection", collection).Msg("[SELF-AWARE] my_energy_stats")
+	log.Info().Str("collection", collection).Msg("[SELF-AWARE] my_energy_stats (DISTILL)")
 
-	// Run PageRank (damping=0.85, maxIter=20)
-	pr, err := a.nietzscheClient.RunPageRank(ctx, collection, 0.85, 20)
-	if err != nil {
-		return &swarm.ToolResult{Success: false, Message: fmt.Sprintf("Erro PageRank: %v", err)}, nil
-	}
-
-	// Sort by score descending and take top 20
-	scores := pr.Scores
-	sort.Slice(scores, func(i, j int) bool {
-		return scores[i].Score > scores[j].Score
-	})
 	limit := 20
-	if len(scores) < limit {
-		limit = len(scores)
-	}
-	top := scores[:limit]
 
-	// For each top node, fetch full data (type, energy, depth)
+	// P1-B FIX: Replace expensive PageRank + N×GetNode calls with a single AQL DISTILL query.
+	nql := fmt.Sprintf("DISTILL Experience LIMIT %d", limit)
+	result, err := a.nietzscheClient.Query(ctx, nql, nil, collection)
+	if err != nil {
+		return &swarm.ToolResult{Success: false, Message: fmt.Sprintf("Erro DISTILL: %v", err)}, nil
+	}
+	if result.Error != "" {
+		return &swarm.ToolResult{Success: false, Message: fmt.Sprintf("Erro NQL DISTILL: %s", result.Error)}, nil
+	}
+
 	type energyEntry struct {
 		ID       string  `json:"id"`
 		NodeType string  `json:"node_type"`
 		Energy   float32 `json:"energy"`
 		Depth    float32 `json:"depth"`
-		PageRank float64 `json:"pagerank"`
 	}
 	var entries []energyEntry
 	var lines []string
 
-	for _, ns := range top {
-		entry := energyEntry{ID: ns.NodeID, PageRank: ns.Score}
-		// Best-effort: fetch node details
-		nr, nerr := a.nietzscheClient.GetNode(ctx, ns.NodeID, collection)
-		if nerr == nil && nr.Found {
-			entry.NodeType = nr.NodeType
-			entry.Energy = nr.Energy
-			entry.Depth = nr.Depth
+	for _, n := range result.Nodes {
+		entry := energyEntry{
+			ID:       n.ID,
+			NodeType: n.NodeType,
+			Energy:   n.Energy,
+			Depth:    n.Depth,
 		}
 		entries = append(entries, entry)
-		lines = append(lines, fmt.Sprintf("- %s [%s] energy=%.2f depth=%.2f pagerank=%.4f",
-			entry.ID, entry.NodeType, entry.Energy, entry.Depth, entry.PageRank))
+		lines = append(lines, fmt.Sprintf("- %s [%s] energy=%.2f depth=%.2f", entry.ID, entry.NodeType, entry.Energy, entry.Depth))
 	}
 
-	msg := fmt.Sprintf("Meus %d nos mais energeticos (%d total, PageRank em %dms, %d iteracoes):\n%s",
-		limit, len(scores), pr.DurationMs, pr.Iterations, strings.Join(lines, "\n"))
+	msg := fmt.Sprintf("Meus %d nos mais energeticos (via DISTILL, 1 RPC server-side):\n%s", len(entries), strings.Join(lines, "\n"))
 
 	// --- Self-Observation: persist energy stats summary ---
 	var topNames []string
 	var relatedIDs []string
+	var avgEnergy float32
+
 	for _, e := range entries {
 		label := e.ID
 		if e.NodeType != "" {
@@ -681,25 +672,20 @@ func (a *Agent) handleMyEnergyStats(ctx context.Context, call swarm.ToolCall) (*
 		}
 		topNames = append(topNames, label)
 		relatedIDs = append(relatedIDs, e.ID)
+		avgEnergy += e.Energy
 	}
 	topSummary := strings.Join(topNames, ", ")
 	if len(topSummary) > 300 {
 		topSummary = topSummary[:300] + "..."
 	}
-	var avgEnergy float32
-	for _, e := range entries {
-		avgEnergy += e.Energy
-	}
 	if len(entries) > 0 {
 		avgEnergy /= float32(len(entries))
 	}
-	observationSummary := fmt.Sprintf("Self-observation: top %d concepts are %s. PageRank ran in %dms (%d iterations, %d total nodes). Avg top energy: %.3f",
-		limit, topSummary, pr.DurationMs, pr.Iterations, len(scores), avgEnergy)
+
+	observationSummary := fmt.Sprintf("Self-observation: top %d concepts are %s. Avg top energy: %.3f. Computed via DISTILL.", len(entries), topSummary, avgEnergy)
+
 	go a.storeSelfObservation(ctx, "energy_stats", observationSummary, map[string]interface{}{
-		"top_count":      limit,
-		"total_nodes":    len(scores),
-		"pagerank_ms":    pr.DurationMs,
-		"iterations":     pr.Iterations,
+		"top_count":      len(entries),
 		"avg_top_energy": avgEnergy,
 		"collection":     collection,
 	}, relatedIDs)
@@ -709,9 +695,6 @@ func (a *Agent) handleMyEnergyStats(ctx context.Context, call swarm.ToolCall) (*
 		Message: msg,
 		Data: map[string]interface{}{
 			"top":        entries,
-			"total":      len(scores),
-			"duration_ms": pr.DurationMs,
-			"iterations": pr.Iterations,
 			"collection": collection,
 		},
 	}, nil
@@ -807,7 +790,9 @@ func (a *Agent) handleMyTopology(ctx context.Context, call swarm.ToolCall) (*swa
 		return &swarm.ToolResult{Success: false, Message: fmt.Sprintf("Erro Louvain: %v", err)}, nil
 	}
 
-	// Compute depth distribution from community assignments (fetch node depth)
+	// P1-A FIX: replace N×GetNode loop with a single server-side NQL MATCH query.
+	// Old code: for each Louvain assignment → GetNode (one RPC per node) → O(N) RPCs.
+	// New code: one MATCH query returns depth for all nodes → O(1) RPC.
 	depthBuckets := map[string]int{
 		"shallow (0-0.3)": 0,
 		"medium (0.3-0.6)": 0,
@@ -817,23 +802,24 @@ func (a *Agent) handleMyTopology(ctx context.Context, call swarm.ToolCall) (*swa
 	var totalDepth float64
 	var depthCount int
 
-	for _, nc := range louvain.Assignments {
-		nr, nerr := a.nietzscheClient.GetNode(ctx, nc.NodeID, collection)
-		if nerr != nil || !nr.Found {
-			continue
-		}
-		d := float64(nr.Depth)
-		totalDepth += d
-		depthCount++
-		switch {
-		case d < 0.3:
-			depthBuckets["shallow (0-0.3)"]++
-		case d < 0.6:
-			depthBuckets["medium (0.3-0.6)"]++
-		case d < 0.9:
-			depthBuckets["deep (0.6-0.9)"]++
-		default:
-			depthBuckets["abyss (0.9+)"]++
+	// Single NQL round-trip to get depth distribution for all nodes.
+	nqlDepth := `MATCH (n) RETURN n LIMIT 500`
+	depthResult, depthErr := a.nietzscheClient.Query(ctx, nqlDepth, nil, collection)
+	if depthErr == nil && depthResult != nil {
+		for _, n := range depthResult.Nodes {
+			d := float64(n.Depth)
+			totalDepth += d
+			depthCount++
+			switch {
+			case d < 0.3:
+				depthBuckets["shallow (0-0.3)"]++
+			case d < 0.6:
+				depthBuckets["medium (0.3-0.6)"]++
+			case d < 0.9:
+				depthBuckets["deep (0.6-0.9)"]++
+			default:
+				depthBuckets["abyss (0.9+)"]++
+			}
 		}
 	}
 
@@ -858,7 +844,7 @@ func (a *Agent) handleMyTopology(ctx context.Context, call swarm.ToolCall) (*swa
 
 	msg := fmt.Sprintf(`Topologia de '%s':
 - Comunidades Louvain: %d (modularidade: %.4f, maior: %d nos)
-- Profundidade media: %.3f (%d nos medidos)
+- Profundidade media: %.3f (%d nos medidos, 1 RPC server-side)
 - Distribuicao de profundidade:
 %s
 - Grafo global: %v nos, %v arestas (versao: %v)
@@ -974,8 +960,10 @@ func truncate(s string, maxLen int) string {
 }
 
 
-// handleRecallMemory searches EVA's memory using AQL (Agent Cognition Language).
-// Single gRPC round-trip: server parses AQL, executes FTS internally, returns content.
+// handleRecallMemory searches EVA's memory using both eva_mind and eva_core.
+// P0-3 FIX: searches BOTH collections in parallel, deduplicates and merges results.
+// Old behaviour: only queried eva_mind — memories in eva_core (identity, capabilities)
+// were completely invisible. Now both collections contribute.
 func (a *Agent) handleRecallMemory(ctx context.Context, call swarm.ToolCall) (*swarm.ToolResult, error) {
 	query, _ := call.Args["query"].(string)
 	if query == "" {
@@ -986,65 +974,68 @@ func (a *Agent) handleRecallMemory(ctx context.Context, call swarm.ToolCall) (*s
 		return &swarm.ToolResult{Success: false, Message: "NietzscheDB not available"}, nil
 	}
 
-	searchCtx, cancel := context.WithTimeout(ctx, 800*time.Millisecond)
+	searchCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
 	defer cancel()
 
-	// AQL RECALL — single round-trip to NietzscheDB server
-	aqlQuery := fmt.Sprintf(`RECALL "%s" LIMIT 3`, query)
-	results, verb, err := a.nietzscheClient.ExecuteAql(searchCtx, aqlQuery, "eva_mind")
-	if err != nil {
-		// Fallback to FullTextSearchRich if AQL fails
-		richResults, ftsErr := a.nietzscheClient.FullTextSearchRich(searchCtx, query, "eva_mind", 2)
-		if ftsErr != nil || len(richResults) == 0 {
-			return &swarm.ToolResult{
-				Success: true,
-				Message: "Nao encontrei memorias relevantes sobre isso.",
-			}, nil
-		}
-		var memories []string
-		for _, r := range richResults {
-			if !r.Found {
-				continue
+	type ftsResult struct {
+		collection string
+		items      []string
+	}
+
+	collections := []string{"eva_mind", "eva_core"}
+	resultsCh := make(chan ftsResult, len(collections))
+
+	// P0-3: Fan out FullTextSearchRich to both collections simultaneously.
+	for _, col := range collections {
+		go func(c string) {
+			var items []string
+			richResults, err := a.nietzscheClient.FullTextSearchRich(searchCtx, query, c, 3)
+			if err != nil {
+				log.Warn().Err(err).Str("collection", c).Msg("[RECALL] FTS failed")
+				resultsCh <- ftsResult{collection: c, items: items}
+				return
 			}
-			for _, key := range []string{"content", "text", "summary", "description"} {
-				if v, ok := r.Content[key]; ok {
-					if s, ok := v.(string); ok && len(s) > 10 {
-						if len(s) > 200 {
-							s = s[:197] + "..."
+			for _, rr := range richResults {
+				if !rr.Found {
+					continue
+				}
+				for _, key := range []string{"content", "text", "summary", "description"} {
+					if v, ok := rr.Content[key]; ok {
+						if s, ok := v.(string); ok && len(s) > 10 {
+							if len(s) > 200 {
+								s = s[:197] + "..."
+							}
+							items = append(items, s)
+							break
 						}
-						memories = append(memories, s)
-						break
 					}
 				}
 			}
-		}
-		if len(memories) == 0 {
-			return &swarm.ToolResult{Success: true, Message: "Nao encontrei memorias relevantes."}, nil
-		}
-		msg := fmt.Sprintf("Memorias (fallback FTS):\n%s", strings.Join(memories, "\n"))
-		return &swarm.ToolResult{Success: true, Message: msg}, nil
+			resultsCh <- ftsResult{collection: c, items: items}
+		}(col)
 	}
 
-	if len(results) == 0 {
+	// Merge with deduplication.
+	seen := make(map[string]bool)
+	var memories []string
+	for i := 0; i < len(collections); i++ {
+		r := <-resultsCh
+		for _, s := range r.items {
+			if !seen[s] {
+				seen[s] = true
+				memories = append(memories, s)
+			}
+		}
+	}
+
+	if len(memories) == 0 {
 		return &swarm.ToolResult{
 			Success: true,
 			Message: "Nao encontrei memorias relevantes sobre isso.",
 		}, nil
 	}
 
-	var memories []string
-	for _, r := range results {
-		if r.Content != "" && len(r.Content) > 10 {
-			memories = append(memories, r.Content)
-		}
-	}
-
-	if len(memories) == 0 {
-		return &swarm.ToolResult{Success: true, Message: "Nao encontrei memorias relevantes."}, nil
-	}
-
-	_ = verb // "RECALL"
-	msg := fmt.Sprintf("Memorias relevantes:\n%s", strings.Join(memories, "\n"))
+	msg := fmt.Sprintf("Memorias relevantes (eva_mind + eva_core):\n%s", strings.Join(memories, "\n"))
 	return &swarm.ToolResult{
 		Success: true,
 		Message: msg,

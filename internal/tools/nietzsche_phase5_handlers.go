@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"sync"
 	"time"
 
 	nietzsche "nietzsche-sdk"
@@ -50,21 +51,34 @@ func (h *ToolsHandler) handleHydratePath(idosoID int64, args map[string]interfac
 	nodes := make([]map[string]interface{}, 0, len(rawIDs))
 	var failedIDs []string
 
+	// P2-C FIX: Concurrent hydration instead of sequential GetNode calls
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
 	for _, raw := range rawIDs {
 		id, ok := raw.(string)
 		if !ok || id == "" {
 			continue
 		}
 
-		nr, err := h.nietzscheClient.GetNode(ctx, id, collection)
-		if err != nil || !nr.Found {
-			failedIDs = append(failedIDs, id)
-			continue
-		}
-
-		nodeMap := nietzscheInfra.NodeResultToMap(nr)
-		nodes = append(nodes, nodeMap)
+		wg.Add(1)
+		go func(nodeID string) {
+			defer wg.Done()
+			nr, err := h.nietzscheClient.GetNode(ctx, nodeID, collection)
+			
+			mu.Lock()
+			defer mu.Unlock()
+			
+			if err != nil || !nr.Found {
+				failedIDs = append(failedIDs, nodeID)
+			} else {
+				nodeMap := nietzscheInfra.NodeResultToMap(nr)
+				nodes = append(nodes, nodeMap)
+			}
+		}(id)
 	}
+
+	wg.Wait()
 
 	log.Printf("[NIETZSCHE] HydratePath: %d/%d nodes hydrated (collection=%s)",
 		len(nodes), len(rawIDs), collection)
@@ -116,22 +130,40 @@ func (h *ToolsHandler) handleGeodesicCoherence(idosoID int64, args map[string]in
 		embedding []float64
 		depth     float32
 	}
-	pathNodes := make([]nodeInfo, 0, len(rawIDs))
-
-	for _, raw := range rawIDs {
+	
+	// P2-D FIX: Concurrent fetching with ordered slice
+	pathNodesRaw := make([]nodeInfo, len(rawIDs))
+	validMap := make([]bool, len(rawIDs))
+	
+	var wg sync.WaitGroup
+	for i, raw := range rawIDs {
 		id, ok := raw.(string)
 		if !ok || id == "" {
 			continue
 		}
-		nr, err := h.nietzscheClient.GetNode(ctx, id, collection)
-		if err != nil || !nr.Found {
-			continue
+		
+		wg.Add(1)
+		go func(idx int, nodeID string) {
+			defer wg.Done()
+			nr, err := h.nietzscheClient.GetNode(ctx, nodeID, collection)
+			if err == nil && nr.Found {
+				pathNodesRaw[idx] = nodeInfo{
+					id:        nr.ID,
+					embedding: nr.Embedding,
+					depth:     nr.Depth,
+				}
+				validMap[idx] = true
+			}
+		}(i, id)
+	}
+	wg.Wait()
+
+	// Compact the array preserving valid topological order
+	pathNodes := make([]nodeInfo, 0, len(rawIDs))
+	for i, valid := range validMap {
+		if valid {
+			pathNodes = append(pathNodes, pathNodesRaw[i])
 		}
-		pathNodes = append(pathNodes, nodeInfo{
-			id:        nr.ID,
-			embedding: nr.Embedding,
-			depth:     nr.Depth,
-		})
 	}
 
 	if len(pathNodes) < 2 {

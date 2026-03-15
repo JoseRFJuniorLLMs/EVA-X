@@ -320,6 +320,10 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 	var responseAccum strings.Builder
 	var responseAccumMu sync.Mutex // protege responseAccum contra acessos concorrentes
 
+	// Memory cache — pre-fetched pelo background recall, servido ao recall_memory tool
+	var memoryCacheMu sync.RWMutex
+	memoryCache := make(map[string][]string) // key = query prefix normalizado, value = memory strings
+
 	// Transcript accumulation — necessario para CoreMemory.ProcessSessionEnd
 	var transcriptMu sync.Mutex
 	var transcriptAccum strings.Builder // transcript completo da sessao
@@ -376,6 +380,105 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 							writeMu.Lock()
 							conn.WriteJSON(browserMessage{Type: "tool_event", Tool: name, Status: "executing"})
 							writeMu.Unlock()
+
+							// recall_memory: servir do cache local (sub-ms) ou live query,
+							// responder via tool_response (ACEITE pelo native-audio, sem matar a voz)
+							if name == "recall_memory" {
+								go func(n string, a map[string]interface{}) {
+									query, _ := a["query"].(string)
+									if query == "" {
+										query = "geral"
+									}
+
+									// 1. Procurar no cache (pre-fetched pelo background recall)
+									var memories []string
+									memoryCacheMu.RLock()
+									queryLower := strings.ToLower(query)
+									for k, v := range memoryCache {
+										if strings.Contains(k, queryLower[:min(20, len(queryLower))]) ||
+											strings.Contains(queryLower, k[:min(15, len(k))]) {
+											memories = append(memories, v...)
+										}
+									}
+									memoryCacheMu.RUnlock()
+
+									// 2. Cache miss -> live query (800ms timeout)
+									if len(memories) == 0 {
+										recallCtx, recallCancel := context.WithTimeout(context.Background(), 800*time.Millisecond)
+										defer recallCancel()
+										nzClient := s.db.NzClient()
+										if nzClient != nil {
+											aqlQuery := fmt.Sprintf(`RECALL "%s" LIMIT 3`, query)
+											qRes, aqlErr := nzClient.Query(recallCtx, aqlQuery, nil, "eva_mind")
+											if aqlErr == nil && qRes != nil {
+												for _, nd := range qRes.Nodes {
+													for _, key := range []string{"content", "text", "summary"} {
+														if v, ok := nd.Content[key]; ok {
+															if sv, ok := v.(string); ok && len(sv) > 10 {
+																if len(sv) > 200 {
+																	sv = sv[:197] + "..."
+																}
+																memories = append(memories, sv)
+																break
+															}
+														}
+													}
+												}
+											}
+											// Fallback: FTS em eva_mind + eva_core
+											if len(memories) == 0 {
+												for _, col := range []string{"eva_mind", "eva_core"} {
+													ftsRes, ftsErr := nzClient.FullTextSearch(recallCtx, query, col, 2)
+													if ftsErr == nil {
+														for _, r := range ftsRes {
+															node, nErr := nzClient.GetNode(recallCtx, r.NodeID, col)
+															if nErr == nil && node.Found {
+																for _, key := range []string{"content", "text", "summary"} {
+																	if v, ok := node.Content[key]; ok {
+																		if sv, ok := v.(string); ok && len(sv) > 10 {
+																			if len(sv) > 200 {
+																				sv = sv[:197] + "..."
+																			}
+																			memories = append(memories, sv)
+																			break
+																		}
+																	}
+																}
+															}
+														}
+													}
+												}
+											}
+										}
+									}
+
+									// 3. Montar resultado
+									result := map[string]interface{}{}
+									if len(memories) > 0 {
+										result["memories"] = strings.Join(memories, "\n---\n")
+										result["count"] = len(memories)
+									} else {
+										result["memories"] = "Nenhuma memoria relevante encontrada para: " + query
+										result["count"] = 0
+									}
+
+									// 4. Enviar via tool_response (ACEITE pelo native-audio!)
+									geminiMu.RLock()
+									c := geminiRef
+									geminiMu.RUnlock()
+									if c != nil {
+										if err := c.SendToolResponse(n, result); err != nil {
+											log.Warn().Err(err).Str("tool", n).Msg("[RECALL-TOOL] Falha ao enviar tool_response")
+										}
+									}
+
+									writeMu.Lock()
+									conn.WriteJSON(browserMessage{Type: "tool_event", Tool: n, ToolData: result, Status: "success"})
+									writeMu.Unlock()
+									log.Info().Str("query", query).Int("count", len(memories)).Msg("[RECALL-TOOL] recall_memory concluido via tool_response")
+								}(name, args)
+								continue
+							}
 
 							go func(n string, a map[string]interface{}) {
 								defer func() {
@@ -542,23 +645,16 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 									return
 								}
 
-								// AQL RECALL — single gRPC round-trip
+								// AQL RECALL — single gRPC round-trip (via standard SDK Query)
 								aqlQuery := fmt.Sprintf(`RECALL "%s" LIMIT 3`, userText)
-								results, _, aqlErr := nzClient.ExecuteAql(recallCtx, aqlQuery, "eva_mind")
+								qRes, aqlErr := nzClient.Query(recallCtx, aqlQuery, nil, "eva_mind")
 
 								var memories []string
-								if aqlErr != nil {
-									// Fallback: FTS
-									richResults, ftsErr := nzClient.FullTextSearchRich(recallCtx, userText, "eva_mind", 2)
-									if ftsErr != nil || len(richResults) == 0 {
-										return
-									}
-									for _, r := range richResults {
-										if !r.Found {
-											continue
-										}
+								if aqlErr == nil && qRes != nil && len(qRes.Nodes) > 0 {
+									for _, n := range qRes.Nodes {
+										// Extrair "content" do raw node map
 										for _, key := range []string{"content", "text", "summary"} {
-											if v, ok := r.Content[key]; ok {
+											if v, ok := n.Content[key]; ok {
 												if s, ok := v.(string); ok && len(s) > 10 {
 													if len(s) > 200 { s = s[:197] + "..." }
 													memories = append(memories, s)
@@ -568,11 +664,22 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 										}
 									}
 								} else {
-									for _, r := range results {
-										if r.Content != "" && len(r.Content) > 10 {
-											c := r.Content
-											if len(c) > 200 { c = c[:197] + "..." }
-											memories = append(memories, c)
+									// Fallback: FTS manual loop
+									ftsRes, ftsErr := nzClient.FullTextSearch(recallCtx, userText, "eva_mind", 2)
+									if ftsErr == nil {
+										for _, r := range ftsRes {
+											node, nErr := nzClient.GetNode(recallCtx, r.NodeID, "eva_mind")
+											if nErr == nil && node.Found {
+												for _, key := range []string{"content", "text", "summary"} {
+													if v, ok := node.Content[key]; ok {
+														if s, ok := v.(string); ok && len(s) > 10 {
+															if len(s) > 200 { s = s[:197] + "..." }
+															memories = append(memories, s)
+															break
+														}
+													}
+												}
+											}
 										}
 									}
 								}
@@ -581,18 +688,13 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 									return
 								}
 
-								// Injetar memórias no Gemini via clientContent (NÃO interrompe áudio)
-								memText := strings.Join(memories, "\n")
-								geminiMu.RLock()
-								c := geminiRef
-								geminiMu.RUnlock()
-								if c != nil {
-									if err := c.SendMemoryContext(memText); err != nil {
-										log.Warn().Err(err).Msg("[RECALL-BG] Falha ao injetar memórias")
-									} else {
-										log.Info().Int("count", len(memories)).Str("query", userText[:min(50, len(userText))]).Msg("[RECALL-BG] Memórias injetadas em background")
-									}
-								}
+								// Cache memories para servir ao recall_memory tool call
+								// (NAO injetar no Gemini -- native-audio rejeita client_content com close 1008)
+								memoryCacheMu.Lock()
+								cacheKey := strings.ToLower(userText[:min(50, len(userText))])
+								memoryCache[cacheKey] = memories
+								memoryCacheMu.Unlock()
+								log.Info().Int("count", len(memories)).Str("key", cacheKey).Msg("[RECALL-BG] Memorias cached para tool recall")
 							}(text)
 						}
 						// Acumular transcript do usuario

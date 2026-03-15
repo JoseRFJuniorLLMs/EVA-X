@@ -185,6 +185,17 @@ func deterministicSummary(toolName string, result map[string]interface{}) string
 			return enforceLimit(msg)
 		}
 		return "Pesquisa concluida. Resultados na tela."
+
+	case "recall_memory":
+		mem := strField(result, "memories", "")
+		count := intField(result, "count", 0)
+		if count == 0 {
+			return "Nao encontrei memorias relevantes."
+		}
+		if mem != "" {
+			return enforceLimit(mem)
+		}
+		return fmt.Sprintf("Encontrei %d memorias relevantes.", count)
 	}
 
 	return "" // não reconhecida → fallback genérico

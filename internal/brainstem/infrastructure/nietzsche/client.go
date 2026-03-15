@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	nietzsche "nietzsche-sdk"
@@ -789,14 +790,105 @@ func (c *Client) FullTextSearch(ctx context.Context, query, collection string, l
 	return c.sdk.FullTextSearch(ctx, query, collection, limit)
 }
 
+// RichFtsResult combines an FTS result with the full node content.
+// This is a local type because the nietzsche-sdk proto does not expose a dedicated
+// rich FTS result type.
+type RichFtsResult struct {
+	nietzsche.FtsResult
+	Found   bool                   `json:"found"`
+	Content map[string]interface{} `json:"content"`
+}
+
 // FullTextSearchRich performs FTS + parallel GetNode in a single call.
-func (c *Client) FullTextSearchRich(ctx context.Context, query, collection string, limit uint32) ([]nietzsche.RichFtsResult, error) {
-	return c.sdk.FullTextSearchRich(ctx, query, collection, limit)
+func (c *Client) FullTextSearchRich(ctx context.Context, query, collection string, limit uint32) ([]RichFtsResult, error) {
+	// First, run standard FTS
+	ftsRes, err := c.FullTextSearch(ctx, query, collection, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(ftsRes) == 0 {
+		return []RichFtsResult{}, nil
+	}
+
+	results := make([]RichFtsResult, len(ftsRes))
+	errCh := make(chan error, len(ftsRes))
+
+	// Fetch node content in parallel mapping to results
+	for i, r := range ftsRes {
+		go func(idx int, r nietzsche.FtsResult) {
+			node, nErr := c.GetNode(ctx, r.NodeID, collection)
+			if nErr != nil {
+				errCh <- nErr
+				return
+			}
+			res := RichFtsResult{
+				FtsResult: r,
+				Found:     node.Found,
+				Content:   node.Content,
+			}
+			results[idx] = res
+			errCh <- nil
+		}(i, r)
+	}
+
+	for i := 0; i < len(ftsRes); i++ {
+		if fetchErr := <-errCh; fetchErr != nil {
+			// In case of error fetching one node, log it but don't fail the whole search
+			log := logger.Nietzsche()
+			log.Warn().Err(fetchErr).Str("collection", collection).Msg("FullTextSearchRich node fetch failed")
+		}
+	}
+
+	return results, nil
+}
+
+// AqlResult holds a single result from an AQL (Agent Query Language) query execution.
+// This is a local type because the nietzsche-sdk proto does not expose a dedicated
+// AQL result type — AQL queries are processed by the NQL engine via the Query endpoint.
+type AqlResult struct {
+	Content string // primary content text of the matched node
+	NodeID  string // the unique node ID
 }
 
 // ExecuteAql sends an AQL query to NietzscheDB for server-side execution.
-func (c *Client) ExecuteAql(ctx context.Context, query, collection string) ([]nietzsche.AqlResult, string, error) {
-	return c.sdk.ExecuteAql(ctx, query, collection)
+// The NietzscheDB NQL engine processes AQL queries via the generic Query endpoint.
+// Returns a slice of AqlResult (content + node_id pairs) and the verb extracted from the query.
+func (c *Client) ExecuteAql(ctx context.Context, query, collection string) ([]AqlResult, string, error) {
+	result, err := c.sdk.Query(ctx, query, nil, collection)
+	if err != nil {
+		return nil, "", fmt.Errorf("nietzsche aql query: %w", err)
+	}
+	if result.Error != "" {
+		return nil, "", fmt.Errorf("nietzsche aql error: %s", result.Error)
+	}
+
+	// Extract verb from AQL query (first word: RECALL, REFLECT, DISTILL, etc.)
+	verb := ""
+	if len(query) > 0 {
+		parts := strings.Fields(query)
+		if len(parts) > 0 {
+			verb = strings.ToUpper(parts[0])
+		}
+	}
+
+	// Map query result nodes to AqlResult entries.
+	aqlResults := make([]AqlResult, 0, len(result.Nodes))
+	for _, n := range result.Nodes {
+		ar := AqlResult{NodeID: n.ID}
+		// Populate Content from the most descriptive field available.
+		for _, key := range []string{"content", "text", "summary", "description", "label"} {
+			if v, ok := n.Content[key]; ok {
+				if s, ok := v.(string); ok && s != "" {
+					ar.Content = s
+					break
+				}
+			}
+		}
+		aqlResults = append(aqlResults, ar)
+	}
+
+	return aqlResults, verb, nil
 }
 
 // HybridSearch combines full-text BM25 and vector KNN search.

@@ -6,7 +6,10 @@ package database
 import (
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"fmt"
+	"hash/fnv"
+	"math"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -50,6 +53,78 @@ func nodeID(table string, pgID interface{}) string {
 	return uuid.NewSHA1(uuid.NameSpaceDNS, []byte(key)).String()
 }
 
+// contentToCoords generates a 128-dimensional Poincaré-ball coordinate vector
+// from the semantic content of the node. This is a deterministic, lightweight
+// fallback used when a full Gemini embedding is not available (e.g. low-level
+// inserts from the database package).
+//
+// Algorithm:
+//   - Compute FNV-64 hash of the combined content string.
+//   - Expand into 128 float64 values via sequential hashing.
+//   - Normalise to unit sphere then scale to magnitude ~0.5 (mid-Poincaré ball).
+//
+// Layers doing a full Gemini embedding (hippocampus, cortex) should call
+// InsertNode / MergeNode directly with real coords to override this.
+func contentToCoords(content map[string]interface{}) []float64 {
+	// Build a deterministic string from the content keys that carry semantics.
+	var sb strings.Builder
+	for _, key := range []string{"content", "text", "summary", "description", "title", "trigger_phrase"} {
+		if v, ok := content[key]; ok && v != nil {
+			if s, ok := v.(string); ok && s != "" {
+				sb.WriteString(key)
+				sb.WriteByte(':')
+				sb.WriteString(s)
+				sb.WriteByte('|')
+			}
+		}
+	}
+	// Fallback: use the node label + id so we never produce a zero vector.
+	if sb.Len() == 0 {
+		for _, key := range []string{"node_label", "id", "category", "tipo"} {
+			if v, ok := content[key]; ok && v != nil {
+				sb.WriteString(fmt.Sprintf("%v|", v))
+			}
+		}
+	}
+
+	const dim = 128
+	coords := make([]float64, dim)
+
+	seed := sb.String()
+	if seed == "" {
+		seed = fmt.Sprintf("empty-%d", time.Now().UnixNano())
+	}
+
+	// Expand hash into dim floats by hashing successive chunks.
+	h := fnv.New64a()
+	for i := 0; i < dim; i++ {
+		h.Reset()
+		_, _ = h.Write([]byte(seed))
+		var buf [8]byte
+		binary.LittleEndian.PutUint64(buf[:], uint64(i))
+		_, _ = h.Write(buf[:])
+		hv := h.Sum64()
+		// Map to [-1, 1]
+		coords[i] = float64(int64(hv)) / float64(math.MaxInt64)
+	}
+
+	// Normalise to unit length.
+	var norm float64
+	for _, v := range coords {
+		norm += v * v
+	}
+	norm = math.Sqrt(norm)
+	if norm == 0 {
+		norm = 1
+	}
+	// Scale to magnitude ~0.5 (mid Poincaré ball — neither origin nor boundary).
+	const targetMag = 0.5
+	for i := range coords {
+		coords[i] = coords[i] / norm * targetMag
+	}
+	return coords
+}
+
 // nqlQuery executes an NQL query against the eva_mind collection.
 func (db *DB) nqlQuery(ctx context.Context, nql string, params map[string]interface{}) (*nietzsche.QueryResult, error) {
 	if db.nz == nil {
@@ -74,6 +149,8 @@ func (db *DB) getNode(ctx context.Context, table string, pgID interface{}) (map[
 }
 
 // insertRow inserts a new row as a NietzscheDB node with auto-generated int64 ID.
+// P0-1 FIX: now generates 128D Poincaré coordinates from content hash so KNN
+// searches are non-degenerate even without a full Gemini embedding.
 func (db *DB) insertRow(ctx context.Context, table string, content map[string]interface{}) (int64, error) {
 	if db.nz == nil {
 		return 0, fmt.Errorf("NietzscheDB not initialized")
@@ -84,6 +161,8 @@ func (db *DB) insertRow(ctx context.Context, table string, content map[string]in
 	_, err := db.nz.InsertNode(ctx, nietzsche.InsertNodeOpts{
 		ID:         nodeID(table, id),
 		Content:    content,
+		Coords:     contentToCoords(content), // P0-1: non-zero coordinates
+		Energy:     0.5,                       // P0-2: non-zero energy (avoids NiilistaGc)
 		NodeType:   "Semantic",
 		Collection: evaMindCollection,
 	})
@@ -182,6 +261,8 @@ func (db *DB) InsertTo(ctx context.Context, collection string, table string, con
 	_, err := db.nz.InsertNode(ctx, nietzsche.InsertNodeOpts{
 		ID:         fmt.Sprintf("%s:%s:%d", collection, table, id),
 		Content:    content,
+		Coords:     contentToCoords(content), // P0-1: non-zero coordinates
+		Energy:     0.5,                       // P0-2: non-zero energy (avoids NiilistaGc)
 		NodeType:   "Semantic",
 		Collection: collection,
 	})

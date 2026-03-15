@@ -68,6 +68,7 @@ type MemoryQuery struct {
 	MinEnergy  float64    `json:"min_energy"`
 	Limit      int        `json:"limit"`
 	Embedding  []float64  `json:"embedding,omitempty"`
+	IDs        []string   `json:"ids,omitempty"`         // P3-C: IDs especificos para sync
 }
 
 // MemoryResult resultado de uma busca na memoria
@@ -90,6 +91,7 @@ type MemoryKernel struct {
 	// Configuracao
 	workingMemoryCapacity int           // Max items em working memory (Miller's 7+-2)
 	decayInterval         time.Duration // Intervalo de decay energetico
+	syncInterval          time.Duration // P3-C: Intervalo de sincronizacao com DB
 	spreadDepth           int           // Profundidade de spreading activation
 
 	// Metricas
@@ -107,6 +109,7 @@ type MemoryKernel struct {
 type MemoryKernelConfig struct {
 	WorkingMemoryCapacity int
 	DecayInterval         time.Duration
+	SyncInterval          time.Duration
 	SpreadDepth           int
 }
 
@@ -115,6 +118,7 @@ func DefaultMemoryKernelConfig() MemoryKernelConfig {
 	return MemoryKernelConfig{
 		WorkingMemoryCapacity: 7,              // Miller's magical number
 		DecayInterval:         30 * time.Second,
+		SyncInterval:          1 * time.Minute, // P3-C: Sync state with DB every minute
 		SpreadDepth:           3,
 	}
 }
@@ -137,6 +141,7 @@ func NewMemoryKernel(bus *ThoughtBus, cfg MemoryKernelConfig) *MemoryKernel {
 		zones:                 make(map[MemoryZone]map[string]*MemoryTrace),
 		workingMemoryCapacity: cfg.WorkingMemoryCapacity,
 		decayInterval:         cfg.DecayInterval,
+		syncInterval:          cfg.SyncInterval,
 		spreadDepth:           cfg.SpreadDepth,
 	}
 
@@ -164,6 +169,9 @@ func (mk *MemoryKernel) Start(ctx context.Context) {
 
 	// Goroutine de decay energetico
 	go mk.decayLoop(ctx)
+	
+	// P3-C: Goroutine de sincronizacao com NietzscheDB
+	go mk.syncLoop(ctx)
 
 	log.Info().
 		Int("wm_capacity", mk.workingMemoryCapacity).
@@ -376,6 +384,12 @@ func (mk *MemoryKernel) Consolidate() int {
 			mk.zones[targetZone][id] = trace
 			delete(working, id)
 			consolidated++
+			
+			// P1-D: sync zone transition and energy state
+			if mk.onStore != nil {
+				clone := *trace
+				go mk.onStore(&clone)
+			}
 		}
 	}
 
@@ -487,6 +501,12 @@ func (mk *MemoryKernel) activateTrace(traceID string, boost float64) {
 			trace.Activation = math.Min(1.0, trace.Activation+boost)
 			trace.LastAccessed = time.Now()
 			trace.AccessCount++
+			
+			// P1-D: sync activation boost
+			if mk.onStore != nil {
+				clone := *trace
+				go mk.onStore(&clone)
+			}
 			return
 		}
 	}
@@ -508,6 +528,81 @@ func (mk *MemoryKernel) decayLoop(ctx context.Context) {
 	}
 }
 
+// syncLoop sincroniza o estado do kernel com o NietzscheDB
+func (mk *MemoryKernel) syncLoop(ctx context.Context) {
+	if mk.syncInterval <= 0 {
+		return
+	}
+	ticker := time.NewTicker(mk.syncInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			mk.SyncFromDB()
+		}
+	}
+}
+
+// SyncFromDB actualiza energia e activacao de todos os traces na RAM
+// baseado no estado actual no NietzscheDB (Single Source of Truth)
+func (mk *MemoryKernel) SyncFromDB() {
+	if mk.onRetrieve == nil {
+		return
+	}
+
+	// Coletar todos os IDs ativos no kernel
+	var ids []string
+	mk.mu.RLock()
+	for _, zone := range mk.zones {
+		for id := range zone {
+			ids = append(ids, id)
+		}
+	}
+	mk.mu.RUnlock()
+
+	if len(ids) == 0 {
+		return
+	}
+
+	// Consultar DB
+	dbTraces, err := mk.onRetrieve(&MemoryQuery{IDs: ids})
+	if err != nil {
+		log.Warn().Err(err).Msg("[MemoryKernel] Falha ao sincronizar estados da DB")
+		return
+	}
+
+	// Aplicar atualizações do DB para RAM
+	mk.mu.Lock()
+	defer mk.mu.Unlock()
+
+	updated := 0
+	for _, dbTrace := range dbTraces {
+		for _, zone := range mk.zones {
+			if local, ok := zone[dbTrace.ID]; ok {
+				// Só atualizamos se houver diferença significativa (> 0.05)
+				// ou se a energia na DB for zero (node removido por GC/REM sleep)
+				if math.Abs(local.Energy-dbTrace.Energy) > 0.05 || dbTrace.Energy < 0.01 {
+					local.Energy = dbTrace.Energy
+					local.Activation = dbTrace.Activation
+					
+					// Se a energia na DB caiu para zero, removemos da RAM
+					if dbTrace.Energy < 0.01 {
+						delete(zone, dbTrace.ID)
+					}
+					updated++
+				}
+			}
+		}
+	}
+
+	if updated > 0 {
+		log.Debug().Int("updated", updated).Msg("[MemoryKernel] Estado sincronizado com NietzscheDB")
+	}
+}
+
 // applyDecay aplica decay a todas as memorias
 func (mk *MemoryKernel) applyDecay() {
 	mk.mu.Lock()
@@ -515,6 +610,8 @@ func (mk *MemoryKernel) applyDecay() {
 
 	now := time.Now()
 
+	var toSync []*MemoryTrace
+	
 	for zone, traces := range mk.zones {
 		decayRate := 0.01 // Default: 1% por intervalo
 
@@ -541,8 +638,23 @@ func (mk *MemoryKernel) applyDecay() {
 			if trace.Energy <= 0.001 {
 				delete(traces, id)
 				mk.totalDecayed.Add(1)
+			} else {
+				// Accumulate for sync to DB
+				clone := *trace
+				toSync = append(toSync, &clone)
 			}
 		}
+	}
+	mk.mu.Unlock()
+
+	// P1-D FIX: Synchronize in-memory energy decays back to NietzscheDB.
+	// Avoiding large lock times by syncing async after unlocking.
+	if mk.onStore != nil && len(toSync) > 0 {
+		go func(traces []*MemoryTrace) {
+			for _, t := range traces {
+				_ = mk.onStore(t)
+			}
+		}(toSync)
 	}
 }
 
@@ -571,6 +683,12 @@ func (mk *MemoryKernel) evictOldestFromWorking() {
 			// Promover para episodic antes de remover da WM
 			evicted.Zone = EpisodicMemory
 			mk.zones[EpisodicMemory][lowestID] = evicted
+			
+			// P1-D: sync zone transition and energy state
+			if mk.onStore != nil {
+				clone := *evicted
+				go mk.onStore(&clone)
+			}
 		}
 		delete(working, lowestID)
 	}
