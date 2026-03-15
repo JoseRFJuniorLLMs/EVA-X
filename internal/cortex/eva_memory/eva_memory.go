@@ -217,7 +217,9 @@ func (em *EvaMemory) EndSession(ctx context.Context, sessionID string) error {
 	// Skip persisting empty sessions: 0 turns AND duration < 5s
 	if turnCount == 0 && !durationOK {
 		log.Info().Str("session", sessionID).Msg("[EVA-MEMORY] Sessao vazia (0 turnos, <5s) — removendo spam")
-		_ = em.graph.DeleteNode(ctx, node.ID, "")
+		if err := em.graph.DeleteNode(ctx, node.ID, ""); err != nil {
+			log.Warn().Err(err).Str("node_id", node.ID).Msg("[EVA-MEMORY] Failed to delete empty session node")
+		}
 		return nil
 	}
 
@@ -238,7 +240,11 @@ func (em *EvaMemory) EndSession(ctx context.Context, sessionID string) error {
 
 	// P1-C FIX: Prevent infinite accumulation of EvaSession and EvaTurn nodes
 	// by pruning sessions older than the top 20 most recent ones asynchronously.
-	go em.pruneOldSessions(context.Background(), 20)
+	go func() {
+		pruneCtx, pruneCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer pruneCancel()
+		em.pruneOldSessions(pruneCtx, 20)
+	}()
 
 	return err
 }
@@ -259,11 +265,15 @@ func (em *EvaMemory) pruneOldSessions(ctx context.Context, keep int) {
 		turnIDs, err := em.graph.BfsWithEdgeType(ctx, node.ID, "HAS_TURN", 1, "")
 		if err == nil {
 			for _, tid := range turnIDs {
-				_ = em.graph.DeleteNode(ctx, tid, "")
+				if err := em.graph.DeleteNode(ctx, tid, ""); err != nil {
+					log.Warn().Err(err).Str("turn_id", tid).Msg("[EVA-MEMORY] Failed to delete turn node during prune")
+				}
 			}
 		}
 		// Delete the session node itself
-		_ = em.graph.DeleteNode(ctx, node.ID, "")
+		if err := em.graph.DeleteNode(ctx, node.ID, ""); err != nil {
+			log.Warn().Err(err).Str("node_id", node.ID).Msg("[EVA-MEMORY] Failed to delete session node during prune")
+		}
 		pruned++
 	}
 
