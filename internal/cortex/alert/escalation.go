@@ -380,7 +380,8 @@ func (s *EscalationService) GetContactsForElder(elderID int64) ([]CaregiverConta
 		return nil, fmt.Errorf("database not configured")
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	rows, err := s.db.QueryByLabel(ctx, "cuidadores",
 		" AND n.idoso_id = $idoso_id AND n.ativo = $ativo",
 		map[string]interface{}{
@@ -416,7 +417,8 @@ func (s *EscalationService) saveEscalationLog(result *EscalationResult) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	content := map[string]interface{}{
 		"alert_id":        result.AlertID,
 		"elder_name":      result.ElderName,

@@ -9,6 +9,7 @@ import (
 	"eva/internal/brainstem/push"
 	"fmt"
 	"log"
+	"time"
 )
 
 func GetDefaultTools() []interface{} {
@@ -877,7 +878,8 @@ func GetDefaultTools() []interface{} {
 
 // CheckUnacknowledgedAlerts verifica alertas não visualizados e escalona se necessário
 func CheckUnacknowledgedAlerts(db *database.DB, pushService *push.FirebaseService) error {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 
 	// Query unacknowledged critical/high alerts that need escalation
 	rows, err := db.QueryByLabel(ctx, "alertas",

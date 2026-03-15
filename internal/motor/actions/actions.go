@@ -36,7 +36,8 @@ func AlertFamily(db *database.DB, pushService *push.FirebaseService, emailServic
 
 // AlertFamilyWithSeverity envia alertas com niveis de severidade
 func AlertFamilyWithSeverity(db *database.DB, pushService *push.FirebaseService, emailService *email.EmailService, idosoID int64, reason, severity string) error {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
 	// 1. Buscar todos os cuidadores ativos (primarios e secundarios)
 	cuidadorRows, err := db.QueryByLabel(ctx, "cuidadores",
@@ -479,7 +480,8 @@ type InteracaoRisco struct {
 // CheckMedicationInteractions verifica se um medicamento tem interacoes perigosas
 // com os medicamentos atuais do idoso
 func CheckMedicationInteractions(db *database.DB, idosoID int64, novoMedicamento string) ([]InteracaoRisco, error) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 	log.Printf("[SAFETY] Verificando interacoes para: %s (Idoso: %d)", novoMedicamento, idosoID)
 
 	// 1. Get active medications for this idoso

@@ -71,8 +71,9 @@ func (m *MedicationIdentifier) IdentifyFromImage(
 	// 2. Create prompt for Gemini Vision
 	prompt := m.createPrompt(candidateMeds)
 
-	// 3. Call Gemini Vision API
-	ctx := context.Background()
+	// 3. Call Gemini Vision API (20s timeout for safety-critical medication checks)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
 	model := m.client.GenerativeModel("gemini-2.0-flash-exp")
 
 	// Configure model
