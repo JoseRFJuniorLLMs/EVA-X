@@ -933,6 +933,17 @@ func main() {
 		})
 		log.Info().Msg("MCP Server com busca vetorial ativada (NietzscheDB)")
 	}
+	// Wire AQL executor into MCP server (fixes nil/503 on /mcp/tools/aql)
+	if nzClient != nil {
+		aqlExec := aql.NewExecutor(nzClient.SDK())
+		if embedSvc != nil {
+			aqlExec.SetEmbedFunc(func(ctx context.Context, text string) ([]float32, error) {
+				return embedSvc.GenerateEmbedding(ctx, text)
+			})
+		}
+		mcpServer.SetAqlExecutor(aqlExec)
+		log.Info().Msg("🧬 MCP AQL Executor wired (semantic RECALL enabled)")
+	}
 	router.PathPrefix("/mcp").Handler(mcpServer)
 	log.Info().Msg("🔌 MCP Server montado em /mcp")
 
