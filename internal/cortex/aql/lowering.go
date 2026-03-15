@@ -31,7 +31,9 @@ func (e *Executor) executeRecall(ctx context.Context, stmt *Statement) (*Cogniti
 	// Primary: KNN vector search (if embedding function available)
 	if e.embedFunc != nil && stmt.Query != "" {
 		vec32, err := e.embedFunc(ctx, stmt.Query)
-		if err == nil {
+		if err != nil {
+			log.Printf("[AQL/RECALL] embedFunc failed (falling back to FTS): %v", err)
+		} else {
 			vec64 := float32ToFloat64(vec32)
 			knnResults, knnErr := e.client.KnnSearch(ctx, vec64, uint32(limit), col)
 			if knnErr == nil {
@@ -275,7 +277,9 @@ func (e *Executor) executeImprint(ctx context.Context, stmt *Statement) (*Cognit
 	var coords []float64
 	if e.embedFunc != nil {
 		vec32, err := e.embedFunc(ctx, stmt.Content)
-		if err == nil {
+		if err != nil {
+			log.Printf("[AQL/IMPRINT] embedFunc failed (node will have zero coords): %v", err)
+		} else {
 			coords = float32ToFloat64(vec32)
 			// Project into Poincare ball at magnitude 0.5
 			coords = projectToPoincare(coords, 0.5)
