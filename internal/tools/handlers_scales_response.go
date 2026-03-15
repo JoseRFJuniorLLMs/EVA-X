@@ -397,11 +397,13 @@ func (h *ToolsHandler) handleSubmitCSSRSResponse(idosoID int64, sessionID string
 			})
 		}
 
-		// Alerta tambem via push/email tradicional
+		// Alerta tambem via push/email tradicional — NUNCA suprimir erro aqui
 		if h.db != nil {
-			_ = actions.AlertFamilyWithSeverity(h.db, h.pushService, h.emailService, idosoID,
+			if alertErr := actions.AlertFamilyWithSeverity(h.db, h.pushService, h.emailService, idosoID,
 				fmt.Sprintf("EMERGENCIA: Risco suicida CRITICO detectado (C-SSRS Q%d positiva). ACAO IMEDIATA NECESSARIA.", questionNumber),
-				"critica")
+				"critica"); alertErr != nil {
+				log.Printf("🚨 CRITICAL: Failed to send suicide risk alert for patient %s: %v", idosoID, alertErr)
+			}
 		}
 	}
 
@@ -504,10 +506,12 @@ func (h *ToolsHandler) finalizeCSSRSAssessment(idosoID int64, assessmentID int64
 		})
 	}
 
-	// Alerta familia/equipe via sistema tradicional
+	// Alerta familia/equipe via sistema tradicional — NUNCA suprimir erro aqui
 	if h.db != nil {
-		_ = actions.AlertFamilyWithSeverity(h.db, h.pushService, h.emailService, idosoID,
-			alertMessage, alertSeverity)
+		if alertErr := actions.AlertFamilyWithSeverity(h.db, h.pushService, h.emailService, idosoID,
+			alertMessage, alertSeverity); alertErr != nil {
+			log.Printf("🚨 CRITICAL: Failed to send clinical alert for patient %s (severity=%s): %v", idosoID, alertSeverity, alertErr)
+		}
 	}
 
 	// 5. Retornar resultado

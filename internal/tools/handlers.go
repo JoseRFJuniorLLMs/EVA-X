@@ -1599,10 +1599,12 @@ func (h *ToolsHandler) handleApplyCSSRS(idosoID int64, triggerPhrase string, sta
 		})
 	}
 
-	// Também alertar via sistema de alertas
-	_ = actions.AlertFamilyWithSeverity(h.db, h.pushService, h.emailService, idosoID,
+	// Também alertar via sistema de alertas — NUNCA suprimir erro aqui
+	if alertErr := actions.AlertFamilyWithSeverity(h.db, h.pushService, h.emailService, idosoID,
 		fmt.Sprintf("🚨 ALERTA CRÍTICO: Avaliação de risco suicida iniciada. Frase: '%s'", triggerPhrase),
-		"critica")
+		"critica"); alertErr != nil {
+		log.Printf("🚨 CRITICAL: Failed to send C-SSRS initiation alert for patient %s: %v", idosoID, alertErr)
+	}
 
 	log.Printf("✅ [C-SSRS] Sessão CRÍTICA criada. Assessment ID: %d, Session ID: %s", assessmentID, sessionID)
 

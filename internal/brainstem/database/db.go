@@ -30,7 +30,14 @@ func nextID() int64 {
 
 // DB wraps NietzscheDB for the EVA data layer.
 type DB struct {
-	nz *nietzsche.NietzscheClient // NietzscheDB gRPC client
+	nz        *nietzsche.NietzscheClient // NietzscheDB gRPC client
+	aqlClient *nietzsche.NietzscheClient // AQL executor uses same client (alias for clarity)
+}
+
+// AqlClient returns the underlying NietzscheDB client for AQL operations.
+// The AQL executor (cortex/aql) uses this to dispatch cognitive verbs.
+func (db *DB) AqlClient() *nietzsche.NietzscheClient {
+	return db.nz
 }
 
 // NewNietzscheDB creates a DB backed by NietzscheDB gRPC.
