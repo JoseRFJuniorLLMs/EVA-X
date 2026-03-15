@@ -1760,9 +1760,11 @@ func (h *ToolsHandler) cancelAlarm(idosoID int64, alarmID string) (int, error) {
 		for _, row := range rows {
 			rowID := database.GetInt64(row, "id")
 			if rowID > 0 {
-				_ = h.db.Update(ctx, "alarmes",
+				if updErr := h.db.Update(ctx, "alarmes",
 					map[string]interface{}{"id": float64(rowID)},
-					map[string]interface{}{"ativo": false})
+					map[string]interface{}{"ativo": false}); updErr != nil {
+					log.Printf("⚠️ Failed to deactivate alarm (id=%d): %v", rowID, updErr)
+				}
 			}
 		}
 		log.Printf("⏰ [ALARM] %d alarmes cancelados para idoso %d", len(rows), idosoID)
@@ -2079,9 +2081,11 @@ func (h *ToolsHandler) handleCompleteTask(idosoID int64, args map[string]interfa
 			if strings.Contains(action, descLower) || strings.Contains(rawInput, descLower) {
 				completedID = database.GetInt64(row, "id")
 				completedAction = database.GetString(row, "next_action")
-				_ = h.db.Update(ctx, "gtd_tasks",
+				if updErr := h.db.Update(ctx, "gtd_tasks",
 					map[string]interface{}{"id": float64(completedID)},
-					map[string]interface{}{"status": "done", "completed_at": time.Now().Format(time.RFC3339)})
+					map[string]interface{}{"status": "done", "completed_at": time.Now().Format(time.RFC3339)}); updErr != nil {
+					log.Printf("⚠️ Failed to mark GTD task as done (id=%d): %v", completedID, updErr)
+				}
 				found = true
 				break
 			}

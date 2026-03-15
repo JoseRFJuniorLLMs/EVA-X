@@ -121,12 +121,14 @@ func AlertFamilyWithSeverity(db *database.DB, pushService *push.FirebaseService,
 				successCount++
 
 				// Registrar envio no banco
-				_ = db.Update(ctx, "alertas",
+				if updErr := db.Update(ctx, "alertas",
 					map[string]interface{}{"id": alertID},
 					map[string]interface{}{
 						"enviado":    true,
 						"data_envio": time.Now().Format(time.RFC3339),
-					})
+					}); updErr != nil {
+					log.Printf("⚠️ Failed to record alert delivery state (id=%v): %v", alertID, updErr)
+				}
 
 				log.Printf("Alert sent successfully to caregiver for %s", elderName)
 			} else {
@@ -140,12 +142,14 @@ func AlertFamilyWithSeverity(db *database.DB, pushService *push.FirebaseService,
 		log.Printf("WARNING: Nenhum push notification enviado com sucesso. Tentando fallbacks...")
 
 		// Registrar que o alerta precisa de escalamento
-		_ = db.Update(ctx, "alertas",
+		if updErr := db.Update(ctx, "alertas",
 			map[string]interface{}{"id": alertID},
 			map[string]interface{}{
 				"necessita_escalamento": true,
 				"ultima_tentativa":      time.Now().Format(time.RFC3339),
-			})
+			}); updErr != nil {
+			log.Printf("⚠️ Failed to mark alert for escalation (id=%v): %v", alertID, updErr)
+		}
 
 		// Fallback para Email
 		if emailService != nil {
@@ -167,12 +171,14 @@ func AlertFamilyWithSeverity(db *database.DB, pushService *push.FirebaseService,
 						log.Printf("Email de fallback enviado com sucesso para %s", cg.Email)
 						successCount++
 						// Marcar como enviado
-						_ = db.Update(ctx, "alertas",
+						if updErr := db.Update(ctx, "alertas",
 							map[string]interface{}{"id": alertID},
 							map[string]interface{}{
 								"enviado":    true,
 								"data_envio": time.Now().Format(time.RFC3339),
-							})
+							}); updErr != nil {
+							log.Printf("⚠️ Failed to mark alert as sent via email (id=%v): %v", alertID, updErr)
+						}
 					}
 				}
 			}
@@ -188,12 +194,14 @@ func AlertFamilyWithSeverity(db *database.DB, pushService *push.FirebaseService,
 	// 5. Para alertas criticos, marcar para escalonamento automatico
 	if severity == "critica" {
 		escalTime := time.Now().Add(5 * time.Minute).Format(time.RFC3339)
-		_ = db.Update(ctx, "alertas",
+		if updErr := db.Update(ctx, "alertas",
 			map[string]interface{}{"id": alertID},
 			map[string]interface{}{
 				"necessita_escalamento": true,
 				"tempo_escalamento":     escalTime,
-			})
+			}); updErr != nil {
+			log.Printf("⚠️ Failed to set critical alert escalation timer (id=%v): %v", alertID, updErr)
+		}
 
 		log.Printf("Alert critico - configurado para escalonamento em 5 minutos se nao visualizado")
 	}
@@ -236,12 +244,14 @@ func ConfirmMedication(db *database.DB, pushService *push.FirebaseService, idoso
 			// Check if the agendamento is for today
 			if len(dataHora) >= 10 && dataHora[:10] == todayStr {
 				agID := database.GetInt64(ag, "id")
-				_ = db.Update(ctx, "agendamentos",
+				if updErr := db.Update(ctx, "agendamentos",
 					map[string]interface{}{"id": agID},
 					map[string]interface{}{
 						"medicamento_tomado": true,
 						"status":             "concluido",
-					})
+					}); updErr != nil {
+					log.Printf("⚠️ Failed to mark medication schedule as completed (agendamento_id=%d): %v", agID, updErr)
+				}
 			}
 		}
 	}
