@@ -261,9 +261,13 @@ func main() {
 			return
 		}
 		// Energy Guard: prevent hotspots
-		_ = wiederkehrAdapter.CreateEnergyGuard(appCtx, "patient_graph", 0.85, "1h")
+		if err := wiederkehrAdapter.CreateEnergyGuard(appCtx, "patient_graph", 0.85, "1h"); err != nil {
+			log.Warn().Err(err).Msg("failed to create Wiederkehr EnergyGuard daemon")
+		}
 		// Decay Reaper: implement natural forgetting
-		_ = wiederkehrAdapter.CreateDecayReaper(appCtx, "patient_graph", 0.05, "24h")
+		if err := wiederkehrAdapter.CreateDecayReaper(appCtx, "patient_graph", 0.05, "24h"); err != nil {
+			log.Warn().Err(err).Msg("failed to create Wiederkehr DecayReaper daemon")
+		}
 		log.Info().Msg("NietzscheDB Wiederkehr daemons registered (EnergyGuard, DecayReaper)")
 	}()
 

@@ -834,10 +834,12 @@ func (h *HabitTracker) ensureDefaultHabits() {
 		if len(existing) > 0 {
 			// Already exists, ensure it is active
 			if !database.GetBool(existing[0], "active") {
-				_ = h.db.Update(ctx, "habits",
+				if err := h.db.Update(ctx, "habits",
 					map[string]interface{}{"name": d.name},
 					map[string]interface{}{"active": true},
-				)
+				); err != nil {
+					log.Printf("failed to reactivate default habit %s: %v", d.name, err)
+				}
 			}
 			continue
 		}

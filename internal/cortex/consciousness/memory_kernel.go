@@ -706,7 +706,9 @@ func (mk *MemoryKernel) applyDecay() {
 	if mk.onStore != nil && len(toSync) > 0 {
 		go func(traces []*MemoryTrace) {
 			for _, t := range traces {
-				_ = mk.onStore(t)
+				if err := mk.onStore(t); err != nil {
+					log.Warn().Err(err).Str("trace_id", t.ID).Msg("failed to sync memory trace energy decay to store")
+				}
 			}
 		}(toSync)
 	}

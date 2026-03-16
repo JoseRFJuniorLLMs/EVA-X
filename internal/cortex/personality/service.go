@@ -10,6 +10,7 @@ import (
 	"time"
 
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
+	"github.com/rs/zerolog/log"
 )
 
 // PersonalityState representa o estado emocional da relação EVA <-> Idoso
@@ -136,7 +137,9 @@ func (p *PersonalityService) UpdateAfterConversation(ctx context.Context, idosoI
 		if trait != "" {
 			// Energy migration: boost the energy of the activated trait in eva_core.
 			// This allows Zaratustra to evolve dominant traits over time.
-			_ = p.overlay.UpdateTraitEnergy(ctx, trait, 0.85)
+			if err := p.overlay.UpdateTraitEnergy(ctx, trait, 0.85); err != nil {
+				log.Warn().Err(err).Str("trait", trait).Msg("failed to update trait energy in personality overlay")
+			}
 		}
 	}
 

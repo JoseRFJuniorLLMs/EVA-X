@@ -707,22 +707,26 @@ func (l *AutonomousLearner) updateStatus(ctx context.Context, id int64, status, 
 	if errMsg != "" {
 		updates["error_message"] = errMsg
 	}
-	_ = l.db.Update(ctx, "eva_curriculum", map[string]interface{}{
+	if err := l.db.Update(ctx, "eva_curriculum", map[string]interface{}{
 		"id": id,
-	}, updates)
+	}, updates); err != nil {
+		log.Warn().Err(err).Int64("curriculum_id", id).Msgf("failed to update curriculum item status to %s", status)
+	}
 }
 
 func (l *AutonomousLearner) completeItem(ctx context.Context, id int64, insightsCount int) {
 	if l.db == nil {
 		return
 	}
-	_ = l.db.Update(ctx, "eva_curriculum", map[string]interface{}{
+	if err := l.db.Update(ctx, "eva_curriculum", map[string]interface{}{
 		"id": id,
 	}, map[string]interface{}{
 		"status":         "completed",
 		"completed_at":   time.Now().Format(time.RFC3339),
 		"insights_count": insightsCount,
-	})
+	}); err != nil {
+		log.Warn().Err(err).Int64("curriculum_id", id).Msg("failed to mark curriculum item as completed")
+	}
 }
 
 // contentToCurriculumItem converts a NietzscheDB content map to a CurriculumItem.
