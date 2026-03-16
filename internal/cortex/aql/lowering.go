@@ -88,6 +88,9 @@ func (e *Executor) executeRecall(ctx context.Context, stmt *Statement) (*Cogniti
 		return nil, err
 	}
 
+	// Post-filter by confidence/recency/valence
+	nodes = e.applyFilters(ctx, nodes, stmt)
+
 	// Side-effect: boost energy of accessed nodes (async, non-blocking)
 	sideEffects := []string{"BoostAccessedNodes"}
 	nodeIDs := make([]string, 0, len(nodes))
@@ -159,9 +162,69 @@ func (e *Executor) executeResonate(ctx context.Context, stmt *Statement) (*Cogni
 		nodes = append(nodes, CognitiveNode{ID: id})
 	}
 
+	// Post-filter by confidence/recency/valence
+	nodes = e.applyFilters(ctx, nodes, stmt)
+
+	// Side-effect: create a pattern node linking resonating nodes (async, non-blocking)
+	sideEffects := []string{"RecordResonancePattern"}
+	if len(nodes) > 1 {
+		sideEffects = append(sideEffects, "CreatePatternNode")
+		resonantIDs := make([]string, 0, len(nodes))
+		for _, n := range nodes {
+			if n.ID != "" {
+				resonantIDs = append(resonantIDs, n.ID)
+			}
+		}
+		go func(ids []string, collection string, query string) {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Warn().Interface("panic", r).Msg("[AQL/RESONATE] pattern node panic recovered")
+				}
+			}()
+			patternCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			// Create a semantic node that represents the resonance pattern
+			patternContent := map[string]interface{}{
+				"node_label":    "Pattern",
+				"description":   fmt.Sprintf("Resonance pattern: %s", query),
+				"source_count":  len(ids),
+				"pattern_type":  "resonance",
+			}
+			patternResult, insertErr := e.client.InsertNode(patternCtx, nietzsche.InsertNodeOpts{
+				Content:    patternContent,
+				Energy:     0.4,
+				NodeType:   "Semantic",
+				Collection: collection,
+			})
+			if insertErr != nil {
+				log.Warn().Err(insertErr).Msg("[AQL/RESONATE] CreatePatternNode InsertNode failed")
+				return
+			}
+
+			// Link pattern node to source nodes (limit to first 10 to avoid flooding)
+			linkLimit := 10
+			if len(ids) < linkLimit {
+				linkLimit = len(ids)
+			}
+			for _, srcID := range ids[:linkLimit] {
+				_, linkErr := e.client.InsertEdge(patternCtx, nietzsche.InsertEdgeOpts{
+					From:       patternResult.ID,
+					To:         srcID,
+					EdgeType:   "RESONANCE_SOURCE",
+					Weight:     1.0,
+					Collection: collection,
+				})
+				if linkErr != nil {
+					log.Warn().Err(linkErr).Str("to", srcID).Msg("[AQL/RESONATE] LinkSourceEpisodes InsertEdge failed")
+				}
+			}
+		}(resonantIDs, col, stmt.Query)
+	}
+
 	return &CognitiveResult{
 		Nodes:    nodes,
-		Metadata: ResultMetadata{SideEffects: []string{"RecordResonancePattern"}},
+		Metadata: ResultMetadata{SideEffects: sideEffects},
 	}, nil
 }
 
@@ -312,6 +375,10 @@ func (e *Executor) executeTrace(ctx context.Context, stmt *Statement) (*Cognitiv
 			}
 		}(pathIDs, col)
 	}
+
+	// TODO(side-effect): TRACE could create an episodic "path traversed" node recording
+	// the full path from source to target, enabling EVA to remember which routes it explored.
+	// When implemented, spawn a goroutine with timeout and panic recovery.
 
 	return &CognitiveResult{
 		Nodes:    nodes,
@@ -532,6 +599,11 @@ func (e *Executor) executeDistill(ctx context.Context, stmt *Statement) (*Cognit
 		})
 	}
 
+	// TODO(side-effect): DISTILL could create summary nodes for each community cluster
+	// by synthesizing the representative nodes. This is expensive (requires LLM call per
+	// community) so it is deferred. When implemented, spawn a goroutine with timeout
+	// and panic recovery, similar to RESONATE's CreatePatternNode.
+
 	return &CognitiveResult{
 		Nodes:    nodes,
 		Metadata: ResultMetadata{SideEffects: []string{"CreatePatternNode", "LinkSourceEpisodes"}},
@@ -646,11 +718,15 @@ func (e *Executor) executeDescend(ctx context.Context, stmt *Statement) (*Cognit
 		if mag > sourceMag {
 			nodes = append(nodes, CognitiveNode{
 				ID:        h.id,
+				Energy:    h.nr.Energy,
 				Magnitude: float32(mag),
 				Metadata:  map[string]interface{}{"magnitude": mag, "depth_delta": mag - sourceMag},
 			})
 		}
 	}
+
+	// Post-filter by confidence/recency/valence
+	nodes = e.applyFilters(ctx, nodes, stmt)
 
 	return &CognitiveResult{Nodes: nodes}, nil
 }
@@ -722,11 +798,15 @@ func (e *Executor) executeAscend(ctx context.Context, stmt *Statement) (*Cogniti
 		if mag < sourceMag {
 			nodes = append(nodes, CognitiveNode{
 				ID:        h.id,
+				Energy:    h.nr.Energy,
 				Magnitude: float32(mag),
 				Metadata:  map[string]interface{}{"magnitude": mag, "depth_delta": sourceMag - mag},
 			})
 		}
 	}
+
+	// Post-filter by confidence/recency/valence
+	nodes = e.applyFilters(ctx, nodes, stmt)
 
 	return &CognitiveResult{Nodes: nodes}, nil
 }
@@ -794,11 +874,15 @@ func (e *Executor) executeOrbit(ctx context.Context, stmt *Statement) (*Cognitiv
 		if math.Abs(mag-sourceMag) <= tolerance {
 			nodes = append(nodes, CognitiveNode{
 				ID:        h.id,
+				Energy:    h.nr.Energy,
 				Magnitude: float32(mag),
 				Metadata:  map[string]interface{}{"magnitude": mag, "mag_delta": math.Abs(mag - sourceMag)},
 			})
 		}
 	}
+
+	// Post-filter by confidence/recency/valence
+	nodes = e.applyFilters(ctx, nodes, stmt)
 
 	return &CognitiveResult{Nodes: nodes}, nil
 }
@@ -862,6 +946,9 @@ func (e *Executor) executeImagine(ctx context.Context, stmt *Statement) (*Cognit
 		return nil, fmt.Errorf("IMAGINE search failed: %w", err)
 	}
 
+	// Post-filter by confidence/recency/valence
+	nodes = e.applyFilters(ctx, nodes, stmt)
+
 	return &CognitiveResult{
 		Nodes:    nodes,
 		Metadata: ResultMetadata{SideEffects: []string{"CounterfactualBranch"}},
@@ -869,6 +956,103 @@ func (e *Executor) executeImagine(ctx context.Context, stmt *Statement) (*Cognit
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
+
+// ── Post-filters — apply Confidence / Recency / Valence after search ──
+
+// applyFilters hydrates nodes with data from NietzscheDB and filters by
+// confidence (energy floor), recency (creation time), and valence (content field).
+// Nodes that cannot be hydrated are kept (fail-open for robustness).
+func (e *Executor) applyFilters(ctx context.Context, nodes []CognitiveNode, stmt *Statement) []CognitiveNode {
+	needsHydrate := stmt.Confidence > 0 || stmt.Recency != "" || stmt.Valence != ""
+	if !needsHydrate || len(nodes) == 0 {
+		return nodes
+	}
+
+	col := e.collection(stmt)
+	now := time.Now()
+
+	// Determine recency cutoff
+	var recencyCutoff time.Time
+	switch stmt.Recency {
+	case RecencyFresh:
+		recencyCutoff = now.Add(-5 * time.Minute)
+	case RecencyRecent:
+		recencyCutoff = now.Add(-1 * time.Hour)
+	case RecencyDistant:
+		recencyCutoff = now.Add(-24 * time.Hour)
+	case RecencyAncient:
+		// no time filter
+	}
+
+	filtered := make([]CognitiveNode, 0, len(nodes))
+	for i := range nodes {
+		n := &nodes[i]
+		if n.ID == "" {
+			filtered = append(filtered, *n)
+			continue
+		}
+
+		nr, err := e.client.GetNode(ctx, n.ID, col)
+		if err != nil || !nr.Found {
+			// Can't hydrate — keep node (fail-open)
+			filtered = append(filtered, *n)
+			continue
+		}
+
+		// Populate CognitiveNode fields from hydrated data
+		n.Energy = nr.Energy
+		n.NodeType = nr.NodeType
+		if nr.CreatedAt > 0 {
+			t := time.Unix(nr.CreatedAt, 0)
+			n.CreatedAt = &t
+		}
+
+		// Extract valence from content if present
+		if v, ok := nr.Content["valence"]; ok {
+			switch vt := v.(type) {
+			case float64:
+				n.Valence = float32(vt)
+			case float32:
+				n.Valence = vt
+			}
+		}
+
+		// Filter: confidence (energy floor)
+		if stmt.Confidence > 0 && nr.Energy < stmt.Confidence {
+			continue
+		}
+
+		// Filter: recency (creation time)
+		if !recencyCutoff.IsZero() && nr.CreatedAt > 0 {
+			created := time.Unix(nr.CreatedAt, 0)
+			if created.Before(recencyCutoff) {
+				continue
+			}
+		}
+
+		// Filter: valence polarity
+		if stmt.Valence != "" {
+			switch stmt.Valence {
+			case ValencePositive:
+				if n.Valence <= 0 {
+					continue
+				}
+			case ValenceNegative:
+				if n.Valence >= 0 {
+					continue
+				}
+			case ValenceNeutral:
+				if n.Valence > 0.1 || n.Valence < -0.1 {
+					continue
+				}
+			}
+		}
+
+		filtered = append(filtered, *n)
+	}
+
+	return filtered
+}
 
 // vectorMagnitude computes the Euclidean norm of a Poincaré embedding.
 // In the Poincaré ball, magnitude ∝ depth in hierarchy.
@@ -1031,6 +1215,16 @@ func ParseStatement(raw string) (*Statement, error) {
 		case "EDGE_TYPE":
 			if i+1 < len(parts) {
 				stmt.EdgeType = restoreQuoted(parts[i+1], quotedStrings)
+				i++
+			}
+		case "RECENCY":
+			if i+1 < len(parts) {
+				stmt.Recency = RecencyDegree(strings.ToLower(restoreQuoted(parts[i+1], quotedStrings)))
+				i++
+			}
+		case "VALENCE":
+			if i+1 < len(parts) {
+				stmt.Valence = ValenceSpec(strings.ToLower(restoreQuoted(parts[i+1], quotedStrings)))
 				i++
 			}
 		}

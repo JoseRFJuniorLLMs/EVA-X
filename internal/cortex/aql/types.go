@@ -118,10 +118,10 @@ type Statement struct {
 	Premise    string            `json:"premise,omitempty"`     // IMAGINE
 	Collection string            `json:"collection,omitempty"`  // target collection
 	Limit      int               `json:"limit,omitempty"`
-	Confidence float32           `json:"confidence,omitempty"`  // epistemic confidence floor  // TODO: implement filtering
-	Mood       MoodState         `json:"mood,omitempty"`        // TODO: implement filtering
-	Valence    ValenceSpec       `json:"valence,omitempty"`     // TODO: implement filtering
-	Recency    RecencyDegree     `json:"recency,omitempty"`     // TODO: implement filtering
+	Confidence float32           `json:"confidence,omitempty"`  // epistemic confidence floor (filters nodes with energy < threshold)
+	Mood       MoodState         `json:"mood,omitempty"`        // TODO: implement mood-based planner behavior
+	Valence    ValenceSpec       `json:"valence,omitempty"`     // filter by emotional polarity (positive/negative/neutral)
+	Recency    RecencyDegree     `json:"recency,omitempty"`     // filter by temporal proximity (fresh/recent/distant/ancient)
 	Epistemic  EpistemicType     `json:"epistemic,omitempty"`   // IMPRINT type
 	Energy     float32           `json:"energy,omitempty"`      // IMPRINT initial energy
 	Depth      int               `json:"depth,omitempty"`       // DESCEND, ASCEND, RESONATE, TRACE
