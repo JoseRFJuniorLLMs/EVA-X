@@ -201,40 +201,19 @@ func (ge *GraphEvolutionEngine) DetectFusionCandidates() []*EvolutionProposal {
 		return nil
 	}
 
-	ge.memoryKernel.mu.RLock()
-	defer ge.memoryKernel.mu.RUnlock()
+	pairs := ge.memoryKernel.FindFusionCandidates(ge.fusionThreshold)
 
-	proposals := make([]*EvolutionProposal, 0)
-
-	// Percorrer todas as zonas de memoria procurando pares com alta associacao
-	for _, traces := range ge.memoryKernel.zones {
-		traceList := make([]*MemoryTrace, 0, len(traces))
-		for _, t := range traces {
-			traceList = append(traceList, t)
+	proposals := make([]*EvolutionProposal, 0, len(pairs))
+	for _, pair := range pairs {
+		proposal := &EvolutionProposal{
+			ID:          uuid.New().String(),
+			Type:        Fusion,
+			Description: "Alta associacao mutua detectada",
+			SourceNodes: []string{pair[0], pair[1]},
+			Confidence:  ge.fusionThreshold, // conservative: at least threshold
+			Timestamp:   time.Now(),
 		}
-
-		for i := 0; i < len(traceList); i++ {
-			for j := i + 1; j < len(traceList); j++ {
-				// Verificar associacao mutua forte
-				strength1, ok1 := traceList[i].Associations[traceList[j].ID]
-				strength2, ok2 := traceList[j].Associations[traceList[i].ID]
-
-				if ok1 && ok2 {
-					avgStrength := (strength1 + strength2) / 2.0
-					if avgStrength >= ge.fusionThreshold {
-						proposal := &EvolutionProposal{
-							ID:          uuid.New().String(),
-							Type:        Fusion,
-							Description: "Alta associacao mutua detectada",
-							SourceNodes: []string{traceList[i].ID, traceList[j].ID},
-							Confidence:  avgStrength,
-							Timestamp:   time.Now(),
-						}
-						proposals = append(proposals, proposal)
-					}
-				}
-			}
-		}
+		proposals = append(proposals, proposal)
 	}
 
 	return proposals
@@ -246,28 +225,23 @@ func (ge *GraphEvolutionEngine) DetectFissionCandidates() []*EvolutionProposal {
 		return nil
 	}
 
-	ge.memoryKernel.mu.RLock()
-	defer ge.memoryKernel.mu.RUnlock()
+	overloaded := ge.memoryKernel.FindOverloadedTraces(ge.fissionThreshold)
 
-	proposals := make([]*EvolutionProposal, 0)
-
-	for _, traces := range ge.memoryKernel.zones {
-		for id, trace := range traces {
-			if len(trace.Associations) >= ge.fissionThreshold {
-				proposal := &EvolutionProposal{
-					ID:          uuid.New().String(),
-					Type:        Fission,
-					Description: "Conceito com excesso de associacoes",
-					SourceNodes: []string{id},
-					Confidence:  float64(len(trace.Associations)) / float64(ge.fissionThreshold*2),
-					Timestamp:   time.Now(),
-				}
-				if proposal.Confidence > 1.0 {
-					proposal.Confidence = 1.0
-				}
-				proposals = append(proposals, proposal)
-			}
+	proposals := make([]*EvolutionProposal, 0, len(overloaded))
+	for _, item := range overloaded {
+		confidence := float64(item.Count) / float64(ge.fissionThreshold*2)
+		if confidence > 1.0 {
+			confidence = 1.0
 		}
+		proposal := &EvolutionProposal{
+			ID:          uuid.New().String(),
+			Type:        Fission,
+			Description: "Conceito com excesso de associacoes",
+			SourceNodes: []string{item.ID},
+			Confidence:  confidence,
+			Timestamp:   time.Now(),
+		}
+		proposals = append(proposals, proposal)
 	}
 
 	return proposals
@@ -279,20 +253,7 @@ func (ge *GraphEvolutionEngine) PruneWeakConnections() int {
 		return 0
 	}
 
-	ge.memoryKernel.mu.Lock()
-	defer ge.memoryKernel.mu.Unlock()
-
-	pruned := 0
-	for _, traces := range ge.memoryKernel.zones {
-		for _, trace := range traces {
-			for assocID, strength := range trace.Associations {
-				if strength < ge.pruneThreshold {
-					delete(trace.Associations, assocID)
-					pruned++
-				}
-			}
-		}
-	}
+	pruned := ge.memoryKernel.PruneWeakAssociations(ge.pruneThreshold)
 
 	if pruned > 0 {
 		ge.totalPruned.Add(int64(pruned))
@@ -308,45 +269,20 @@ func (ge *GraphEvolutionEngine) DetectEmergentConcepts() []*EvolutionProposal {
 		return nil
 	}
 
-	ge.memoryKernel.mu.RLock()
-	defer ge.memoryKernel.mu.RUnlock()
+	clusters := ge.memoryKernel.FindEmergentClusters(ge.abstractionThreshold)
 
-	proposals := make([]*EvolutionProposal, 0)
-
-	// Encontrar clusters de memorias altamente conectadas que nao tem um "hub"
-	// Usar heuristica: 3+ memorias que se associam entre si
-	for _, traces := range ge.memoryKernel.zones {
-		for id1, t1 := range traces {
-			cluster := []string{id1}
-
-			for id2 := range t1.Associations {
-				if t2, ok := traces[id2]; ok {
-					// Verificar se t2 tambem se associa a outros no cluster
-					sharedConnections := 0
-					for _, clusterID := range cluster {
-						if _, hasAssoc := t2.Associations[clusterID]; hasAssoc {
-							sharedConnections++
-						}
-					}
-					if sharedConnections > 0 {
-						cluster = append(cluster, id2)
-					}
-				}
-			}
-
-			if len(cluster) >= ge.abstractionThreshold {
-				proposal := &EvolutionProposal{
-					ID:           uuid.New().String(),
-					Type:         Emergence,
-					Description:  "Cluster de conceitos inter-conectados detectado",
-					SourceNodes:  cluster,
-					Confidence:   math.Min(1.0, float64(len(cluster))/5.0),
-					EnergyImpact: 0.3,
-					Timestamp:    time.Now(),
-				}
-				proposals = append(proposals, proposal)
-			}
+	proposals := make([]*EvolutionProposal, 0, len(clusters))
+	for _, cluster := range clusters {
+		proposal := &EvolutionProposal{
+			ID:           uuid.New().String(),
+			Type:         Emergence,
+			Description:  "Cluster de conceitos inter-conectados detectado",
+			SourceNodes:  cluster,
+			Confidence:   math.Min(1.0, float64(len(cluster))/5.0),
+			EnergyImpact: 0.3,
+			Timestamp:    time.Now(),
 		}
+		proposals = append(proposals, proposal)
 	}
 
 	return proposals

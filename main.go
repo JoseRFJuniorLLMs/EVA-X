@@ -706,6 +706,11 @@ func main() {
 			return results, nil
 		},
 	)
+	// Wire AQL executor into MemoryKernel so IMPRINT/ASSOCIATE side-effects work
+	if aqlExec != nil {
+		memKernel.SetAqlExecutor(aqlExec)
+		log.Info().Msg("🧬 COS: MemoryKernel AQL executor wired (IMPRINT/ASSOCIATE side-effects active)")
+	}
 	memKernel.Start(appCtx)
 	log.Info().Msg("🧠 COS: Memory Kernel iniciado (WM/EM/SM/PM + spreading activation + DB sync)")
 

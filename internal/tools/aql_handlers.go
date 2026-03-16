@@ -4,6 +4,12 @@
 // AQL Tool Handlers — expose AQL (Agent Query Language) cognitive verbs
 // as EVA voice/text tools. These handlers bridge EVA's tool system with
 // the AQL executor, allowing the LLM to express cognitive intent directly.
+//
+// TODO: The handler signature func(idosoID, args) does not carry a context.Context.
+// All handlers create context.WithTimeout(context.Background(), ...) as a workaround.
+// Ideally, the tool dispatch layer should propagate the caller's context so that
+// cancellation (e.g. client disconnect) is respected. Until then, each handler
+// enforces its own timeout to prevent unbounded gRPC calls.
 
 package tools
 

@@ -682,19 +682,8 @@ func (d *HubDetectorDaemon) detectHubs() {
 		return
 	}
 
-	d.memoryKernel.mu.RLock()
-	defer d.memoryKernel.mu.RUnlock()
-
-	hubs := make([]string, 0)
 	hubThreshold := 3 // Minimo de associacoes para ser hub
-
-	for _, traces := range d.memoryKernel.zones {
-		for id, trace := range traces {
-			if len(trace.Associations) >= hubThreshold {
-				hubs = append(hubs, id)
-			}
-		}
-	}
+	hubs := d.memoryKernel.FindHubs(hubThreshold)
 
 	d.mu.Lock()
 	d.currentHubs = hubs

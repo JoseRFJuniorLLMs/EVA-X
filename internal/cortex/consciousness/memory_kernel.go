@@ -163,6 +163,8 @@ func NewMemoryKernel(bus *ThoughtBus, cfg MemoryKernelConfig) *MemoryKernel {
 // 1. Subscreve ao ThoughtBus para eventos de memoria
 // 2. Inicia goroutine de decay energetico
 func (mk *MemoryKernel) Start(ctx context.Context) {
+	// TODO: refactor to pass ctx per-call instead of storing as struct field (Go anti-pattern).
+	// Stored ctx is used by Store() and Associate() for AQL calls; should receive ctx as parameter.
 	mk.ctx = ctx
 
 	// Subscrever a eventos de memoria no ThoughtBus
@@ -447,7 +449,17 @@ func (mk *MemoryKernel) Consolidate() int {
 			// P1-D: sync zone transition and energy state
 			if mk.onStore != nil {
 				clone := *trace
-				go mk.onStore(&clone)
+				storeFunc := mk.onStore
+				go func() {
+					defer func() {
+						if r := recover(); r != nil {
+							log.Error().Interface("panic", r).Msg("[MemoryKernel] onStore panic recovered (Consolidate)")
+						}
+					}()
+					if err := storeFunc(&clone); err != nil {
+						log.Warn().Err(err).Str("trace_id", clone.ID).Msg("[MemoryKernel] onStore failed (Consolidate)")
+					}
+				}()
 			}
 		}
 	}
@@ -564,7 +576,17 @@ func (mk *MemoryKernel) activateTrace(traceID string, boost float64) {
 			// P1-D: sync activation boost
 			if mk.onStore != nil {
 				clone := *trace
-				go mk.onStore(&clone)
+				storeFunc := mk.onStore
+				go func() {
+					defer func() {
+						if r := recover(); r != nil {
+							log.Error().Interface("panic", r).Msg("[MemoryKernel] onStore panic recovered (activateTrace)")
+						}
+					}()
+					if err := storeFunc(&clone); err != nil {
+						log.Warn().Err(err).Str("trace_id", clone.ID).Msg("[MemoryKernel] onStore failed (activateTrace)")
+					}
+				}()
 			}
 			return
 		}
@@ -761,7 +783,17 @@ func (mk *MemoryKernel) evictOldestFromWorking() {
 			// P1-D: sync zone transition and energy state
 			if mk.onStore != nil {
 				clone := *evicted
-				go mk.onStore(&clone)
+				storeFunc := mk.onStore
+				go func() {
+					defer func() {
+						if r := recover(); r != nil {
+							log.Error().Interface("panic", r).Msg("[MemoryKernel] onStore panic recovered (evictOldestFromWorking)")
+						}
+					}()
+					if err := storeFunc(&clone); err != nil {
+						log.Warn().Err(err).Str("trace_id", clone.ID).Msg("[MemoryKernel] onStore failed (evictOldestFromWorking)")
+					}
+				}()
 			}
 		}
 		delete(working, lowestID)
@@ -801,6 +833,120 @@ func (mk *MemoryKernel) GetStatistics() map[string]interface{} {
 		"total_spread":    mk.totalSpread.Load(),
 		"wm_capacity":     mk.workingMemoryCapacity,
 	}
+}
+
+// FindHubs returns IDs of memory traces that have at least minAssociations
+// associations. Encapsulates the internal lock so callers never touch mu.
+func (mk *MemoryKernel) FindHubs(minAssociations int) []string {
+	mk.mu.RLock()
+	defer mk.mu.RUnlock()
+
+	var hubs []string
+	for _, traces := range mk.zones {
+		for id, trace := range traces {
+			if len(trace.Associations) >= minAssociations {
+				hubs = append(hubs, id)
+			}
+		}
+	}
+	return hubs
+}
+
+// FindFusionCandidates returns pairs of trace IDs whose mutual association
+// strength averages at or above threshold. Encapsulates the internal lock.
+func (mk *MemoryKernel) FindFusionCandidates(threshold float64) [][2]string {
+	mk.mu.RLock()
+	defer mk.mu.RUnlock()
+
+	var pairs [][2]string
+	for _, traces := range mk.zones {
+		traceList := make([]*MemoryTrace, 0, len(traces))
+		for _, t := range traces {
+			traceList = append(traceList, t)
+		}
+		for i := 0; i < len(traceList); i++ {
+			for j := i + 1; j < len(traceList); j++ {
+				strength1, ok1 := traceList[i].Associations[traceList[j].ID]
+				strength2, ok2 := traceList[j].Associations[traceList[i].ID]
+				if ok1 && ok2 {
+					avg := (strength1 + strength2) / 2.0
+					if avg >= threshold {
+						pairs = append(pairs, [2]string{traceList[i].ID, traceList[j].ID})
+					}
+				}
+			}
+		}
+	}
+	return pairs
+}
+
+// FindOverloadedTraces returns IDs of traces with at least minAssociations,
+// along with their association count. Used to detect fission candidates.
+func (mk *MemoryKernel) FindOverloadedTraces(minAssociations int) []struct{ ID string; Count int } {
+	mk.mu.RLock()
+	defer mk.mu.RUnlock()
+
+	var results []struct{ ID string; Count int }
+	for _, traces := range mk.zones {
+		for id, trace := range traces {
+			if len(trace.Associations) >= minAssociations {
+				results = append(results, struct{ ID string; Count int }{ID: id, Count: len(trace.Associations)})
+			}
+		}
+	}
+	return results
+}
+
+// PruneWeakAssociations removes associations weaker than threshold from all
+// traces. Returns the number of pruned associations. Encapsulates write lock.
+func (mk *MemoryKernel) PruneWeakAssociations(threshold float64) int {
+	mk.mu.Lock()
+	defer mk.mu.Unlock()
+
+	pruned := 0
+	for _, traces := range mk.zones {
+		for _, trace := range traces {
+			for assocID, strength := range trace.Associations {
+				if strength < threshold {
+					delete(trace.Associations, assocID)
+					pruned++
+				}
+			}
+		}
+	}
+	return pruned
+}
+
+// FindEmergentClusters returns clusters of trace IDs that are mutually
+// connected (each cluster member shares associations with at least one other
+// member). Only clusters of size >= minSize are returned.
+func (mk *MemoryKernel) FindEmergentClusters(minSize int) [][]string {
+	mk.mu.RLock()
+	defer mk.mu.RUnlock()
+
+	var clusters [][]string
+	for _, traces := range mk.zones {
+		for id1, t1 := range traces {
+			cluster := []string{id1}
+			for id2 := range t1.Associations {
+				if t2, ok := traces[id2]; ok {
+					sharedConnections := 0
+					for _, clusterID := range cluster {
+						if _, hasAssoc := t2.Associations[clusterID]; hasAssoc {
+							sharedConnections++
+						}
+					}
+					if sharedConnections > 0 {
+						cluster = append(cluster, id2)
+					}
+				}
+			}
+			if len(cluster) >= minSize {
+				clusters = append(clusters, cluster)
+			}
+		}
+	}
+	return clusters
 }
 
 // sortByRelevance ordena memorias por energia * activacao (in-place)

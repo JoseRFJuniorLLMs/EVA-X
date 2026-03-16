@@ -14,12 +14,20 @@ import (
 	"strings"
 	"time"
 
+	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
+
 	nietzsche "nietzsche-sdk"
 )
 
 // ── searchNodes — core search without side-effects ───────────────────
 // Used internally by ORBIT, RESONATE, DESCEND, ASCEND, IMAGINE to find
 // seed nodes without spawning energy-boost goroutines.
+//
+// TODO(nql-rewrite): searchNodes uses raw SDK KnnSearch/FullTextSearch which
+// bypass the NQL RewriteNQL() rewriter. This is fine for KNN/FTS (they search
+// by vector/text, not by node type label), but if NQL queries are added here
+// in the future, they MUST be passed through nietzscheInfra.RewriteNQL() so
+// custom node types (e.g. "User") are rewritten to Semantic + node_label filter.
 
 func (e *Executor) searchNodes(ctx context.Context, query string, collection string, k int) ([]CognitiveNode, error) {
 	var nodes []CognitiveNode
@@ -32,27 +40,29 @@ func (e *Executor) searchNodes(ctx context.Context, query string, collection str
 		} else {
 			vec64 := float32ToFloat64(vec32)
 			knnResults, knnErr := e.client.KnnSearch(ctx, vec64, uint32(k), collection)
-			if knnErr == nil {
-				for _, r := range knnResults {
-					nodes = append(nodes, CognitiveNode{
-						ID:       r.ID,
-						Metadata: map[string]interface{}{"distance": r.Distance},
-					})
-				}
+			if knnErr != nil {
+				return nil, fmt.Errorf("searchNodes KNN: %w", knnErr)
+			}
+			for _, r := range knnResults {
+				nodes = append(nodes, CognitiveNode{
+					ID:       r.ID,
+					Metadata: map[string]interface{}{"distance": r.Distance},
+				})
 			}
 		}
 	}
 
 	// Fallback: full-text search
 	if len(nodes) == 0 && query != "" {
-		ftResults, err := e.client.FullTextSearch(ctx, query, collection, uint32(k))
-		if err == nil {
-			for _, r := range ftResults {
-				nodes = append(nodes, CognitiveNode{
-					ID:       r.NodeID,
-					Metadata: map[string]interface{}{"fts_score": r.Score},
-				})
-			}
+		ftResults, ftErr := e.client.FullTextSearch(ctx, query, collection, uint32(k))
+		if ftErr != nil {
+			return nil, fmt.Errorf("searchNodes FTS: %w", ftErr)
+		}
+		for _, r := range ftResults {
+			nodes = append(nodes, CognitiveNode{
+				ID:       r.NodeID,
+				Metadata: map[string]interface{}{"fts_score": r.Score},
+			})
 		}
 	}
 
@@ -325,6 +335,12 @@ func (e *Executor) executeImprint(ctx context.Context, stmt *Statement) (*Cognit
 	for k, v := range stmt.Metadata {
 		contentMap[k] = v
 	}
+
+	// Normalize node type: custom types (e.g. "User", "Clinic") become "Semantic"
+	// with node_label injected into content. This matches the NQL rewriter convention
+	// so queries via MATCH (n:User) → MATCH (n:Semantic) WHERE n.node_label = "User"
+	// will find nodes inserted through AQL IMPRINT.
+	nodeType, contentMap = nietzscheInfra.NormalizeContent(nodeType, contentMap)
 
 	// Generate embedding for coordinates
 	var coords []float64
@@ -620,7 +636,12 @@ func (e *Executor) executeOrbit(ctx context.Context, stmt *Statement) (*Cognitiv
 	}
 	sourceMag := vectorMagnitude(sourceNode.Embedding)
 
-	tolerance := sourceMag * 0.2
+	// Use parsed radius if provided; otherwise default to 20% of source magnitude
+	toleranceFactor := 0.2
+	if stmt.Radius > 0 {
+		toleranceFactor = float64(stmt.Radius)
+	}
+	tolerance := sourceMag * toleranceFactor
 	if tolerance < 0.05 {
 		tolerance = 0.05
 	}
@@ -652,6 +673,8 @@ func (e *Executor) executeDream(ctx context.Context, stmt *Statement) (*Cognitiv
 
 	if stmt.Topic != "" {
 		// Start a dream exploration via NQL DREAM command
+		// TODO(nql-rewrite): If DREAM NQL ever uses MATCH with custom types,
+		// pass through nietzscheInfra.RewriteNQL() before e.client.Query().
 		nql := "DREAM FROM $seed"
 		if stmt.Depth > 0 {
 			nql = fmt.Sprintf("DREAM FROM $seed DEPTH %d", stmt.Depth)
