@@ -284,12 +284,17 @@ func (e *Executor) executeReflect(ctx context.Context, stmt *Statement) (*Cognit
 			return nil, fmt.Errorf("REFLECT synthesis failed: %w", err)
 		}
 		if synthResult != nil {
-			return &CognitiveResult{
-				Nodes: []CognitiveNode{{
-					ID:       synthResult.NearestNodeID,
-					Metadata: map[string]interface{}{"nearest_distance": synthResult.NearestDistance, "synthesis_coords": synthResult.SynthesisCoords},
-				}},
-			}, nil
+			cn := CognitiveNode{
+				ID:       synthResult.NearestNodeID,
+				Metadata: map[string]interface{}{"nearest_distance": synthResult.NearestDistance, "synthesis_coords": synthResult.SynthesisCoords},
+			}
+			// Hydrate synthesis node with Content/Energy
+			if nr, getErr := e.client.GetNode(ctx, synthResult.NearestNodeID, col); getErr == nil && nr.Found {
+				cn.Content = extractContentString(nr.Content)
+				cn.Energy = nr.Energy
+				cn.NodeType = nr.NodeType
+			}
+			return &CognitiveResult{Nodes: []CognitiveNode{cn}}, nil
 		}
 	}
 
@@ -406,14 +411,20 @@ func (e *Executor) executeTrace(ctx context.Context, stmt *Statement) (*Cognitiv
 		current = bestID
 	}
 
-	// Build result from reconstructed path
+	// Build result from reconstructed path — hydrate with Content/Energy
 	var nodes []CognitiveNode
 	for _, id := range path {
 		cost := costOf[id]
-		nodes = append(nodes, CognitiveNode{
+		cn := CognitiveNode{
 			ID:       id,
 			Metadata: map[string]interface{}{"cost": cost},
-		})
+		}
+		if nr, getErr := e.client.GetNode(ctx, id, col); getErr == nil && nr.Found {
+			cn.Content = extractContentString(nr.Content)
+			cn.Energy = nr.Energy
+			cn.NodeType = nr.NodeType
+		}
+		nodes = append(nodes, cn)
 	}
 
 	// Side-effect: boost all nodes on path (async, non-blocking)
@@ -633,6 +644,7 @@ func (e *Executor) executeDistill(ctx context.Context, stmt *Statement) (*Cognit
 	// to get energy, then rank communities by size descending.
 	type communityRep struct {
 		nodeID  string
+		content string
 		energy  float32
 		size    int
 		comID   uint64
@@ -642,6 +654,7 @@ func (e *Executor) executeDistill(ctx context.Context, stmt *Statement) (*Cognit
 		// Sample up to 5 members to find the highest-energy representative
 		bestID := members[0]
 		var bestEnergy float32
+		var bestContent string
 		sampleSize := 5
 		if len(members) < sampleSize {
 			sampleSize = len(members)
@@ -654,9 +667,10 @@ func (e *Executor) executeDistill(ctx context.Context, stmt *Statement) (*Cognit
 			if nr.Energy > bestEnergy {
 				bestEnergy = nr.Energy
 				bestID = id
+				bestContent = extractContentString(nr.Content)
 			}
 		}
-		reps = append(reps, communityRep{nodeID: bestID, energy: bestEnergy, size: len(members), comID: comID})
+		reps = append(reps, communityRep{nodeID: bestID, content: bestContent, energy: bestEnergy, size: len(members), comID: comID})
 	}
 
 	// Sort by community size descending (largest communities = most salient patterns)
@@ -676,8 +690,9 @@ func (e *Executor) executeDistill(ctx context.Context, stmt *Statement) (*Cognit
 			break
 		}
 		nodes = append(nodes, CognitiveNode{
-			ID:     rep.nodeID,
-			Energy: rep.energy,
+			ID:      rep.nodeID,
+			Content: rep.content,
+			Energy:  rep.energy,
 			Metadata: map[string]interface{}{
 				"community_id":   rep.comID,
 				"community_size": rep.size,
@@ -728,7 +743,11 @@ func (e *Executor) executeFade(ctx context.Context, stmt *Statement) (*Cognitive
 				continue
 			}
 		}
-		faded = append(faded, CognitiveNode{ID: nodeID, Energy: newEnergy})
+		faded = append(faded, CognitiveNode{
+			ID:      nodeID,
+			Content: extractContentString(nr.Content),
+			Energy:  newEnergy,
+		})
 	}
 
 	return &CognitiveResult{
@@ -1051,11 +1070,33 @@ func (e *Executor) executeDream(ctx context.Context, stmt *Statement) (*Cognitiv
 // ── IMAGINE — counterfactual reasoning ──────────────────────────────
 
 func (e *Executor) executeImagine(ctx context.Context, stmt *Statement) (*CognitiveResult, error) {
+	col := e.collection(stmt)
 	// Counterfactual: find premise nodes via lightweight search, then explore alternative paths
-	nodes, err := e.searchNodes(ctx, stmt.Premise, e.collection(stmt), 5)
+	searchResults, err := e.searchNodes(ctx, stmt.Premise, col, 5)
 	if err != nil {
 		return nil, fmt.Errorf("IMAGINE search failed: %w", err)
 	}
+
+	// Hydrate nodes with Content/Energy (searchNodes returns only {ID, metadata})
+	nodes := make([]CognitiveNode, len(searchResults))
+	imagineSem := make(chan struct{}, 10)
+	var imagineWg sync.WaitGroup
+	for i, sn := range searchResults {
+		imagineWg.Add(1)
+		imagineSem <- struct{}{}
+		go func(idx int, nodeID string, meta map[string]interface{}) {
+			defer imagineWg.Done()
+			defer func() { <-imagineSem }()
+			cn := CognitiveNode{ID: nodeID, Metadata: meta}
+			if nr, getErr := e.client.GetNode(ctx, nodeID, col); getErr == nil && nr.Found {
+				cn.Content = extractContentString(nr.Content)
+				cn.Energy = nr.Energy
+				cn.NodeType = nr.NodeType
+			}
+			nodes[idx] = cn
+		}(i, sn.ID, sn.Metadata)
+	}
+	imagineWg.Wait()
 
 	// Post-filter by confidence/recency/valence
 	nodes = e.applyFilters(ctx, nodes, stmt)
