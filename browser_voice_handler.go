@@ -463,13 +463,26 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 									}
 
 									// 4. Enviar via tool_response (ACEITE pelo native-audio!)
-									geminiMu.RLock()
-									c := geminiRef
-									geminiMu.RUnlock()
-									if c != nil {
-										if err := c.SendToolResponse(n, result); err != nil {
-											log.Warn().Err(err).Str("tool", n).Msg("[RECALL-TOOL] Falha ao enviar tool_response")
+									// Retry até 3x com backoff para evitar voz morrer se geminiRef reconectou
+									var sendErr error
+									for attempt := 0; attempt < 3; attempt++ {
+										geminiMu.RLock()
+										c := geminiRef
+										geminiMu.RUnlock()
+										if c == nil {
+											log.Warn().Int("attempt", attempt+1).Str("tool", n).Msg("[RECALL-TOOL] geminiRef nil, aguardando reconexão")
+											time.Sleep(time.Duration(100*(attempt+1)) * time.Millisecond)
+											continue
 										}
+										sendErr = c.SendToolResponse(n, result)
+										if sendErr == nil {
+											break
+										}
+										log.Warn().Err(sendErr).Int("attempt", attempt+1).Str("tool", n).Msg("[RECALL-TOOL] Falha ao enviar tool_response, retrying")
+										time.Sleep(time.Duration(150*(attempt+1)) * time.Millisecond)
+									}
+									if sendErr != nil {
+										log.Error().Err(sendErr).Str("tool", n).Msg("[RECALL-TOOL] tool_response falhou após 3 tentativas — voz pode travar")
 									}
 
 									writeMu.Lock()
@@ -502,11 +515,26 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 									result = map[string]interface{}{"error": execErr.Error()}
 								}
 
-								geminiMu.RLock()
-								c := geminiRef
-								geminiMu.RUnlock()
-								if c != nil {
-									c.SendToolResponse(n, result)
+								// Retry tool_response para evitar voz morrer
+								var toolSendErr error
+								for attempt := 0; attempt < 3; attempt++ {
+									geminiMu.RLock()
+									c := geminiRef
+									geminiMu.RUnlock()
+									if c == nil {
+										log.Warn().Int("attempt", attempt+1).Str("tool", n).Msg("[TOOL] geminiRef nil, aguardando reconexão")
+										time.Sleep(time.Duration(100*(attempt+1)) * time.Millisecond)
+										continue
+									}
+									toolSendErr = c.SendToolResponse(n, result)
+									if toolSendErr == nil {
+										break
+									}
+									log.Warn().Err(toolSendErr).Int("attempt", attempt+1).Str("tool", n).Msg("[TOOL] Falha ao enviar tool_response, retrying")
+									time.Sleep(time.Duration(150*(attempt+1)) * time.Millisecond)
+								}
+								if toolSendErr != nil {
+									log.Error().Err(toolSendErr).Str("tool", n).Msg("[TOOL] tool_response falhou após 3 tentativas")
 								}
 
 								status := "success"
