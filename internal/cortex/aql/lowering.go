@@ -326,13 +326,43 @@ func (e *Executor) executeTrace(ctx context.Context, stmt *Statement) (*Cognitiv
 	current := stmt.To
 	visited := map[string]bool{stmt.To: true}
 	for current != stmt.From {
-		neighbors, bfsErr := e.client.Bfs(ctx, current, nietzsche.TraversalOpts{MaxDepth: 1}, col)
-		if bfsErr != nil {
-			break
+		// Use CausalNeighbors("past") to follow only predecessors (incoming edges),
+		// not BFS which returns both in+out neighbors and can backtrack incorrectly.
+		causalEdges, causalErr := e.client.CausalNeighbors(ctx, current, "past", col)
+		if causalErr != nil {
+			// Fallback to BFS depth=1 if CausalNeighbors not available
+			bfsNeighbors, bfsErr := e.client.Bfs(ctx, current, nietzsche.TraversalOpts{MaxDepth: 1}, col)
+			if bfsErr != nil {
+				break
+			}
+			causalEdges = nil // signal to use BFS fallback
+			bestID := ""
+			bestCost := math.MaxFloat64
+			for _, nID := range bfsNeighbors {
+				if nID == current || visited[nID] {
+					continue
+				}
+				c, ok := costOf[nID]
+				if !ok {
+					continue
+				}
+				if c < bestCost {
+					bestCost = c
+					bestID = nID
+				}
+			}
+			if bestID == "" {
+				break
+			}
+			visited[bestID] = true
+			path = append(path, bestID)
+			current = bestID
+			continue
 		}
 		bestID := ""
 		bestCost := math.MaxFloat64
-		for _, nID := range neighbors {
+		for _, edge := range causalEdges {
+			nID := edge.FromNodeID // predecessor
 			if nID == current || visited[nID] {
 				continue
 			}
@@ -548,6 +578,17 @@ func (e *Executor) executeAssociate(ctx context.Context, stmt *Statement) (*Cogn
 func (e *Executor) executeDistill(ctx context.Context, stmt *Statement) (*CognitiveResult, error) {
 	col := e.collection(stmt)
 
+	// Guard: check collection size before Louvain (matches server MAX_LOUVAIN_NODES=10K)
+	const maxLouvainNodes = 10000
+	collections, listErr := e.client.ListCollections(ctx)
+	if listErr == nil {
+		for _, ci := range collections {
+			if ci.Name == col && ci.NodeCount > maxLouvainNodes {
+				return nil, fmt.Errorf("DISTILL: collection %q has %d nodes (max %d for Louvain)", col, ci.NodeCount, maxLouvainNodes)
+			}
+		}
+	}
+
 	// Run Louvain community detection (matches server-side DISTILL behavior)
 	comResult, err := e.client.RunLouvain(ctx, col, 20, 1.0)
 	if err != nil {
@@ -738,8 +779,13 @@ func (e *Executor) executeDescend(ctx context.Context, stmt *Statement) (*Cognit
 		mag := vectorMagnitude(h.nr.Embedding)
 		// DESCEND: keep nodes with higher magnitude (deeper in Poincaré)
 		if mag > sourceMag {
+			content := ""
+			if desc, ok := h.nr.Content["description"]; ok {
+				content = fmt.Sprintf("%v", desc)
+			}
 			nodes = append(nodes, CognitiveNode{
 				ID:        h.id,
+				Content:   content,
 				Energy:    h.nr.Energy,
 				Magnitude: float32(mag),
 				Metadata:  map[string]interface{}{"magnitude": mag, "depth_delta": mag - sourceMag},
@@ -818,8 +864,13 @@ func (e *Executor) executeAscend(ctx context.Context, stmt *Statement) (*Cogniti
 		mag := vectorMagnitude(h.nr.Embedding)
 		// ASCEND: keep nodes with lower magnitude (more abstract, closer to origin)
 		if mag < sourceMag {
+			content := ""
+			if desc, ok := h.nr.Content["description"]; ok {
+				content = fmt.Sprintf("%v", desc)
+			}
 			nodes = append(nodes, CognitiveNode{
 				ID:        h.id,
+				Content:   content,
 				Energy:    h.nr.Energy,
 				Magnitude: float32(mag),
 				Metadata:  map[string]interface{}{"magnitude": mag, "depth_delta": sourceMag - mag},
@@ -838,13 +889,15 @@ func (e *Executor) executeAscend(ctx context.Context, stmt *Statement) (*Cogniti
 func (e *Executor) executeOrbit(ctx context.Context, stmt *Statement) (*CognitiveResult, error) {
 	col := e.collection(stmt)
 
-	// KNN search directly (no side-effects, single call for both seed + neighbors)
-	neighbors, err := e.searchNodes(ctx, stmt.Query, col, 30)
-	if err != nil || len(neighbors) == 0 {
+	// Find seed node via KNN/FTS, then use BFS (graph traversal) to find peers.
+	// This aligns with server-side ORBIT which uses BFS + magnitude filter,
+	// not KNN (semantic similarity).
+	seedResults, err := e.searchNodes(ctx, stmt.Query, col, 1)
+	if err != nil || len(seedResults) == 0 {
 		return &CognitiveResult{Nodes: []CognitiveNode{}}, nil
 	}
 
-	seedID := neighbors[0].ID
+	seedID := seedResults[0].ID
 	sourceNode, err := e.client.GetNode(ctx, seedID, col)
 	if err != nil {
 		return nil, fmt.Errorf("ORBIT GetNode failed: %w", err)
@@ -861,16 +914,33 @@ func (e *Executor) executeOrbit(ctx context.Context, stmt *Statement) (*Cognitiv
 		tolerance = 0.05
 	}
 
+	// BFS from seed (matches server-side ORBIT behavior)
+	depth := uint32(3)
+	if stmt.Depth > 0 {
+		depth = uint32(stmt.Depth)
+	}
+	visitedIDs, bfsErr := e.client.Bfs(ctx, seedID, nietzsche.TraversalOpts{MaxDepth: depth}, col)
+	if bfsErr != nil {
+		return nil, fmt.Errorf("ORBIT BFS failed: %w", bfsErr)
+	}
+
+	// Filter out seed itself
+	var candidateIDs []string
+	for _, id := range visitedIDs {
+		if id != seedID {
+			candidateIDs = append(candidateIDs, id)
+		}
+	}
+
 	// Parallelize GetNode calls with semaphore to avoid N+1 sequential RPCs
-	orbitCandidates := neighbors[1:] // skip seed (index 0)
 	orbitHydrated := make([]struct {
 		id  string
 		nr  nietzsche.NodeResult
 		err error
-	}, len(orbitCandidates))
+	}, len(candidateIDs))
 	orbitSem := make(chan struct{}, 10)
 	var orbitWg sync.WaitGroup
-	for i, n := range orbitCandidates {
+	for i, id := range candidateIDs {
 		orbitWg.Add(1)
 		orbitSem <- struct{}{}
 		go func(idx int, nodeID string) {
@@ -882,7 +952,7 @@ func (e *Executor) executeOrbit(ctx context.Context, stmt *Statement) (*Cognitiv
 				nr  nietzsche.NodeResult
 				err error
 			}{id: nodeID, nr: nr, err: getErr}
-		}(i, n.ID)
+		}(i, id)
 	}
 	orbitWg.Wait()
 
@@ -894,8 +964,13 @@ func (e *Executor) executeOrbit(ctx context.Context, stmt *Statement) (*Cognitiv
 		mag := vectorMagnitude(h.nr.Embedding)
 		// ORBIT: keep nodes at similar magnitude (±tolerance)
 		if math.Abs(mag-sourceMag) <= tolerance {
+			content := ""
+			if desc, ok := h.nr.Content["description"]; ok {
+				content = fmt.Sprintf("%v", desc)
+			}
 			nodes = append(nodes, CognitiveNode{
 				ID:        h.id,
+				Content:   content,
 				Energy:    h.nr.Energy,
 				Magnitude: float32(mag),
 				Metadata:  map[string]interface{}{"magnitude": mag, "mag_delta": math.Abs(mag - sourceMag)},
@@ -1279,15 +1354,26 @@ func extractQuotedStrings(raw string, out *[]string) string {
 	idx := 0
 	for i < len(raw) {
 		if raw[i] == '"' {
-			end := strings.Index(raw[i+1:], "\"")
-			if end >= 0 {
-				quoted := raw[i+1 : i+1+end]
-				*out = append(*out, quoted)
-				fmt.Fprintf(&result, "__Q%d__", idx)
-				idx++
-				i = i + 1 + end + 1 // skip past closing quote
-				continue
+			// Escape-aware: scan for unescaped closing quote
+			var quoted strings.Builder
+			i++ // skip opening quote
+			for i < len(raw) {
+				if raw[i] == '\\' && i+1 < len(raw) {
+					// Escaped char: keep the actual character
+					quoted.WriteByte(raw[i+1])
+					i += 2
+				} else if raw[i] == '"' {
+					i++ // skip closing quote
+					break
+				} else {
+					quoted.WriteByte(raw[i])
+					i++
+				}
 			}
+			*out = append(*out, quoted.String())
+			fmt.Fprintf(&result, "__Q%d__", idx)
+			idx++
+			continue
 		}
 		result.WriteByte(raw[i])
 		i++
