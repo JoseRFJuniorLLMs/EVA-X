@@ -355,8 +355,8 @@ func (mk *MemoryKernel) Retrieve(query *MemoryQuery) *MemoryResult {
 // Associate cria ou reforça associacao entre duas memorias (Hebbian learning)
 // "Neurons that fire together wire together"
 func (mk *MemoryKernel) Associate(traceID1, traceID2 string, strength float64) {
+	// Copy references under lock, then release before any gRPC call
 	mk.mu.Lock()
-	defer mk.mu.Unlock()
 
 	// Encontrar ambas as memorias
 	var t1, t2 *MemoryTrace
@@ -370,6 +370,7 @@ func (mk *MemoryKernel) Associate(traceID1, traceID2 string, strength float64) {
 	}
 
 	if t1 == nil || t2 == nil {
+		mk.mu.Unlock()
 		return
 	}
 
@@ -388,13 +389,18 @@ func (mk *MemoryKernel) Associate(traceID1, traceID2 string, strength float64) {
 	oldStrength2 := t2.Associations[traceID1]
 	t2.Associations[traceID1] = oldStrength2 + strength*(1.0-oldStrength2)
 
+	// Copy executor reference before releasing lock
+	executor := mk.aqlExecutor
+	mk.mu.Unlock()
+
 	// AQL ASSOCIATE — persist Hebbian link via cognitive intent layer
-	if mk.aqlExecutor != nil {
+	// Runs WITHOUT holding mk.mu to avoid blocking other MemoryKernel operations
+	if executor != nil {
 		ctx := context.Background()
 		if mk.ctx != nil {
 			ctx = mk.ctx
 		}
-		_, aqlErr := mk.aqlExecutor.Execute(ctx, &aql.Statement{
+		_, aqlErr := executor.Execute(ctx, &aql.Statement{
 			Verb: aql.VerbAssociate,
 			From: traceID1,
 			To:   traceID2,
@@ -658,59 +664,71 @@ func (mk *MemoryKernel) SyncFromDB() {
 
 // applyDecay aplica decay a todas as memorias
 func (mk *MemoryKernel) applyDecay() {
-	mk.mu.Lock()
-	// NOTE: manual Unlock() below (line ~701) to release before async sync.
-	// Do NOT add defer mk.mu.Unlock() here — causes double-unlock fatal crash.
-
+	// Copy-under-lock pattern: collect data under lock, then sync outside.
+	// Using a func scope with defer to guarantee unlock even on panic.
 	now := time.Now()
-
 	var toSync []*MemoryTrace
-	
-	for zone, traces := range mk.zones {
-		decayRate := 0.01 // Default: 1% por intervalo
 
-		switch zone {
-		case WorkingMemory:
-			decayRate = 0.05 // Working memory decai 5x mais rapido
-		case EpisodicMemory:
-			decayRate = 0.02
-		case SemanticMemory:
-			decayRate = 0.005 // Semantic memory decai devagar
-		case ProceduralMemory:
-			decayRate = 0.001 // Procedural quase nao decai
-		}
+	func() {
+		mk.mu.Lock()
+		defer mk.mu.Unlock()
 
-		for id, trace := range traces {
-			// Decay baseado em tempo desde ultimo acesso
-			timeSince := now.Sub(trace.LastAccessed).Seconds()
-			decay := decayRate * (1.0 + timeSince/3600.0) // Accelera com tempo
+		for zone, traces := range mk.zones {
+			decayRate := 0.01 // Default: 1% por intervalo
 
-			trace.Energy = math.Max(0, trace.Energy-decay)
-			trace.Activation = math.Max(0, trace.Activation-decay*2)
-
-			// Remover memorias com energia zero
-			if trace.Energy <= 0.001 {
-				delete(traces, id)
-				mk.totalDecayed.Add(1)
-			} else {
-				// Accumulate for sync to DB
-				clone := *trace
-				toSync = append(toSync, &clone)
+			switch zone {
+			case WorkingMemory:
+				decayRate = 0.05 // Working memory decai 5x mais rapido
+			case EpisodicMemory:
+				decayRate = 0.02
+			case SemanticMemory:
+				decayRate = 0.005 // Semantic memory decai devagar
+			case ProceduralMemory:
+				decayRate = 0.001 // Procedural quase nao decai
 			}
-		}
-	}
-	mk.mu.Unlock()
 
-	// P1-D FIX: Synchronize in-memory energy decays back to NietzscheDB.
-	// Avoiding large lock times by syncing async after unlocking.
-	if mk.onStore != nil && len(toSync) > 0 {
-		go func(traces []*MemoryTrace) {
-			for _, t := range traces {
-				if err := mk.onStore(t); err != nil {
-					log.Warn().Err(err).Str("trace_id", t.ID).Msg("failed to sync memory trace energy decay to store")
+			for id, trace := range traces {
+				// Decay baseado em tempo desde ultimo acesso
+				timeSince := now.Sub(trace.LastAccessed).Seconds()
+				decay := decayRate * (1.0 + timeSince/3600.0) // Accelera com tempo
+
+				trace.Energy = math.Max(0, trace.Energy-decay)
+				trace.Activation = math.Max(0, trace.Activation-decay*2)
+
+				// Remover memorias com energia zero
+				if trace.Energy <= 0.001 {
+					delete(traces, id)
+					mk.totalDecayed.Add(1)
+				} else {
+					// Accumulate for sync to DB
+					clone := *trace
+					toSync = append(toSync, &clone)
 				}
 			}
-		}(toSync)
+		}
+	}()
+
+	// P1-D FIX: Synchronize in-memory energy decays back to NietzscheDB.
+	// Runs WITHOUT holding mk.mu. Uses semaphore to limit concurrent gRPC calls.
+	if mk.onStore != nil && len(toSync) > 0 {
+		const maxConcurrent = 10
+		sem := make(chan struct{}, maxConcurrent)
+		var wg sync.WaitGroup
+
+		for _, t := range toSync {
+			sem <- struct{}{} // acquire semaphore slot
+			wg.Add(1)
+			go func(trace *MemoryTrace) {
+				defer func() {
+					<-sem // release semaphore slot
+					wg.Done()
+				}()
+				if err := mk.onStore(trace); err != nil {
+					log.Warn().Err(err).Str("trace_id", trace.ID).Msg("failed to sync memory trace energy decay to store")
+				}
+			}(t)
+		}
+		wg.Wait()
 	}
 }
 

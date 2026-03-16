@@ -118,14 +118,14 @@ type Statement struct {
 	Premise    string            `json:"premise,omitempty"`     // IMAGINE
 	Collection string            `json:"collection,omitempty"`  // target collection
 	Limit      int               `json:"limit,omitempty"`
-	Confidence float32           `json:"confidence,omitempty"`  // epistemic confidence floor
-	Mood       MoodState         `json:"mood,omitempty"`
-	Valence    ValenceSpec       `json:"valence,omitempty"`
-	Recency    RecencyDegree     `json:"recency,omitempty"`
+	Confidence float32           `json:"confidence,omitempty"`  // epistemic confidence floor  // TODO: implement filtering
+	Mood       MoodState         `json:"mood,omitempty"`        // TODO: implement filtering
+	Valence    ValenceSpec       `json:"valence,omitempty"`     // TODO: implement filtering
+	Recency    RecencyDegree     `json:"recency,omitempty"`     // TODO: implement filtering
 	Epistemic  EpistemicType     `json:"epistemic,omitempty"`   // IMPRINT type
 	Energy     float32           `json:"energy,omitempty"`      // IMPRINT initial energy
 	Depth      int               `json:"depth,omitempty"`       // DESCEND, ASCEND, RESONATE, TRACE
-	Radius     float32           `json:"radius,omitempty"`      // ORBIT
+	Radius     float32           `json:"radius,omitempty"`      // ORBIT        // TODO: implement filtering
 	EdgeType   string            `json:"edge_type,omitempty"`   // ASSOCIATE
 	Weight     float32           `json:"weight,omitempty"`      // ASSOCIATE
 	LinkTo     string            `json:"link_to,omitempty"`     // IMPRINT → auto-link
@@ -174,10 +174,3 @@ type CognitiveResult struct {
 	Metadata ResultMetadata  `json:"metadata"`
 }
 
-// Empty returns an empty CognitiveResult.
-func EmptyResult() CognitiveResult {
-	return CognitiveResult{
-		Nodes: []CognitiveNode{},
-		Edges: []CognitiveEdge{},
-	}
-}

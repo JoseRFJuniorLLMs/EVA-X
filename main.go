@@ -548,10 +548,17 @@ func main() {
 	log.Info().Msgf("🧩 Skills Service: %s (%d skills carregadas)", cfg.SkillsDir, len(skillsSvc.List()))
 
 	// AQL Executor (Agent Query Language — cognitive intent verbs)
+	// Single executor with embeddings, shared by tools handlers AND MCP server.
+	var aqlExec *aql.Executor
 	if nzClient != nil {
-		aqlExec := aql.NewExecutor(nzClient.SDK())
+		aqlExec = aql.NewExecutor(nzClient.SDK())
+		if embedSvc != nil {
+			aqlExec.SetEmbedFunc(func(ctx context.Context, text string) ([]float32, error) {
+				return embedSvc.GenerateEmbedding(ctx, text)
+			})
+		}
 		toolsHandler.SetAqlExecutor(aqlExec)
-		log.Info().Msg("🧬 AQL Executor inicializado (13 verbos cognitivos)")
+		log.Info().Msg("🧬 AQL Executor inicializado (13 verbos cognitivos, semantic RECALL enabled)")
 	}
 
 	// NietzscheDB eva_core collection (gRPC :50051)
@@ -937,16 +944,10 @@ func main() {
 		})
 		log.Info().Msg("MCP Server com busca vetorial ativada (NietzscheDB)")
 	}
-	// Wire AQL executor into MCP server (fixes nil/503 on /mcp/tools/aql)
-	if nzClient != nil {
-		aqlExec := aql.NewExecutor(nzClient.SDK())
-		if embedSvc != nil {
-			aqlExec.SetEmbedFunc(func(ctx context.Context, text string) ([]float32, error) {
-				return embedSvc.GenerateEmbedding(ctx, text)
-			})
-		}
+	// Wire shared AQL executor into MCP server (same instance used by tools handlers)
+	if aqlExec != nil {
 		mcpServer.SetAqlExecutor(aqlExec)
-		log.Info().Msg("🧬 MCP AQL Executor wired (semantic RECALL enabled)")
+		log.Info().Msg("🧬 MCP AQL Executor wired (shared instance)")
 	}
 	router.PathPrefix("/mcp").Handler(mcpServer)
 	log.Info().Msg("🔌 MCP Server montado em /mcp")

@@ -17,25 +17,21 @@ import (
 	nietzsche "nietzsche-sdk"
 )
 
-// ── RECALL — semantic search (KNN + full-text fallback) ──────────────
+// ── searchNodes — core search without side-effects ───────────────────
+// Used internally by ORBIT, RESONATE, DESCEND, ASCEND, IMAGINE to find
+// seed nodes without spawning energy-boost goroutines.
 
-func (e *Executor) executeRecall(ctx context.Context, stmt *Statement) (*CognitiveResult, error) {
-	col := e.collection(stmt)
-	limit := stmt.Limit
-	if limit <= 0 {
-		limit = 10
-	}
-
+func (e *Executor) searchNodes(ctx context.Context, query string, collection string, k int) ([]CognitiveNode, error) {
 	var nodes []CognitiveNode
 
 	// Primary: KNN vector search (if embedding function available)
-	if e.embedFunc != nil && stmt.Query != "" {
-		vec32, err := e.embedFunc(ctx, stmt.Query)
+	if e.embedFunc != nil && query != "" {
+		vec32, err := e.embedFunc(ctx, query)
 		if err != nil {
-			log.Printf("[AQL/RECALL] embedFunc failed (falling back to FTS): %v", err)
+			log.Printf("[AQL/search] embedFunc failed (falling back to FTS): %v", err)
 		} else {
 			vec64 := float32ToFloat64(vec32)
-			knnResults, knnErr := e.client.KnnSearch(ctx, vec64, uint32(limit), col)
+			knnResults, knnErr := e.client.KnnSearch(ctx, vec64, uint32(k), collection)
 			if knnErr == nil {
 				for _, r := range knnResults {
 					nodes = append(nodes, CognitiveNode{
@@ -48,8 +44,8 @@ func (e *Executor) executeRecall(ctx context.Context, stmt *Statement) (*Cogniti
 	}
 
 	// Fallback: full-text search
-	if len(nodes) == 0 && stmt.Query != "" {
-		ftResults, err := e.client.FullTextSearch(ctx, stmt.Query, col, uint32(limit))
+	if len(nodes) == 0 && query != "" {
+		ftResults, err := e.client.FullTextSearch(ctx, query, collection, uint32(k))
 		if err == nil {
 			for _, r := range ftResults {
 				nodes = append(nodes, CognitiveNode{
@@ -58,6 +54,26 @@ func (e *Executor) executeRecall(ctx context.Context, stmt *Statement) (*Cogniti
 				})
 			}
 		}
+	}
+
+	if nodes == nil {
+		nodes = []CognitiveNode{}
+	}
+	return nodes, nil
+}
+
+// ── RECALL — semantic search (KNN + full-text fallback) ──────────────
+
+func (e *Executor) executeRecall(ctx context.Context, stmt *Statement) (*CognitiveResult, error) {
+	col := e.collection(stmt)
+	limit := stmt.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+
+	nodes, err := e.searchNodes(ctx, stmt.Query, col, limit)
+	if err != nil {
+		return nil, err
 	}
 
 	// Side-effect: boost energy of accessed nodes (async, non-blocking)
@@ -91,10 +107,6 @@ func (e *Executor) executeRecall(ctx context.Context, stmt *Statement) (*Cogniti
 		}(nodeIDs, col)
 	}
 
-	if nodes == nil {
-		nodes = []CognitiveNode{}
-	}
-
 	result := CognitiveResult{
 		Nodes:    nodes,
 		Metadata: ResultMetadata{SideEffects: sideEffects},
@@ -107,19 +119,13 @@ func (e *Executor) executeRecall(ctx context.Context, stmt *Statement) (*Cogniti
 func (e *Executor) executeResonate(ctx context.Context, stmt *Statement) (*CognitiveResult, error) {
 	col := e.collection(stmt)
 
-	// First find the seed node via RECALL
-	recallStmt := &Statement{
-		Verb:       VerbRecall,
-		Query:      stmt.Query,
-		Collection: col,
-		Limit:      1,
-	}
-	recallResult, err := e.executeRecall(ctx, recallStmt)
-	if err != nil || len(recallResult.Nodes) == 0 {
+	// Find the seed node via lightweight search (no side-effects)
+	seeds, err := e.searchNodes(ctx, stmt.Query, col, 1)
+	if err != nil || len(seeds) == 0 {
 		return &CognitiveResult{Nodes: []CognitiveNode{}}, nil
 	}
 
-	seedID := recallResult.Nodes[0].ID
+	seedID := seeds[0].ID
 	depth := uint32(3)
 	if stmt.Depth > 0 {
 		depth = uint32(stmt.Depth)
@@ -192,20 +198,67 @@ func (e *Executor) executeTrace(ctx context.Context, stmt *Statement) (*Cognitiv
 		return nil, fmt.Errorf("TRACE Dijkstra failed: %w", err)
 	}
 
-	var nodes []CognitiveNode
+	// Build cost lookup for visited nodes
+	costOf := make(map[string]float64, len(visitedIDs))
+	targetFound := false
 	for i, id := range visitedIDs {
-		cost := 0.0
 		if i < len(costs) {
-			cost = costs[i]
+			costOf[id] = costs[i]
 		}
+		if id == stmt.To {
+			targetFound = true
+		}
+	}
+
+	if !targetFound {
+		// Target not reachable — return empty path
+		return &CognitiveResult{
+			Nodes:    []CognitiveNode{},
+			Metadata: ResultMetadata{SideEffects: []string{}},
+		}, nil
+	}
+
+	// Reconstruct actual shortest path by backtracking from target to source.
+	// At each step, find the neighbor (via BFS depth=1) with the lowest Dijkstra cost.
+	path := []string{stmt.To}
+	current := stmt.To
+	visited := map[string]bool{stmt.To: true}
+	for current != stmt.From {
+		neighbors, bfsErr := e.client.Bfs(ctx, current, nietzsche.TraversalOpts{MaxDepth: 1}, col)
+		if bfsErr != nil {
+			break
+		}
+		bestID := ""
+		bestCost := math.MaxFloat64
+		for _, nID := range neighbors {
+			if nID == current || visited[nID] {
+				continue
+			}
+			c, ok := costOf[nID]
+			if !ok {
+				continue
+			}
+			if c < bestCost {
+				bestCost = c
+				bestID = nID
+			}
+		}
+		if bestID == "" {
+			break // no progress, path broken
+		}
+		path = append([]string{bestID}, path...)
+		visited[bestID] = true
+		current = bestID
+	}
+
+	// Build result from reconstructed path
+	var nodes []CognitiveNode
+	for _, id := range path {
+		cost := costOf[id]
 		nodes = append(nodes, CognitiveNode{
 			ID:       id,
 			Metadata: map[string]interface{}{"cost": cost},
 		})
-		// Stop if we found the target
-		if id == stmt.To {
-			break
-		}
 	}
 
 	// Side-effect: boost all nodes on path (async, non-blocking)
@@ -451,15 +504,13 @@ func (e *Executor) executeFade(ctx context.Context, stmt *Statement) (*Cognitive
 func (e *Executor) executeDescend(ctx context.Context, stmt *Statement) (*CognitiveResult, error) {
 	col := e.collection(stmt)
 
-	// Find source node via RECALL
-	recallResult, err := e.executeRecall(ctx, &Statement{
-		Verb: VerbRecall, Query: stmt.Query, Collection: col, Limit: 1,
-	})
-	if err != nil || len(recallResult.Nodes) == 0 {
+	// Find source node via lightweight search (no side-effects)
+	seeds, err := e.searchNodes(ctx, stmt.Query, col, 1)
+	if err != nil || len(seeds) == 0 {
 		return &CognitiveResult{Nodes: []CognitiveNode{}}, nil
 	}
 
-	seedID := recallResult.Nodes[0].ID
+	seedID := seeds[0].ID
 
 	// Get source node magnitude for filtering
 	sourceNode, err := e.client.GetNode(ctx, seedID, col)
@@ -506,14 +557,13 @@ func (e *Executor) executeDescend(ctx context.Context, stmt *Statement) (*Cognit
 func (e *Executor) executeAscend(ctx context.Context, stmt *Statement) (*CognitiveResult, error) {
 	col := e.collection(stmt)
 
-	recallResult, err := e.executeRecall(ctx, &Statement{
-		Verb: VerbRecall, Query: stmt.Query, Collection: col, Limit: 1,
-	})
-	if err != nil || len(recallResult.Nodes) == 0 {
+	// Find source node via lightweight search (no side-effects)
+	seeds, err := e.searchNodes(ctx, stmt.Query, col, 1)
+	if err != nil || len(seeds) == 0 {
 		return &CognitiveResult{Nodes: []CognitiveNode{}}, nil
 	}
 
-	seedID := recallResult.Nodes[0].ID
+	seedID := seeds[0].ID
 	sourceNode, err := e.client.GetNode(ctx, seedID, col)
 	if err != nil {
 		return nil, fmt.Errorf("ASCEND GetNode failed: %w", err)
@@ -557,27 +607,18 @@ func (e *Executor) executeAscend(ctx context.Context, stmt *Statement) (*Cogniti
 func (e *Executor) executeOrbit(ctx context.Context, stmt *Statement) (*CognitiveResult, error) {
 	col := e.collection(stmt)
 
-	recallResult, err := e.executeRecall(ctx, &Statement{
-		Verb: VerbRecall, Query: stmt.Query, Collection: col, Limit: 1,
-	})
-	if err != nil || len(recallResult.Nodes) == 0 {
+	// KNN search directly (no side-effects, single call for both seed + neighbors)
+	neighbors, err := e.searchNodes(ctx, stmt.Query, col, 30)
+	if err != nil || len(neighbors) == 0 {
 		return &CognitiveResult{Nodes: []CognitiveNode{}}, nil
 	}
 
-	seedID := recallResult.Nodes[0].ID
+	seedID := neighbors[0].ID
 	sourceNode, err := e.client.GetNode(ctx, seedID, col)
 	if err != nil {
 		return nil, fmt.Errorf("ORBIT GetNode failed: %w", err)
 	}
 	sourceMag := vectorMagnitude(sourceNode.Embedding)
-
-	// KNN finds nearest neighbors, then filter by similar magnitude (±20%)
-	knnResult, err := e.executeRecall(ctx, &Statement{
-		Verb: VerbRecall, Query: stmt.Query, Collection: col, Limit: 30,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("ORBIT search failed: %w", err)
-	}
 
 	tolerance := sourceMag * 0.2
 	if tolerance < 0.05 {
@@ -585,10 +626,7 @@ func (e *Executor) executeOrbit(ctx context.Context, stmt *Statement) (*Cognitiv
 	}
 
 	var nodes []CognitiveNode
-	for _, n := range knnResult.Nodes {
-		if n.ID == seedID {
-			continue
-		}
+	for _, n := range neighbors[1:] { // skip seed (index 0)
 		nr, getErr := e.client.GetNode(ctx, n.ID, col)
 		if getErr != nil || !nr.Found {
 			continue
@@ -658,16 +696,14 @@ func (e *Executor) executeDream(ctx context.Context, stmt *Statement) (*Cognitiv
 // ── IMAGINE — counterfactual reasoning ──────────────────────────────
 
 func (e *Executor) executeImagine(ctx context.Context, stmt *Statement) (*CognitiveResult, error) {
-	// Counterfactual: RECALL premise nodes, then explore alternative paths
-	recallResult, err := e.executeRecall(ctx, &Statement{
-		Verb: VerbRecall, Query: stmt.Premise, Collection: e.collection(stmt), Limit: 5,
-	})
+	// Counterfactual: find premise nodes via lightweight search, then explore alternative paths
+	nodes, err := e.searchNodes(ctx, stmt.Premise, e.collection(stmt), 5)
 	if err != nil {
-		return nil, fmt.Errorf("IMAGINE recall failed: %w", err)
+		return nil, fmt.Errorf("IMAGINE search failed: %w", err)
 	}
 
 	return &CognitiveResult{
-		Nodes:    recallResult.Nodes,
+		Nodes:    nodes,
 		Metadata: ResultMetadata{SideEffects: []string{"CounterfactualBranch"}},
 	}, nil
 }
@@ -718,12 +754,18 @@ func ParseStatement(raw string) (*Statement, error) {
 		return nil, fmt.Errorf("empty AQL statement")
 	}
 
-	parts := strings.Fields(raw)
+	stmt := &Statement{}
+
+	// 1. Extract all quoted strings and replace with placeholders.
+	//    This prevents keywords inside quotes (e.g. "FROM server TO client")
+	//    from being parsed as AQL keywords.
+	var quotedStrings []string
+	sanitized := extractQuotedStrings(raw, &quotedStrings)
+
+	parts := strings.Fields(sanitized)
 	if len(parts) == 0 {
 		return nil, fmt.Errorf("empty AQL statement")
 	}
-
-	stmt := &Statement{}
 
 	// First token is the verb
 	verbStr := strings.ToUpper(parts[0])
@@ -758,32 +800,27 @@ func ParseStatement(raw string) (*Statement, error) {
 		return nil, fmt.Errorf("unknown AQL verb: %s", verbStr)
 	}
 
-	// Extract quoted string as query/content/topic/premise
-	if idx := strings.Index(raw, "\""); idx >= 0 {
-		end := strings.Index(raw[idx+1:], "\"")
-		if end >= 0 {
-			quoted := raw[idx+1 : idx+1+end]
-			switch stmt.Verb {
-			case VerbImprint:
-				stmt.Content = quoted
-			case VerbDream:
-				stmt.Topic = quoted
-			case VerbImagine:
-				stmt.Premise = quoted
-			default:
-				stmt.Query = quoted
-			}
+	// 2. Assign first quoted string as query/content/topic/premise
+	if len(quotedStrings) > 0 {
+		switch stmt.Verb {
+		case VerbImprint:
+			stmt.Content = quotedStrings[0]
+		case VerbDream:
+			stmt.Topic = quotedStrings[0]
+		case VerbImagine:
+			stmt.Premise = quotedStrings[0]
+		default:
+			stmt.Query = quotedStrings[0]
 		}
 	}
 
-	// Parse qualifier keywords
-	upper := strings.ToUpper(raw)
+	// 3. Parse qualifier keywords on the sanitized (placeholder) version
 	for i := 1; i < len(parts); i++ {
 		kw := strings.ToUpper(parts[i])
 		switch kw {
 		case "COLLECTION":
 			if i+1 < len(parts) {
-				stmt.Collection = parts[i+1]
+				stmt.Collection = restoreQuoted(parts[i+1], quotedStrings)
 				i++
 			}
 		case "LIMIT":
@@ -808,51 +845,88 @@ func ParseStatement(raw string) (*Statement, error) {
 			}
 		case "AS":
 			if i+1 < len(parts) {
-				stmt.Epistemic = EpistemicType(parts[i+1])
+				stmt.Epistemic = EpistemicType(restoreQuoted(parts[i+1], quotedStrings))
 				i++
 			}
 		case "MOOD":
 			if i+1 < len(parts) {
-				stmt.Mood = MoodState(strings.ToLower(parts[i+1]))
+				stmt.Mood = MoodState(strings.ToLower(restoreQuoted(parts[i+1], quotedStrings)))
 				i++
 			}
 		case "FROM":
 			if i+1 < len(parts) {
-				stmt.From = parts[i+1]
+				stmt.From = restoreQuoted(parts[i+1], quotedStrings)
 				i++
 			}
 		case "TO":
 			if i+1 < len(parts) {
-				stmt.To = parts[i+1]
+				stmt.To = restoreQuoted(parts[i+1], quotedStrings)
 				i++
 			}
 		case "LINK_TO":
 			if i+1 < len(parts) {
-				stmt.LinkTo = parts[i+1]
+				stmt.LinkTo = restoreQuoted(parts[i+1], quotedStrings)
 				i++
 			}
 		case "EDGE_TYPE":
 			if i+1 < len(parts) {
-				stmt.EdgeType = parts[i+1]
+				stmt.EdgeType = restoreQuoted(parts[i+1], quotedStrings)
 				i++
 			}
 		}
 	}
 
 	// For TRACE, also check inline "FROM x TO y" in any position
+	upper := strings.ToUpper(sanitized)
 	if stmt.Verb == VerbTrace && stmt.From == "" {
 		if strings.Contains(upper, "FROM ") {
 			rest := parts[1:] // skip verb
 			for j := 0; j < len(rest)-1; j++ {
 				if strings.ToUpper(rest[j]) == "FROM" {
-					stmt.From = rest[j+1]
+					stmt.From = restoreQuoted(rest[j+1], quotedStrings)
 				}
 				if strings.ToUpper(rest[j]) == "TO" {
-					stmt.To = rest[j+1]
+					stmt.To = restoreQuoted(rest[j+1], quotedStrings)
 				}
 			}
 		}
 	}
 
 	return stmt, nil
+}
+
+// extractQuotedStrings replaces all quoted strings in raw with placeholders
+// like __Q0__, __Q1__, etc. and appends the originals to the slice.
+func extractQuotedStrings(raw string, out *[]string) string {
+	var result strings.Builder
+	i := 0
+	idx := 0
+	for i < len(raw) {
+		if raw[i] == '"' {
+			end := strings.Index(raw[i+1:], "\"")
+			if end >= 0 {
+				quoted := raw[i+1 : i+1+end]
+				*out = append(*out, quoted)
+				fmt.Fprintf(&result, "__Q%d__", idx)
+				idx++
+				i = i + 1 + end + 1 // skip past closing quote
+				continue
+			}
+		}
+		result.WriteByte(raw[i])
+		i++
+	}
+	return result.String()
+}
+
+// restoreQuoted checks if s is a placeholder like __Q0__ and returns the
+// original quoted string. Otherwise returns s unchanged.
+func restoreQuoted(s string, quoted []string) string {
+	if strings.HasPrefix(s, "__Q") && strings.HasSuffix(s, "__") {
+		var idx int
+		if _, err := fmt.Sscanf(s, "__Q%d__", &idx); err == nil && idx < len(quoted) {
+			return quoted[idx]
+		}
+	}
+	return s
 }
