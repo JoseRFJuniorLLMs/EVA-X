@@ -157,9 +157,31 @@ func (e *Executor) executeResonate(ctx context.Context, stmt *Statement) (*Cogni
 		return nil, fmt.Errorf("RESONATE BFS failed: %w", err)
 	}
 
-	var nodes []CognitiveNode
-	for _, id := range visitedIDs {
-		nodes = append(nodes, CognitiveNode{ID: id})
+	// Hydrate visited nodes with full data (parallel, bounded)
+	type hydrateResult struct {
+		idx  int
+		node CognitiveNode
+	}
+	sem := make(chan struct{}, 10)
+	ch := make(chan hydrateResult, len(visitedIDs))
+	for i, id := range visitedIDs {
+		sem <- struct{}{}
+		go func(idx int, nodeID string) {
+			defer func() { <-sem }()
+			cn := CognitiveNode{ID: nodeID}
+			if nr, getErr := e.client.GetNode(ctx, nodeID, col); getErr == nil && nr.Found {
+				if desc, ok := nr.Content["description"]; ok {
+					cn.Content = fmt.Sprintf("%v", desc)
+				}
+				cn.Energy = nr.Energy
+			}
+			ch <- hydrateResult{idx: idx, node: cn}
+		}(i, id)
+	}
+	nodes := make([]CognitiveNode, len(visitedIDs))
+	for range visitedIDs {
+		r := <-ch
+		nodes[r.idx] = r.node
 	}
 
 	// Post-filter by confidence/recency/valence

@@ -489,7 +489,15 @@ func (s *Server) aqlTool(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	result, err := s.aqlExecutor.ExecuteRaw(ctx, req.Statement)
+	stmt, parseErr := aql.ParseStatement(req.Statement)
+	if parseErr != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"AQL parse error: %v"}`, parseErr), http.StatusBadRequest)
+		return
+	}
+	if req.Collection != "" && stmt.Collection == "" {
+		stmt.Collection = req.Collection
+	}
+	result, err := s.aqlExecutor.Execute(ctx, stmt)
 	if err != nil {
 		log.Error().Err(err).Str("statement", req.Statement).Msg("[MCP-AQL] execution failed")
 		w.Header().Set("Content-Type", "application/json")
