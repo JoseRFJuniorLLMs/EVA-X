@@ -83,9 +83,33 @@ func (e *Executor) executeRecall(ctx context.Context, stmt *Statement) (*Cogniti
 		limit = 10
 	}
 
-	nodes, err := e.searchNodes(ctx, stmt.Query, col, limit)
+	searchResults, err := e.searchNodes(ctx, stmt.Query, col, limit)
 	if err != nil {
 		return nil, err
+	}
+
+	// Hydrate nodes with full data (Content, Energy, NodeType) via parallel GetNode.
+	// searchNodes only returns {ID, Metadata{distance}} — insufficient for display.
+	nodes := make([]CognitiveNode, len(searchResults))
+	if len(searchResults) > 0 {
+		recallSem := make(chan struct{}, 10)
+		var recallWg sync.WaitGroup
+		for i, sn := range searchResults {
+			recallWg.Add(1)
+			recallSem <- struct{}{}
+			go func(idx int, nodeID string, meta map[string]interface{}) {
+				defer recallWg.Done()
+				defer func() { <-recallSem }()
+				cn := CognitiveNode{ID: nodeID, Metadata: meta}
+				if nr, getErr := e.client.GetNode(ctx, nodeID, col); getErr == nil && nr.Found {
+					cn.Content = extractContentString(nr.Content)
+					cn.Energy = nr.Energy
+					cn.NodeType = nr.NodeType
+				}
+				nodes[idx] = cn
+			}(i, sn.ID, sn.Metadata)
+		}
+		recallWg.Wait()
 	}
 
 	// Post-filter by confidence/recency/valence
@@ -170,9 +194,7 @@ func (e *Executor) executeResonate(ctx context.Context, stmt *Statement) (*Cogni
 			defer func() { <-sem }()
 			cn := CognitiveNode{ID: nodeID}
 			if nr, getErr := e.client.GetNode(ctx, nodeID, col); getErr == nil && nr.Found {
-				if desc, ok := nr.Content["description"]; ok {
-					cn.Content = fmt.Sprintf("%v", desc)
-				}
+				cn.Content = extractContentString(nr.Content)
 				cn.Energy = nr.Energy
 			}
 			ch <- hydrateResult{idx: idx, node: cn}
@@ -355,7 +377,8 @@ func (e *Executor) executeTrace(ctx context.Context, stmt *Statement) (*Cognitiv
 				break
 			}
 			visited[bestID] = true
-			path = append(path, bestID)
+			// Prepend: backtrack goes target→source, path must be source→target
+			path = append([]string{bestID}, path...)
 			current = bestID
 			continue
 		}
@@ -779,10 +802,7 @@ func (e *Executor) executeDescend(ctx context.Context, stmt *Statement) (*Cognit
 		mag := vectorMagnitude(h.nr.Embedding)
 		// DESCEND: keep nodes with higher magnitude (deeper in Poincaré)
 		if mag > sourceMag {
-			content := ""
-			if desc, ok := h.nr.Content["description"]; ok {
-				content = fmt.Sprintf("%v", desc)
-			}
+			content := extractContentString(h.nr.Content)
 			nodes = append(nodes, CognitiveNode{
 				ID:        h.id,
 				Content:   content,
@@ -864,10 +884,7 @@ func (e *Executor) executeAscend(ctx context.Context, stmt *Statement) (*Cogniti
 		mag := vectorMagnitude(h.nr.Embedding)
 		// ASCEND: keep nodes with lower magnitude (more abstract, closer to origin)
 		if mag < sourceMag {
-			content := ""
-			if desc, ok := h.nr.Content["description"]; ok {
-				content = fmt.Sprintf("%v", desc)
-			}
+			content := extractContentString(h.nr.Content)
 			nodes = append(nodes, CognitiveNode{
 				ID:        h.id,
 				Content:   content,
@@ -904,12 +921,12 @@ func (e *Executor) executeOrbit(ctx context.Context, stmt *Statement) (*Cognitiv
 	}
 	sourceMag := vectorMagnitude(sourceNode.Embedding)
 
-	// Use parsed radius if provided; otherwise default to 20% of source magnitude
-	toleranceFactor := 0.2
+	// RADIUS is absolute tolerance (matches server-side behavior).
+	// e.g., RADIUS 0.2 means ±0.2 magnitude around the source node.
+	tolerance := 0.2 // default
 	if stmt.Radius > 0 {
-		toleranceFactor = float64(stmt.Radius)
+		tolerance = float64(stmt.Radius)
 	}
-	tolerance := sourceMag * toleranceFactor
 	if tolerance < 0.05 {
 		tolerance = 0.05
 	}
@@ -964,10 +981,7 @@ func (e *Executor) executeOrbit(ctx context.Context, stmt *Statement) (*Cognitiv
 		mag := vectorMagnitude(h.nr.Embedding)
 		// ORBIT: keep nodes at similar magnitude (±tolerance)
 		if math.Abs(mag-sourceMag) <= tolerance {
-			content := ""
-			if desc, ok := h.nr.Content["description"]; ok {
-				content = fmt.Sprintf("%v", desc)
-			}
+			content := extractContentString(h.nr.Content)
 			nodes = append(nodes, CognitiveNode{
 				ID:        h.id,
 				Content:   content,
@@ -1089,40 +1103,48 @@ func (e *Executor) applyFilters(ctx context.Context, nodes []CognitiveNode, stmt
 			continue
 		}
 
-		nr, err := e.client.GetNode(ctx, n.ID, col)
-		if err != nil || !nr.Found {
-			// Can't hydrate — keep node (fail-open)
-			filtered = append(filtered, *n)
-			continue
-		}
+		// Only hydrate via GetNode if node is missing filter-relevant fields.
+		// Nodes already hydrated by RECALL/DESCEND/ASCEND/ORBIT/RESONATE
+		// skip the redundant RPC (avoids double-hydration).
+		alreadyHydrated := n.Energy > 0 || n.NodeType != "" || n.Content != ""
+		if !alreadyHydrated {
+			nr, err := e.client.GetNode(ctx, n.ID, col)
+			if err != nil || !nr.Found {
+				// Can't hydrate — keep node (fail-open)
+				filtered = append(filtered, *n)
+				continue
+			}
 
-		// Populate CognitiveNode fields from hydrated data
-		n.Energy = nr.Energy
-		n.NodeType = nr.NodeType
-		if nr.CreatedAt > 0 {
-			t := time.Unix(nr.CreatedAt, 0)
-			n.CreatedAt = &t
-		}
+			// Populate CognitiveNode fields from hydrated data
+			n.Energy = nr.Energy
+			n.NodeType = nr.NodeType
+			if n.Content == "" {
+				n.Content = extractContentString(nr.Content)
+			}
+			if nr.CreatedAt > 0 {
+				t := time.Unix(nr.CreatedAt, 0)
+				n.CreatedAt = &t
+			}
 
-		// Extract valence from content if present
-		if v, ok := nr.Content["valence"]; ok {
-			switch vt := v.(type) {
-			case float64:
-				n.Valence = float32(vt)
-			case float32:
-				n.Valence = vt
+			// Extract valence from content if present
+			if v, ok := nr.Content["valence"]; ok {
+				switch vt := v.(type) {
+				case float64:
+					n.Valence = float32(vt)
+				case float32:
+					n.Valence = vt
+				}
 			}
 		}
 
 		// Filter: confidence (energy floor)
-		if stmt.Confidence > 0 && nr.Energy < stmt.Confidence {
+		if stmt.Confidence > 0 && n.Energy < stmt.Confidence {
 			continue
 		}
 
 		// Filter: recency (creation time)
-		if !recencyCutoff.IsZero() && nr.CreatedAt > 0 {
-			created := time.Unix(nr.CreatedAt, 0)
-			if created.Before(recencyCutoff) {
+		if !recencyCutoff.IsZero() && n.CreatedAt != nil {
+			if n.CreatedAt.Before(recencyCutoff) {
 				continue
 			}
 		}
@@ -1391,4 +1413,29 @@ func restoreQuoted(s string, quoted []string) string {
 		}
 	}
 	return s
+}
+
+// extractContentString gets a display string from a node's Content map.
+// Handles both "description" (galaxy scripts) and "content" (IMPRINT) keys.
+// Falls back to first non-empty string value if neither key is present.
+func extractContentString(content map[string]interface{}) string {
+	// Primary: "description" (galaxy scripts, manual inserts)
+	if desc, ok := content["description"]; ok {
+		if s := fmt.Sprintf("%v", desc); s != "" {
+			return s
+		}
+	}
+	// Secondary: "content" (IMPRINT verb stores here)
+	if c, ok := content["content"]; ok {
+		if s := fmt.Sprintf("%v", c); s != "" {
+			return s
+		}
+	}
+	// Fallback: first non-empty string value
+	for _, v := range content {
+		if s := fmt.Sprintf("%v", v); s != "" && s != "<nil>" {
+			return s
+		}
+	}
+	return ""
 }
