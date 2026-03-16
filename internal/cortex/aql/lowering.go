@@ -1147,7 +1147,8 @@ func (e *Executor) applyFilters(ctx context.Context, nodes []CognitiveNode, stmt
 		// Only hydrate via GetNode if node is missing filter-relevant fields.
 		// Nodes already hydrated by RECALL/DESCEND/ASCEND/ORBIT/RESONATE
 		// skip the redundant RPC (avoids double-hydration).
-		alreadyHydrated := n.Energy > 0 || n.NodeType != "" || n.Content != ""
+		// Use Content or NodeType presence as hydration indicator (Energy can legitimately be 0.0)
+		alreadyHydrated := n.NodeType != "" || n.Content != ""
 		if !alreadyHydrated {
 			nr, err := e.client.GetNode(ctx, n.ID, col)
 			if err != nil || !nr.Found {
