@@ -192,6 +192,8 @@ func (mk *MemoryKernel) SetPersistenceCallbacks(
 	onStore func(trace *MemoryTrace) error,
 	onRetrieve func(query *MemoryQuery) ([]*MemoryTrace, error),
 ) {
+	mk.mu.Lock()
+	defer mk.mu.Unlock()
 	mk.onStore = onStore
 	mk.onRetrieve = onRetrieve
 }
@@ -199,6 +201,8 @@ func (mk *MemoryKernel) SetPersistenceCallbacks(
 // SetAqlExecutor sets the AQL executor for cognitive memory persistence.
 // When set, Store() also calls AQL IMPRINT and Associate() calls AQL ASSOCIATE.
 func (mk *MemoryKernel) SetAqlExecutor(executor *aql.Executor) {
+	mk.mu.Lock()
+	defer mk.mu.Unlock()
 	mk.aqlExecutor = executor
 }
 

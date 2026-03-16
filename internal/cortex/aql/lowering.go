@@ -9,12 +9,14 @@ package aql
 import (
 	"context"
 	"fmt"
-	"log"
 	"math"
 	"strings"
+	"sync"
 	"time"
 
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
+
+	"github.com/rs/zerolog/log"
 
 	nietzsche "nietzsche-sdk"
 )
@@ -36,7 +38,7 @@ func (e *Executor) searchNodes(ctx context.Context, query string, collection str
 	if e.embedFunc != nil && query != "" {
 		vec32, err := e.embedFunc(ctx, query)
 		if err != nil {
-			log.Printf("[AQL/search] embedFunc failed (falling back to FTS): %v", err)
+			log.Warn().Err(err).Msg("[AQL/search] embedFunc failed, falling back to FTS")
 		} else {
 			vec64 := float32ToFloat64(vec32)
 			knnResults, knnErr := e.client.KnnSearch(ctx, vec64, uint32(k), collection)
@@ -96,12 +98,17 @@ func (e *Executor) executeRecall(ctx context.Context, stmt *Statement) (*Cogniti
 	}
 	if len(nodeIDs) > 0 {
 		go func(ids []string, collection string) {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Warn().Interface("panic", r).Msg("[AQL/RECALL] energy boost panic recovered")
+				}
+			}()
 			bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			for _, id := range ids {
 				nr, getErr := e.client.GetNode(bgCtx, id, collection)
 				if getErr != nil {
-					log.Printf("[AQL/RECALL] GetNode %s failed: %v", id, getErr)
+					log.Warn().Err(getErr).Str("node_id", id).Msg("[AQL/RECALL] GetNode failed")
 					continue
 				}
 				if nr.Found {
@@ -110,7 +117,7 @@ func (e *Executor) executeRecall(ctx context.Context, stmt *Statement) (*Cogniti
 						newEnergy = 1.0
 					}
 					if err := e.client.UpdateEnergy(bgCtx, id, newEnergy, collection); err != nil {
-						log.Printf("[AQL/RECALL] UpdateEnergy %s failed: %v", id, err)
+						log.Warn().Err(err).Str("node_id", id).Msg("[AQL/RECALL] UpdateEnergy failed")
 					}
 				}
 			}
@@ -280,12 +287,17 @@ func (e *Executor) executeTrace(ctx context.Context, stmt *Statement) (*Cognitiv
 	}
 	if len(pathIDs) > 0 {
 		go func(ids []string, collection string) {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Warn().Interface("panic", r).Msg("[AQL/TRACE] energy boost panic recovered")
+				}
+			}()
 			bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			for _, id := range ids {
 				nr, getErr := e.client.GetNode(bgCtx, id, collection)
 				if getErr != nil {
-					log.Printf("[AQL/TRACE] GetNode %s failed: %v", id, getErr)
+					log.Warn().Err(getErr).Str("node_id", id).Msg("[AQL/TRACE] GetNode failed")
 					continue
 				}
 				if nr.Found {
@@ -294,7 +306,7 @@ func (e *Executor) executeTrace(ctx context.Context, stmt *Statement) (*Cognitiv
 						newEnergy = 1.0
 					}
 					if err := e.client.UpdateEnergy(bgCtx, id, newEnergy, collection); err != nil {
-						log.Printf("[AQL/TRACE] UpdateEnergy %s failed: %v", id, err)
+						log.Warn().Err(err).Str("node_id", id).Msg("[AQL/TRACE] UpdateEnergy failed")
 					}
 				}
 			}
@@ -347,7 +359,7 @@ func (e *Executor) executeImprint(ctx context.Context, stmt *Statement) (*Cognit
 	if e.embedFunc != nil {
 		vec32, err := e.embedFunc(ctx, stmt.Content)
 		if err != nil {
-			log.Printf("[AQL/IMPRINT] embedFunc failed (node will have zero coords): %v", err)
+			log.Warn().Err(err).Msg("[AQL/IMPRINT] embedFunc failed, node will have zero coords")
 		} else {
 			coords = float32ToFloat64(vec32)
 			// Project into Poincare ball at magnitude 0.5
@@ -382,7 +394,7 @@ func (e *Executor) executeImprint(ctx context.Context, stmt *Statement) (*Cognit
 			Collection: col,
 		})
 		if linkErr != nil {
-			log.Printf("[AQL/IMPRINT] InsertEdge %s→%s failed: %v", insertResult.ID, stmt.LinkTo, linkErr)
+			log.Warn().Err(linkErr).Str("from", insertResult.ID).Str("to", stmt.LinkTo).Msg("[AQL/IMPRINT] InsertEdge failed")
 		} else {
 			sideEffects = append(sideEffects, "CreateAssociationEdge")
 		}
@@ -440,15 +452,17 @@ func (e *Executor) executeAssociate(ctx context.Context, stmt *Statement) (*Cogn
 	}, nil
 }
 
-// ── DISTILL — extract patterns (PageRank) ────────────────────────────
+// ── DISTILL — extract patterns (Louvain community detection) ──────────
+// Server-side DISTILL uses Louvain; Go side must match to ensure
+// consistent results for the same AQL verb across backends.
 
 func (e *Executor) executeDistill(ctx context.Context, stmt *Statement) (*CognitiveResult, error) {
 	col := e.collection(stmt)
 
-	// Run PageRank to find most influential nodes
-	prResult, err := e.client.RunPageRank(ctx, col, 0.85, 20)
+	// Run Louvain community detection (matches server-side DISTILL behavior)
+	comResult, err := e.client.RunLouvain(ctx, col, 20, 1.0)
 	if err != nil {
-		return nil, fmt.Errorf("DISTILL PageRank failed: %w", err)
+		return nil, fmt.Errorf("DISTILL Louvain failed: %w", err)
 	}
 
 	limit := stmt.Limit
@@ -456,15 +470,65 @@ func (e *Executor) executeDistill(ctx context.Context, stmt *Statement) (*Cognit
 		limit = 10
 	}
 
+	// Group nodes by community
+	communities := make(map[uint64][]string)
+	for _, a := range comResult.Assignments {
+		communities[a.CommunityID] = append(communities[a.CommunityID], a.NodeID)
+	}
+
+	// Pick one representative per community (first member), hydrate with GetNode
+	// to get energy, then rank communities by size descending.
+	type communityRep struct {
+		nodeID  string
+		energy  float32
+		size    int
+		comID   uint64
+	}
+	var reps []communityRep
+	for comID, members := range communities {
+		// Sample up to 5 members to find the highest-energy representative
+		bestID := members[0]
+		var bestEnergy float32
+		sampleSize := 5
+		if len(members) < sampleSize {
+			sampleSize = len(members)
+		}
+		for _, id := range members[:sampleSize] {
+			nr, getErr := e.client.GetNode(ctx, id, col)
+			if getErr != nil || !nr.Found {
+				continue
+			}
+			if nr.Energy > bestEnergy {
+				bestEnergy = nr.Energy
+				bestID = id
+			}
+		}
+		reps = append(reps, communityRep{nodeID: bestID, energy: bestEnergy, size: len(members), comID: comID})
+	}
+
+	// Sort by community size descending (largest communities = most salient patterns)
+	for i := 1; i < len(reps); i++ {
+		key := reps[i]
+		j := i - 1
+		for j >= 0 && reps[j].size < key.size {
+			reps[j+1] = reps[j]
+			j--
+		}
+		reps[j+1] = key
+	}
+
 	var nodes []CognitiveNode
-	for i, score := range prResult.Scores {
+	for i, rep := range reps {
 		if i >= limit {
 			break
 		}
 		nodes = append(nodes, CognitiveNode{
-			ID:       score.NodeID,
-			Energy:   float32(score.Score),
-			Metadata: map[string]interface{}{"pagerank": score.Score},
+			ID:     rep.nodeID,
+			Energy: rep.energy,
+			Metadata: map[string]interface{}{
+				"community_id":   rep.comID,
+				"community_size": rep.size,
+			},
 		})
 	}
 
@@ -487,22 +551,22 @@ func (e *Executor) executeFade(ctx context.Context, stmt *Statement) (*Cognitive
 	for _, nodeID := range stmt.NodeIDs {
 		nr, err := e.client.GetNode(ctx, nodeID, col)
 		if err != nil {
-			log.Printf("[AQL/FADE] GetNode %s failed: %v", nodeID, err)
+			log.Warn().Err(err).Str("node_id", nodeID).Msg("[AQL/FADE] GetNode failed")
 			continue
 		}
 		if !nr.Found {
-			log.Printf("[AQL/FADE] Node %s not found, skipping", nodeID)
+			log.Debug().Str("node_id", nodeID).Msg("[AQL/FADE] Node not found, skipping")
 			continue
 		}
 		newEnergy := nr.Energy - 0.2
 		if newEnergy < 0.01 {
 			if delErr := e.client.DeleteNode(ctx, nodeID, col); delErr != nil {
-				log.Printf("[AQL/FADE] DeleteNode %s failed: %v", nodeID, delErr)
+				log.Warn().Err(delErr).Str("node_id", nodeID).Msg("[AQL/FADE] DeleteNode failed")
 				continue
 			}
 		} else {
 			if upErr := e.client.UpdateEnergy(ctx, nodeID, newEnergy, col); upErr != nil {
-				log.Printf("[AQL/FADE] UpdateEnergy %s failed: %v", nodeID, upErr)
+				log.Warn().Err(upErr).Str("node_id", nodeID).Msg("[AQL/FADE] UpdateEnergy failed")
 				continue
 			}
 		}
@@ -545,20 +609,43 @@ func (e *Executor) executeDescend(ctx context.Context, stmt *Statement) (*Cognit
 		return nil, fmt.Errorf("DESCEND BFS failed: %w", err)
 	}
 
-	var nodes []CognitiveNode
+	// Parallelize GetNode calls with semaphore to avoid N+1 sequential RPCs
+	type hydratedNode struct {
+		id  string
+		nr  nietzsche.NodeResult
+		err error
+	}
+	filteredIDs := make([]string, 0, len(visitedIDs))
 	for _, id := range visitedIDs {
-		if id == seedID {
+		if id != seedID {
+			filteredIDs = append(filteredIDs, id)
+		}
+	}
+	hydrated := make([]hydratedNode, len(filteredIDs))
+	sem := make(chan struct{}, 10)
+	var wg sync.WaitGroup
+	for i, id := range filteredIDs {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(idx int, nodeID string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			nr, getErr := e.client.GetNode(ctx, nodeID, col)
+			hydrated[idx] = hydratedNode{id: nodeID, nr: nr, err: getErr}
+		}(i, id)
+	}
+	wg.Wait()
+
+	var nodes []CognitiveNode
+	for _, h := range hydrated {
+		if h.err != nil || !h.nr.Found {
 			continue
 		}
-		nr, getErr := e.client.GetNode(ctx, id, col)
-		if getErr != nil || !nr.Found {
-			continue
-		}
-		mag := vectorMagnitude(nr.Embedding)
+		mag := vectorMagnitude(h.nr.Embedding)
 		// DESCEND: keep nodes with higher magnitude (deeper in Poincaré)
 		if mag > sourceMag {
 			nodes = append(nodes, CognitiveNode{
-				ID:        id,
+				ID:        h.id,
 				Magnitude: float32(mag),
 				Metadata:  map[string]interface{}{"magnitude": mag, "depth_delta": mag - sourceMag},
 			})
@@ -595,20 +682,46 @@ func (e *Executor) executeAscend(ctx context.Context, stmt *Statement) (*Cogniti
 		return nil, fmt.Errorf("ASCEND BFS failed: %w", err)
 	}
 
-	var nodes []CognitiveNode
+	// Parallelize GetNode calls with semaphore to avoid N+1 sequential RPCs
+	ascendFilteredIDs := make([]string, 0, len(visitedIDs))
 	for _, id := range visitedIDs {
-		if id == seedID {
+		if id != seedID {
+			ascendFilteredIDs = append(ascendFilteredIDs, id)
+		}
+	}
+	ascendHydrated := make([]struct {
+		id  string
+		nr  nietzsche.NodeResult
+		err error
+	}, len(ascendFilteredIDs))
+	ascendSem := make(chan struct{}, 10)
+	var ascendWg sync.WaitGroup
+	for i, id := range ascendFilteredIDs {
+		ascendWg.Add(1)
+		ascendSem <- struct{}{}
+		go func(idx int, nodeID string) {
+			defer ascendWg.Done()
+			defer func() { <-ascendSem }()
+			nr, getErr := e.client.GetNode(ctx, nodeID, col)
+			ascendHydrated[idx] = struct {
+				id  string
+				nr  nietzsche.NodeResult
+				err error
+			}{id: nodeID, nr: nr, err: getErr}
+		}(i, id)
+	}
+	ascendWg.Wait()
+
+	var nodes []CognitiveNode
+	for _, h := range ascendHydrated {
+		if h.err != nil || !h.nr.Found {
 			continue
 		}
-		nr, getErr := e.client.GetNode(ctx, id, col)
-		if getErr != nil || !nr.Found {
-			continue
-		}
-		mag := vectorMagnitude(nr.Embedding)
+		mag := vectorMagnitude(h.nr.Embedding)
 		// ASCEND: keep nodes with lower magnitude (more abstract, closer to origin)
 		if mag < sourceMag {
 			nodes = append(nodes, CognitiveNode{
-				ID:        id,
+				ID:        h.id,
 				Magnitude: float32(mag),
 				Metadata:  map[string]interface{}{"magnitude": mag, "depth_delta": sourceMag - mag},
 			})
@@ -646,17 +759,41 @@ func (e *Executor) executeOrbit(ctx context.Context, stmt *Statement) (*Cognitiv
 		tolerance = 0.05
 	}
 
+	// Parallelize GetNode calls with semaphore to avoid N+1 sequential RPCs
+	orbitCandidates := neighbors[1:] // skip seed (index 0)
+	orbitHydrated := make([]struct {
+		id  string
+		nr  nietzsche.NodeResult
+		err error
+	}, len(orbitCandidates))
+	orbitSem := make(chan struct{}, 10)
+	var orbitWg sync.WaitGroup
+	for i, n := range orbitCandidates {
+		orbitWg.Add(1)
+		orbitSem <- struct{}{}
+		go func(idx int, nodeID string) {
+			defer orbitWg.Done()
+			defer func() { <-orbitSem }()
+			nr, getErr := e.client.GetNode(ctx, nodeID, col)
+			orbitHydrated[idx] = struct {
+				id  string
+				nr  nietzsche.NodeResult
+				err error
+			}{id: nodeID, nr: nr, err: getErr}
+		}(i, n.ID)
+	}
+	orbitWg.Wait()
+
 	var nodes []CognitiveNode
-	for _, n := range neighbors[1:] { // skip seed (index 0)
-		nr, getErr := e.client.GetNode(ctx, n.ID, col)
-		if getErr != nil || !nr.Found {
+	for _, h := range orbitHydrated {
+		if h.err != nil || !h.nr.Found {
 			continue
 		}
-		mag := vectorMagnitude(nr.Embedding)
+		mag := vectorMagnitude(h.nr.Embedding)
 		// ORBIT: keep nodes at similar magnitude (±tolerance)
 		if math.Abs(mag-sourceMag) <= tolerance {
 			nodes = append(nodes, CognitiveNode{
-				ID:        n.ID,
+				ID:        h.id,
 				Magnitude: float32(mag),
 				Metadata:  map[string]interface{}{"magnitude": mag, "mag_delta": math.Abs(mag - sourceMag)},
 			})
