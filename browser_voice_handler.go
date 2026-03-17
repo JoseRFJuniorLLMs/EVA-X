@@ -324,6 +324,10 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 	var memoryCacheMu sync.RWMutex
 	memoryCache := make(map[string][]string) // key = query prefix normalizado, value = memory strings
 
+	// Anti-loop cooldown para recall_memory — previne Gemini de chamar tool infinitamente
+	var recallCooldownMu sync.Mutex
+	recallCooldownMap := make(map[string]time.Time) // key = query normalizado, value = último call
+
 	// Transcript accumulation — necessario para CoreMemory.ProcessSessionEnd
 	var transcriptMu sync.Mutex
 	var transcriptAccum strings.Builder // transcript completo da sessao
@@ -390,6 +394,32 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 										query = "geral"
 									}
 
+									// Anti-loop: se recall_memory já foi chamado recentemente com mesma query,
+									// retornar resposta que force o Gemini a falar em vez de chamar tool de novo
+									recallCooldownMu.Lock()
+									cooldownKey := strings.ToLower(query)
+									if lastCall, exists := recallCooldownMap[cooldownKey]; exists && time.Since(lastCall) < 8*time.Second {
+										recallCooldownMu.Unlock()
+										log.Warn().Str("query", query).Msg("[RECALL-TOOL] Anti-loop: recall_memory chamado repetidamente, forçando resposta")
+										result := map[string]interface{}{
+											"memories": "Nao tenho memorias especificas sobre isso, mas posso conversar com base no que sei. Pergunta-me diretamente o que queres saber.",
+											"count":    1,
+											"note":     "memory_not_found_please_respond_naturally",
+										}
+										geminiMu.RLock()
+										c := geminiRef
+										geminiMu.RUnlock()
+										if c != nil {
+											c.SendToolResponse(n, result)
+										}
+										writeMu.Lock()
+										conn.WriteJSON(browserMessage{Type: "tool_event", Tool: n, ToolData: result, Status: "success"})
+										writeMu.Unlock()
+										return
+									}
+									recallCooldownMap[cooldownKey] = time.Now()
+									recallCooldownMu.Unlock()
+
 									// 1. Procurar no cache (pre-fetched pelo background recall)
 									var memories []string
 									memoryCacheMu.RLock()
@@ -453,13 +483,17 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 									}
 
 									// 3. Montar resultado
+									// IMPORTANTE: Quando count=0, retornar count=1 com mensagem natural
+									// para evitar que o Gemini entre em loop chamando recall_memory repetidamente.
+									// O Gemini interpreta count=0 como "preciso tentar de novo".
 									result := map[string]interface{}{}
 									if len(memories) > 0 {
 										result["memories"] = strings.Join(memories, "\n---\n")
 										result["count"] = len(memories)
 									} else {
-										result["memories"] = "Nenhuma memoria relevante encontrada para: " + query
-										result["count"] = 0
+										result["memories"] = "Nao encontrei memorias especificas sobre '" + query + "'. Responde com base no que sabes da conversa atual."
+										result["count"] = 1
+										result["note"] = "no_exact_match_respond_naturally"
 									}
 
 									// 4. Enviar via tool_response (ACEITE pelo native-audio!)
