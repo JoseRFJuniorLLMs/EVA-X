@@ -402,9 +402,9 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 										recallCooldownMu.Unlock()
 										log.Warn().Str("query", query).Msg("[RECALL-TOOL] Anti-loop: recall_memory chamado repetidamente, forçando resposta")
 										result := map[string]interface{}{
-											"memories": "Ja verifiquei e nao ha memorias sobre isso. Responda ao usuario vocalmente agora. NAO chame recall_memory novamente.",
-											"count":    1,
-											"note":     "ALREADY_SEARCHED_respond_vocally_immediately",
+											"_voice_summary": "Ja verifiquei e nao ha memorias sobre isso. Responda ao usuario vocalmente.",
+											"memories":       "Nenhuma memoria encontrada.",
+											"count":          0,
 										}
 										geminiMu.RLock()
 										c := geminiRef
@@ -491,9 +491,9 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 										result["memories"] = strings.Join(memories, "\n---\n")
 										result["count"] = len(memories)
 									} else {
-										result["memories"] = "RESULTADO: Nao tenho registros dessa conversa na minha memoria. Isso e normal — minha memoria episodica esta em fase de ativacao. Diga ao usuario de forma natural e breve que nao consegue lembrar dessa conversa especifica, e pergunte se pode ajudar com outra coisa. NAO chame recall_memory novamente."
-										result["count"] = 1
-										result["note"] = "STOP_no_more_recall_calls_respond_vocally_now"
+										result["_voice_summary"] = "Nao encontrei memorias sobre isso. Diga ao usuario que nao consegue lembrar dessa conversa e pergunte como pode ajudar."
+										result["memories"] = "Nenhuma memoria encontrada."
+										result["count"] = 0
 									}
 
 									// 4. Enviar via tool_response (ACEITE pelo native-audio!)
@@ -807,9 +807,11 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 							writeMu.Unlock()
 						}
 					} else if text, ok := part["text"].(string); ok && text != "" {
-						// Log para debug — NAO enviar ao browser como subtitle.
-						// A transcricao real vem de outputAudioTranscription.
-						log.Debug().Str("session", sessionID).Str("text", text).Msg("[BROWSER] modelTurn text ignorado (audio-only mode)")
+						// Enviar pensamento da EVA ao browser para exibir na tela
+						writeMu.Lock()
+						conn.WriteJSON(browserMessage{Type: "thinking", Text: text})
+						writeMu.Unlock()
+						log.Debug().Str("session", sessionID).Int("len", len(text)).Msg("[BROWSER] modelTurn thinking enviado ao browser")
 					}
 				}
 			}
