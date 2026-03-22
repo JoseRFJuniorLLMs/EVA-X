@@ -394,44 +394,67 @@ func (c *Client) HandleResponses(ctx context.Context) error {
 func (c *Client) handleToolCalls(toolCall map[string]interface{}) {
 	if fcList, ok := toolCall["functionCalls"].([]interface{}); ok {
 		for _, f := range fcList {
-			fc := f.(map[string]interface{})
-			name := fc["name"].(string)
-			args := fc["args"].(map[string]interface{})
+			fc, ok := f.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			name, _ := fc["name"].(string)
+			if name == "" {
+				continue
+			}
+			args, _ := fc["args"].(map[string]interface{})
+			if args == nil {
+				args = map[string]interface{}{}
+			}
+			// Extract function call ID for matching in tool_response
+			fcID, _ := fc["id"].(string)
 
 			if c.onToolCall != nil {
-				go func(n string, a map[string]interface{}) {
+				go func(n string, a map[string]interface{}, id string) {
 					defer func() {
 						if r := recover(); r != nil {
 							log.Printf("🚨 PANIC Tool %s: %v", n, r)
-							c.SendToolResponse(n, map[string]interface{}{"error": "Internal error"})
+							c.SendToolResponse(n, map[string]interface{}{"error": "Internal error"}, id)
 						}
 					}()
 
 					result := c.onToolCall(n, a)
-					c.SendToolResponse(n, result)
-				}(name, args)
+					c.SendToolResponse(n, result, id)
+				}(name, args, fcID)
 			}
 		}
 	}
 }
 
-// SendToolResponse envia resultado de ferramenta
-func (c *Client) SendToolResponse(name string, result map[string]interface{}) error {
+// SendToolResponse envia resultado de ferramenta.
+// FIX 2026-03-22: Aceita callID opcional para incluir o ID do function call
+// na resposta. O Gemini Live API exige o ID para matchear a resposta ao call.
+// Sem ID, o Gemini pode ignorar a resposta e ficar pendurado (voz morre).
+func (c *Client) SendToolResponse(name string, result map[string]interface{}, callID ...string) error {
 	// Adapt tool response for Gemini Native Audio (prevent freeze on large payloads)
 	safeResult := AdaptForAudio(name, result)
+
+	funcResp := map[string]interface{}{
+		"name":     name,
+		"response": safeResult,
+	}
+	// Include function call ID if provided
+	if len(callID) > 0 && callID[0] != "" {
+		funcResp["id"] = callID[0]
+	}
 
 	msg := map[string]interface{}{
 		"tool_response": map[string]interface{}{
 			"function_responses": []map[string]interface{}{
-				{
-					"name":     name,
-					"response": safeResult,
-				},
+				funcResp,
 			},
 		},
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.conn == nil {
+		return fmt.Errorf("gemini connection is nil")
+	}
 	return c.conn.WriteJSON(msg)
 }
 

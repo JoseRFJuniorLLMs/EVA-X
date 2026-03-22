@@ -379,7 +379,12 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 							if name == "" {
 								continue
 							}
-							log.Info().Str("session", sessionID).Str("tool", name).Msg("[BROWSER] Tool call recebido do Gemini")
+							// Extract function call ID for tool_response matching
+							fcID, _ := fc["id"].(string)
+							if args == nil {
+								args = map[string]interface{}{}
+							}
+							log.Info().Str("session", sessionID).Str("tool", name).Str("fcID", fcID).Msg("[BROWSER] Tool call recebido do Gemini")
 
 							writeMu.Lock()
 							conn.WriteJSON(browserMessage{Type: "tool_event", Tool: name, Status: "executing"})
@@ -388,16 +393,17 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 							// recall_memory: servir do cache local (sub-ms) ou live query,
 							// responder via tool_response (ACEITE pelo native-audio, sem matar a voz)
 							if name == "recall_memory" {
-								go func(n string, a map[string]interface{}) {
+								go func(n string, a map[string]interface{}, callID string) {
 									query, _ := a["query"].(string)
 									if query == "" {
 										query = "geral"
 									}
 
-									// Anti-loop: se recall_memory já foi chamado recentemente com mesma query,
-									// retornar resposta que force o Gemini a falar em vez de chamar tool de novo
+									// Anti-loop: ANY recall_memory call within 120s gets the cached response.
+									// Gemini rephrases queries to bypass per-query cooldown, so we use a
+									// single global cooldown key for ALL recall_memory calls.
 									recallCooldownMu.Lock()
-									cooldownKey := strings.ToLower(query)
+									cooldownKey := "__recall_memory_global__"
 									if lastCall, exists := recallCooldownMap[cooldownKey]; exists && time.Since(lastCall) < 120*time.Second {
 										recallCooldownMu.Unlock()
 										log.Warn().Str("query", query).Msg("[RECALL-TOOL] Anti-loop: recall_memory chamado repetidamente, forçando resposta")
@@ -410,7 +416,7 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 										c := geminiRef
 										geminiMu.RUnlock()
 										if c != nil {
-											c.SendToolResponse(n, result)
+											c.SendToolResponse(n, result, callID)
 										}
 										writeMu.Lock()
 										conn.WriteJSON(browserMessage{Type: "tool_event", Tool: n, ToolData: result, Status: "success"})
@@ -508,7 +514,7 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 											time.Sleep(time.Duration(100*(attempt+1)) * time.Millisecond)
 											continue
 										}
-										sendErr = c.SendToolResponse(n, result)
+										sendErr = c.SendToolResponse(n, result, callID)
 										if sendErr == nil {
 											break
 										}
@@ -522,12 +528,12 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 									writeMu.Lock()
 									conn.WriteJSON(browserMessage{Type: "tool_event", Tool: n, ToolData: result, Status: "success"})
 									writeMu.Unlock()
-									log.Info().Str("query", query).Int("count", len(memories)).Msg("[RECALL-TOOL] recall_memory concluido via tool_response")
-								}(name, args)
+									log.Info().Str("query", query).Int("count", len(memories)).Str("fcID", callID).Msg("[RECALL-TOOL] recall_memory concluido via tool_response")
+								}(name, args, fcID)
 								continue
 							}
 
-							go func(n string, a map[string]interface{}) {
+							go func(n string, a map[string]interface{}, callID string) {
 								defer func() {
 									if r := recover(); r != nil {
 										log.Error().Str("tool", n).Interface("panic", r).Msg("[BROWSER] Tool panic")
@@ -535,7 +541,7 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 										c := geminiRef
 										geminiMu.RUnlock()
 										if c != nil {
-											c.SendToolResponse(n, map[string]interface{}{"error": "Internal error"})
+											c.SendToolResponse(n, map[string]interface{}{"error": "Internal error"}, callID)
 										}
 										writeMu.Lock()
 										conn.WriteJSON(browserMessage{Type: "tool_event", Tool: n, Status: "error", Text: "Internal error"})
@@ -560,7 +566,7 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 										time.Sleep(time.Duration(100*(attempt+1)) * time.Millisecond)
 										continue
 									}
-									toolSendErr = c.SendToolResponse(n, result)
+									toolSendErr = c.SendToolResponse(n, result, callID)
 									if toolSendErr == nil {
 										break
 									}
@@ -584,8 +590,8 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 								}
 								writeMu.Unlock()
 
-								log.Info().Str("tool", n).Str("status", status).Msg("[BROWSER] Tool call concluido")
-							}(name, args)
+								log.Info().Str("tool", n).Str("status", status).Str("fcID", callID).Msg("[BROWSER] Tool call concluido")
+							}(name, args, fcID)
 						}
 					}
 					continue
