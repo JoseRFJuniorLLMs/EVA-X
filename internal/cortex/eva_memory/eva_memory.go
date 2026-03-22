@@ -16,12 +16,21 @@
 //   (:EvaInsight)-[:ABOUT]->(:EvaTopic)
 //
 // Usado por: geminiWeb (eva_handler.go -> /ws/eva)
+//
+// FIX 2026-03-22: Substituir NQL por gRPC directo (MergeNode/BFS).
+// ROOT CAUSE: NQL "MATCH (s:EvaSession) WHERE s.id = $x" falhava por 2 razoes:
+//   1. EvaSession nao e tipo built-in NQL (so Semantic/Episodic/Concept/DreamSnapshot)
+//   2. "s.id" no NQL resolve para o UUID do no (built-in), nao o campo "id" do content
+// Resultado: StoreTurn nunca encontrava a sessao → turn_count=0 em todas as 54 sessoes.
+// Fix: usar MergeNode gRPC (que ja usa MatchKeys no content) para lookups de sessao,
+// e NQL corrigido com "s.node_label" e "s.session_id" para queries de listagem.
 
 package eva_memory
 
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -160,14 +169,15 @@ func (em *EvaMemory) InitSchema(ctx context.Context) error {
 	return nil
 }
 
-// StartSession registra uma nova sessao de conversa no grafo
+// StartSession registra uma nova sessao de conversa no grafo.
+// Uses "session_id" (not "id") in content to avoid NQL field shadowing.
 func (em *EvaMemory) StartSession(ctx context.Context, sessionID string) error {
 	now := time.Now()
 
 	_, err := em.graph.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
 		NodeType: "Semantic",
 		MatchKeys: map[string]interface{}{
-			"id":         sessionID,
+			"session_id": sessionID,
 			"node_label": "EvaSession",
 		},
 		OnCreateSet: map[string]interface{}{
@@ -185,30 +195,51 @@ func (em *EvaMemory) StartSession(ctx context.Context, sessionID string) error {
 	return nil
 }
 
+// findSession looks up an EvaSession node by sessionID using gRPC MergeNode.
+// MergeNode with only MatchKeys (no OnCreateSet) finds existing nodes without
+// creating new ones. Returns the node UUID and content, or error if not found.
+func (em *EvaMemory) findSession(ctx context.Context, sessionID string) (string, map[string]interface{}, error) {
+	result, err := em.graph.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+		NodeType: "Semantic",
+		MatchKeys: map[string]interface{}{
+			"session_id": sessionID,
+			"node_label": "EvaSession",
+		},
+	})
+	if err != nil {
+		return "", nil, fmt.Errorf("session %s lookup failed: %w", sessionID, err)
+	}
+	// MergeNode always succeeds (creates if not found). Check if it was created
+	// (which means the session didn't exist before). If created, it's an orphan
+	// — delete it and return not found.
+	if result.Created {
+		// Shouldn't have created — session didn't exist. Clean up the orphan.
+		_ = em.graph.DeleteNode(ctx, result.NodeID, "")
+		return "", nil, fmt.Errorf("session %s not found", sessionID)
+	}
+	return result.NodeID, result.Content, nil
+}
+
 // EndSession finaliza uma sessao e gera resumo automatico.
 // Sessions with 0 turns and duration < 5s are considered spam and deleted.
 func (em *EvaMemory) EndSession(ctx context.Context, sessionID string) error {
 	now := time.Now()
 
-	// Query the session to check turn_count and duration
-	nql := `MATCH (s:EvaSession) WHERE s.id = $sessionId RETURN s`
-	result, err := em.graph.ExecuteNQL(ctx, nql, map[string]interface{}{
-		"sessionId": sessionID,
-	}, "")
-	if err != nil || len(result.Nodes) == 0 {
-		log.Warn().Str("session", sessionID).Msg("[EVA-MEMORY] Sessao nao encontrada ao finalizar")
+	// Find the session using gRPC MergeNode (not NQL)
+	nodeID, content, err := em.findSession(ctx, sessionID)
+	if err != nil {
+		log.Warn().Err(err).Str("session", sessionID).Msg("[EVA-MEMORY] Sessao nao encontrada ao finalizar")
 		return err
 	}
 
-	node := result.Nodes[0]
 	turnCount := 0
-	if tc, ok := node.Content["turn_count"].(float64); ok {
+	if tc, ok := content["turn_count"].(float64); ok {
 		turnCount = int(tc)
 	}
 
 	// Check session duration
 	durationOK := false
-	if startedStr, ok := node.Content["started_at"].(string); ok {
+	if startedStr, ok := content["started_at"].(string); ok {
 		if startedAt, err := time.Parse(time.RFC3339, startedStr); err == nil {
 			durationOK = now.Sub(startedAt) >= 5*time.Second
 		}
@@ -217,8 +248,8 @@ func (em *EvaMemory) EndSession(ctx context.Context, sessionID string) error {
 	// Skip persisting empty sessions: 0 turns AND duration < 5s
 	if turnCount == 0 && !durationOK {
 		log.Info().Str("session", sessionID).Msg("[EVA-MEMORY] Sessao vazia (0 turnos, <5s) — removendo spam")
-		if err := em.graph.DeleteNode(ctx, node.ID, ""); err != nil {
-			log.Warn().Err(err).Str("node_id", node.ID).Msg("[EVA-MEMORY] Failed to delete empty session node")
+		if err := em.graph.DeleteNode(ctx, nodeID, ""); err != nil {
+			log.Warn().Err(err).Str("node_id", nodeID).Msg("[EVA-MEMORY] Failed to delete empty session node")
 		}
 		return nil
 	}
@@ -226,7 +257,7 @@ func (em *EvaMemory) EndSession(ctx context.Context, sessionID string) error {
 	_, err = em.graph.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
 		NodeType: "Semantic",
 		MatchKeys: map[string]interface{}{
-			"id":         sessionID,
+			"session_id": sessionID,
 			"node_label": "EvaSession",
 		},
 		OnMatchSet: map[string]interface{}{
@@ -251,9 +282,9 @@ func (em *EvaMemory) EndSession(ctx context.Context, sessionID string) error {
 
 // pruneOldSessions maintains only the N most recent completed sessions, deleting older ones
 // and their associated EvaTurn nodes to prevent infinite graph database accumulation (P1-C).
+// Uses NQL with corrected field names (node_label, session_id instead of custom type labels).
 func (em *EvaMemory) pruneOldSessions(ctx context.Context, keep int) {
-	// NQL SKIP is used to fetch all sessions strictly older than our 'keep' threshold.
-	nql := fmt.Sprintf(`MATCH (s:EvaSession) WHERE s.status = "completed" RETURN s ORDER BY s.started_at DESC SKIP %d`, keep)
+	nql := fmt.Sprintf(`MATCH (s:Semantic) WHERE s.node_label = "EvaSession" AND s.status = "completed" RETURN s ORDER BY s.started_at DESC SKIP %d`, keep)
 	result, err := em.graph.ExecuteNQL(ctx, nql, nil, "")
 	if err != nil || len(result.Nodes) == 0 {
 		return
@@ -282,28 +313,25 @@ func (em *EvaMemory) pruneOldSessions(ctx context.Context, keep int) {
 	}
 }
 
-// StoreTurn salva um turno de conversa (user ou assistant) no grafo
-// Extrai topicos automaticamente do conteudo e conecta ao grafo
+// StoreTurn salva um turno de conversa (user ou assistant) no grafo.
+// Uses gRPC MergeNode to find the session (not NQL), fixing the root cause
+// of turn_count=0 across all 54 sessions.
 func (em *EvaMemory) StoreTurn(ctx context.Context, sessionID, role, content string) error {
 	turnID := fmt.Sprintf("%s-%s-%d", sessionID, role, time.Now().UnixNano())
 	now := time.Now()
 
-	// 1. Find the session node
-	nql := `MATCH (s:EvaSession) WHERE s.id = $sessionId RETURN s`
-	sessionResult, err := em.graph.ExecuteNQL(ctx, nql, map[string]interface{}{
-		"sessionId": sessionID,
-	}, "")
-	if err != nil || len(sessionResult.Nodes) == 0 {
-		log.Error().Err(err).Msg("[EVA-MEMORY] Sessao nao encontrada para salvar turno")
-		return fmt.Errorf("session %s not found", sessionID)
+	// 1. Find the session node using gRPC MergeNode (NOT NQL)
+	sessionNodeID, sessionContent, err := em.findSession(ctx, sessionID)
+	if err != nil {
+		log.Error().Err(err).Str("session", sessionID).Msg("[EVA-MEMORY] Sessao nao encontrada para salvar turno")
+		return err
 	}
-	sessionNodeID := sessionResult.Nodes[0].ID
 
 	// 2. Create the turn node
 	turnResult, err := em.graph.InsertNode(ctx, nietzsche.InsertNodeOpts{
 		NodeType: "Semantic",
 		Content: map[string]interface{}{
-			"id":         turnID,
+			"turn_id":    turnID,
 			"node_label": "EvaTurn",
 			"role":       role,
 			"content":    content,
@@ -326,15 +354,15 @@ func (em *EvaMemory) StoreTurn(ctx context.Context, sessionID, role, content str
 		return err
 	}
 
-	// 4. Update session turn_count
+	// 4. Update session turn_count via gRPC MergeNode
 	currentCount := 0
-	if tc, ok := sessionResult.Nodes[0].Content["turn_count"].(float64); ok {
+	if tc, ok := sessionContent["turn_count"].(float64); ok {
 		currentCount = int(tc)
 	}
 	_, err = em.graph.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
 		NodeType: "Semantic",
 		MatchKeys: map[string]interface{}{
-			"id":         sessionID,
+			"session_id": sessionID,
 			"node_label": "EvaSession",
 		},
 		OnMatchSet: map[string]interface{}{
@@ -344,6 +372,9 @@ func (em *EvaMemory) StoreTurn(ctx context.Context, sessionID, role, content str
 	if err != nil {
 		log.Warn().Err(err).Msg("[EVA-MEMORY] Falha ao atualizar turn_count")
 	}
+
+	log.Info().Str("session", sessionID).Str("role", role).Int("turn", currentCount+1).
+		Int("content_len", len(content)).Msg("[EVA-MEMORY] Turno salvo com sucesso")
 
 	// 5. Extract topics and connect
 	topics := extractTopics(content)
@@ -449,7 +480,8 @@ func (em *EvaMemory) LoadMetaCognition(ctx context.Context) (string, error) {
 	return header + strings.Join(sections, "\n"), nil
 }
 
-// getRecentSessions retorna resumos das N sessoes mais recentes
+// getRecentSessions retorna resumos das N sessoes mais recentes.
+// Uses corrected NQL with explicit Semantic type and node_label filter.
 
 // humanTimeStr formats a RFC3339 string as human-readable relative time.
 func humanTimeStr(rfc3339 interface{}) string {
@@ -483,9 +515,8 @@ func humanTimeStr(rfc3339 interface{}) string {
 }
 
 func (em *EvaMemory) getRecentSessions(ctx context.Context, limit int) ([]string, error) {
-	// Optimized: Try to get session and topics in fewer queries if possible,
-	// or at least simplify the BFS logic.
-	nql := `MATCH (s:EvaSession) WHERE s.status = "completed" RETURN s ORDER BY s.started_at DESC LIMIT $limit`
+	// FIX: Use corrected NQL — Semantic type + node_label filter + session_id field
+	nql := `MATCH (s:Semantic) WHERE s.node_label = "EvaSession" AND s.status = "completed" RETURN s ORDER BY s.started_at DESC LIMIT $limit`
 	result, err := em.graph.ExecuteNQL(ctx, nql, map[string]interface{}{
 		"limit": limit,
 	}, "")
@@ -497,18 +528,21 @@ func (em *EvaMemory) getRecentSessions(ctx context.Context, limit int) ([]string
 	for _, node := range result.Nodes {
 		started := node.Content["started_at"]
 		turnCount := node.Content["turn_count"]
-		sessionID, _ := node.Content["id"].(string)
 
-		// Get topics for this session via a single NQL join-like query
+		// Get topics for this session via BFS on DISCUSSED edges (not NQL)
 		topicList := "nenhum topico"
-		if sessionID != "" {
-			topicNql := `MATCH (s:EvaSession)-[:DISCUSSED]->(t:EvaTopic) WHERE s.id = $sid RETURN t.name as name`
-			topicRes, err := em.graph.ExecuteNQL(ctx, topicNql, map[string]interface{}{"sid": sessionID}, "")
-			if err == nil && len(topicRes.ScalarRows) > 0 {
-				var names []string
-				for _, row := range topicRes.ScalarRows {
-					names = append(names, fmt.Sprintf("%v", row["name"]))
+		topicIDs, err := em.graph.BfsWithEdgeType(ctx, node.ID, "DISCUSSED", 1, "")
+		if err == nil && len(topicIDs) > 0 {
+			var names []string
+			for _, tid := range topicIDs {
+				topicNode, err := em.graph.GetNode(ctx, tid, "")
+				if err == nil {
+					if name, ok := topicNode.Content["name"].(string); ok {
+						names = append(names, name)
+					}
 				}
+			}
+			if len(names) > 0 {
 				topicList = strings.Join(names, ", ")
 			}
 		}
@@ -518,10 +552,10 @@ func (em *EvaMemory) getRecentSessions(ctx context.Context, limit int) ([]string
 	return results, nil
 }
 
-// getTopTopics retorna os topicos mais discutidos
+// getTopTopics retorna os topicos mais discutidos.
+// Uses corrected NQL with Semantic type and node_label filter.
 func (em *EvaMemory) getTopTopics(ctx context.Context, limit int) ([]string, error) {
-	// NQL already supports ORDER BY and LIMIT
-	nql := `MATCH (t:EvaTopic) WHERE t.frequency > 0 RETURN t.name as name, t.frequency as freq ORDER BY t.frequency DESC LIMIT $limit`
+	nql := `MATCH (t:Semantic) WHERE t.node_label = "EvaTopic" AND t.frequency > 0 RETURN t ORDER BY t.frequency DESC LIMIT $limit`
 	result, err := em.graph.ExecuteNQL(ctx, nql, map[string]interface{}{
 		"limit": limit,
 	}, "")
@@ -529,17 +563,37 @@ func (em *EvaMemory) getTopTopics(ctx context.Context, limit int) ([]string, err
 		return nil, err
 	}
 
+	// Sort by frequency descending (in case NQL ORDER BY doesn't work on content fields)
+	type topicEntry struct {
+		name string
+		freq float64
+	}
+	var entries []topicEntry
+	for _, node := range result.Nodes {
+		name, _ := node.Content["name"].(string)
+		freq := 0.0
+		if f, ok := node.Content["frequency"].(float64); ok {
+			freq = f
+		}
+		entries = append(entries, topicEntry{name: name, freq: freq})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].freq > entries[j].freq })
+
 	var results []string
-	for _, row := range result.ScalarRows {
-		results = append(results, fmt.Sprintf("- %v (%vx mencionado)", row["name"], row["freq"]))
+	for _, e := range entries {
+		if len(results) >= limit {
+			break
+		}
+		results = append(results, fmt.Sprintf("- %s (%.0fx mencionado)", e.name, e.freq))
 	}
 	return results, nil
 }
 
-// getRecentTopics retorna topicos discutidos nos ultimos N dias
+// getRecentTopics retorna topicos discutidos nos ultimos N dias.
+// Uses corrected NQL with Semantic type and node_label filter.
 func (em *EvaMemory) getRecentTopics(ctx context.Context, days int) ([]string, error) {
 	cutoff := nietzscheInfra.DaysAgoUnix(days)
-	nql := `MATCH (t:EvaTopic) WHERE t.last_seen > $cutoff RETURN t.name as name ORDER BY t.last_seen DESC`
+	nql := `MATCH (t:Semantic) WHERE t.node_label = "EvaTopic" AND t.last_seen > $cutoff RETURN t ORDER BY t.last_seen DESC`
 	result, err := em.graph.ExecuteNQL(ctx, nql, map[string]interface{}{
 		"cutoff": cutoff,
 	}, "")
@@ -548,15 +602,18 @@ func (em *EvaMemory) getRecentTopics(ctx context.Context, days int) ([]string, e
 	}
 
 	var results []string
-	for _, row := range result.ScalarRows {
-		results = append(results, fmt.Sprintf("%v", row["name"]))
+	for _, node := range result.Nodes {
+		if name, ok := node.Content["name"].(string); ok {
+			results = append(results, name)
+		}
 	}
 	return results, nil
 }
 
-// getInsights retorna insights meta-cognitivos da EVA
+// getInsights retorna insights meta-cognitivos da EVA.
+// Uses corrected NQL with Semantic type and node_label filter.
 func (em *EvaMemory) getInsights(ctx context.Context, limit int) ([]string, error) {
-	nql := `MATCH (i:EvaInsight) RETURN i.content as content, i.type as type ORDER BY i.created_at DESC LIMIT $limit`
+	nql := `MATCH (i:Semantic) WHERE i.node_label = "EvaInsight" RETURN i ORDER BY i.created_at DESC LIMIT $limit`
 	result, err := em.graph.ExecuteNQL(ctx, nql, map[string]interface{}{
 		"limit": limit,
 	}, "")
@@ -565,8 +622,10 @@ func (em *EvaMemory) getInsights(ctx context.Context, limit int) ([]string, erro
 	}
 
 	var results []string
-	for _, row := range result.ScalarRows {
-		results = append(results, fmt.Sprintf("- [%v] %v", row["type"], row["content"]))
+	for _, node := range result.Nodes {
+		content, _ := node.Content["content"].(string)
+		itype, _ := node.Content["type"].(string)
+		results = append(results, fmt.Sprintf("- [%s] %s", itype, content))
 	}
 	return results, nil
 }
@@ -580,7 +639,7 @@ func (em *EvaMemory) GenerateInsight(ctx context.Context, content, insightType s
 	insightResult, err := em.graph.InsertNode(ctx, nietzsche.InsertNodeOpts{
 		NodeType: "Semantic",
 		Content: map[string]interface{}{
-			"id":         insightID,
+			"insight_id": insightID,
 			"node_label": "EvaInsight",
 			"content":    content,
 			"type":       insightType,
@@ -617,31 +676,21 @@ func (em *EvaMemory) GenerateInsight(ctx context.Context, content, insightType s
 }
 
 // DetectPatterns analisa o grafo e gera insights automaticos.
-// Optimized to find topics that NEED insights in ONE query using NQL's ability to filter.
+// Uses corrected NQL with Semantic type and node_label filter.
 func (em *EvaMemory) DetectPatterns(ctx context.Context) error {
-	// NQL: Find topics with high frequency that are NOT connected to an EvaInsight via ABOUT
-	// Note: NQL might not support full NOT EXISTS subqueries yet, so we use a left-join pattern or
-	// just fetch topics and filter the ones without insights in Go, but much more efficiently.
-
-	nql := `
-		MATCH (t:EvaTopic) 
-		WHERE t.frequency >= 10 
-		RETURN t.name as name, t.frequency as freq, t.id as id
-	`
+	nql := `MATCH (t:Semantic) WHERE t.node_label = "EvaTopic" AND t.frequency >= 10 RETURN t`
 	result, err := em.graph.ExecuteNQL(ctx, nql, nil, "")
 	if err != nil {
 		return err
 	}
 
-	for _, row := range result.ScalarRows {
-		name := fmt.Sprintf("%v", row["name"])
-		freq := row["freq"]
-		topicNodeID := fmt.Sprintf("%v", row["id"])
+	for _, node := range result.Nodes {
+		name, _ := node.Content["name"].(string)
+		freq := node.Content["frequency"]
 
 		// Fast check for existing insight using BfsWithEdgeType (depth 1)
-		insightIDs, err := em.graph.BfsWithEdgeType(ctx, topicNodeID, "ABOUT", 1, "")
+		insightIDs, err := em.graph.BfsWithEdgeType(ctx, node.ID, "ABOUT", 1, "")
 		if err == nil && len(insightIDs) > 0 {
-			// Topic already has an insight (or something) connected via ABOUT
 			continue
 		}
 
@@ -652,18 +701,14 @@ func (em *EvaMemory) DetectPatterns(ctx context.Context) error {
 	return nil
 }
 
-// GetSessionHistory retorna o historico de turnos de uma sessao especifica
+// GetSessionHistory retorna o historico de turnos de uma sessao especifica.
+// Uses gRPC MergeNode to find the session (not NQL).
 func (em *EvaMemory) GetSessionHistory(ctx context.Context, sessionID string) ([]map[string]string, error) {
-	// Find session node
-	nql := `MATCH (s:EvaSession) WHERE s.id = $sessionId RETURN s`
-	sessionResult, err := em.graph.ExecuteNQL(ctx, nql, map[string]interface{}{
-		"sessionId": sessionID,
-	}, "")
-	if err != nil || len(sessionResult.Nodes) == 0 {
+	// Find session node using gRPC
+	sessionNodeID, _, err := em.findSession(ctx, sessionID)
+	if err != nil {
 		return nil, fmt.Errorf("session %s not found", sessionID)
 	}
-
-	sessionNodeID := sessionResult.Nodes[0].ID
 
 	// BFS through HAS_TURN edges to find turns
 	turnIDs, err := em.graph.BfsWithEdgeType(ctx, sessionNodeID, "HAS_TURN", 1, "")
@@ -700,13 +745,7 @@ func (em *EvaMemory) GetSessionHistory(ctx context.Context, sessionID string) ([
 	}
 
 	// Sort by timestamp ASC
-	for i := 0; i < len(turns); i++ {
-		for j := i + 1; j < len(turns); j++ {
-			if turns[i].ts > turns[j].ts {
-				turns[i], turns[j] = turns[j], turns[i]
-			}
-		}
-	}
+	sort.Slice(turns, func(i, j int) bool { return turns[i].ts < turns[j].ts })
 
 	var history []map[string]string
 	for _, t := range turns {
