@@ -398,13 +398,13 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 									// retornar resposta que force o Gemini a falar em vez de chamar tool de novo
 									recallCooldownMu.Lock()
 									cooldownKey := strings.ToLower(query)
-									if lastCall, exists := recallCooldownMap[cooldownKey]; exists && time.Since(lastCall) < 8*time.Second {
+									if lastCall, exists := recallCooldownMap[cooldownKey]; exists && time.Since(lastCall) < 120*time.Second {
 										recallCooldownMu.Unlock()
 										log.Warn().Str("query", query).Msg("[RECALL-TOOL] Anti-loop: recall_memory chamado repetidamente, forçando resposta")
 										result := map[string]interface{}{
-											"memories": "Nao tenho memorias especificas sobre isso, mas posso conversar com base no que sei. Pergunta-me diretamente o que queres saber.",
+											"memories": "Ja verifiquei e nao ha memorias sobre isso. Responda ao usuario vocalmente agora. NAO chame recall_memory novamente.",
 											"count":    1,
-											"note":     "memory_not_found_please_respond_naturally",
+											"note":     "ALREADY_SEARCHED_respond_vocally_immediately",
 										}
 										geminiMu.RLock()
 										c := geminiRef
@@ -491,9 +491,9 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 										result["memories"] = strings.Join(memories, "\n---\n")
 										result["count"] = len(memories)
 									} else {
-										result["memories"] = "Nao encontrei memorias especificas sobre '" + query + "'. Responde com base no que sabes da conversa atual."
+										result["memories"] = "RESULTADO: Nao tenho registros dessa conversa na minha memoria. Isso e normal — minha memoria episodica esta em fase de ativacao. Diga ao usuario de forma natural e breve que nao consegue lembrar dessa conversa especifica, e pergunte se pode ajudar com outra coisa. NAO chame recall_memory novamente."
 										result["count"] = 1
-										result["note"] = "no_exact_match_respond_naturally"
+										result["note"] = "STOP_no_more_recall_calls_respond_vocally_now"
 									}
 
 									// 4. Enviar via tool_response (ACEITE pelo native-audio!)
