@@ -4,7 +4,8 @@ eva-mind
 eva-mind-linux
 eva-mind-test
 eva-server
-eva-x-linux
+eva-x
+eva-x-*
 aurora-linux
 *.exe
 *.exe~
