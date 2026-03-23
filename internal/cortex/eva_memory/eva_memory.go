@@ -402,13 +402,30 @@ func (em *EvaMemory) connectTopic(ctx context.Context, sessionNodeID, turnNodeID
 			"last_seen":  now,
 		},
 		OnMatchSet: map[string]interface{}{
-			"frequency": "INCREMENT",
 			"last_seen": now,
 		},
 	})
 	if err != nil {
 		log.Warn().Err(err).Str("topic", topicName).Msg("[EVA-MEMORY] Falha ao merge topico")
 		return
+	}
+
+	// C2 fix: increment frequency client-side (server can't do "INCREMENT" string)
+	if !topicResult.Created && topicResult.Content != nil {
+		oldFreq := 0
+		if f, ok := topicResult.Content["frequency"].(float64); ok {
+			oldFreq = int(f)
+		}
+		_, _ = em.graph.MergeNode(ctx, nietzscheInfra.MergeNodeOpts{
+			NodeType: "Semantic",
+			MatchKeys: map[string]interface{}{
+				"name":       topicName,
+				"node_label": "EvaTopic",
+			},
+			OnMatchSet: map[string]interface{}{
+				"frequency": oldFreq + 1,
+			},
+		})
 	}
 
 	// Turn -ABOUT-> Topic
@@ -688,9 +705,12 @@ func (em *EvaMemory) DetectPatterns(ctx context.Context) error {
 		name, _ := node.Content["name"].(string)
 		freq := node.Content["frequency"]
 
-		// Fast check for existing insight using BfsWithEdgeType (depth 1)
-		insightIDs, err := em.graph.BfsWithEdgeType(ctx, node.ID, "ABOUT", 1, "")
-		if err == nil && len(insightIDs) > 0 {
+		// H11 fix: Check for existing insights about this topic via NQL
+		// BFS outgoing from topic won't find insights (edges are Insight-ABOUT->Topic, incoming)
+		checkNQL := fmt.Sprintf(`MATCH (i:Semantic)-[:ABOUT]->(t) WHERE i.node_label = "EvaInsight" AND t.name = "%s" RETURN i LIMIT 1`,
+			strings.ReplaceAll(name, `"`, `\"`))
+		checkResult, checkErr := em.graph.ExecuteNQL(ctx, checkNQL, nil, "")
+		if checkErr == nil && len(checkResult.Nodes) > 0 {
 			continue
 		}
 

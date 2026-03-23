@@ -410,13 +410,19 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 										result := map[string]interface{}{
 											"_voice_summary": "Ja verifiquei e nao ha memorias sobre isso. Responda ao usuario vocalmente.",
 											"memories":       "Nenhuma memoria encontrada.",
-											"count":          0,
+											"count":          1,
 										}
-										geminiMu.RLock()
-										c := geminiRef
-										geminiMu.RUnlock()
-										if c != nil {
-											c.SendToolResponse(n, result, callID)
+										// H3 fix: retry anti-loop tool_response
+										for attempt := 0; attempt < 3; attempt++ {
+											geminiMu.RLock()
+											c := geminiRef
+											geminiMu.RUnlock()
+											if c != nil {
+												if sendErr := c.SendToolResponse(n, result, callID); sendErr == nil {
+													break
+												}
+											}
+											time.Sleep(time.Duration(100*(attempt+1)) * time.Millisecond)
 										}
 										writeMu.Lock()
 										conn.WriteJSON(browserMessage{Type: "tool_event", Tool: n, ToolData: result, Status: "success"})
@@ -444,7 +450,8 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 										defer recallCancel()
 										nzClient := s.db.NzClient()
 										if nzClient != nil {
-											aqlQuery := fmt.Sprintf(`RECALL "%s" LIMIT 3`, query)
+											safeQuery := strings.ReplaceAll(query, `"`, `\"`)
+											aqlQuery := fmt.Sprintf(`RECALL "%s" LIMIT 3`, safeQuery)
 											qRes, aqlErr := nzClient.Query(recallCtx, aqlQuery, nil, "eva_mind")
 											if aqlErr == nil && qRes != nil {
 												for _, nd := range qRes.Nodes {
@@ -499,7 +506,7 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 									} else {
 										result["_voice_summary"] = "Nao encontrei memorias sobre isso. Diga ao usuario que nao consegue lembrar dessa conversa e pergunte como pode ajudar."
 										result["memories"] = "Nenhuma memoria encontrada."
-										result["count"] = 0
+										result["count"] = 1
 									}
 
 									// 4. Enviar via tool_response (ACEITE pelo native-audio!)
@@ -714,7 +721,8 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 								}
 
 								// AQL RECALL — single gRPC round-trip (via standard SDK Query)
-								aqlQuery := fmt.Sprintf(`RECALL "%s" LIMIT 3`, userText)
+								safeText := strings.ReplaceAll(userText, `"`, `\"`)
+								aqlQuery := fmt.Sprintf(`RECALL "%s" LIMIT 3`, safeText)
 								qRes, aqlErr := nzClient.Query(recallCtx, aqlQuery, nil, "eva_mind")
 
 								var memories []string

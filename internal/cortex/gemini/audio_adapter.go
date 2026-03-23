@@ -32,8 +32,9 @@ func AdaptForAudio(toolName string, result map[string]interface{}) map[string]in
 		return map[string]interface{}{"result": fmt.Sprintf("Tool %s executada com sucesso.", toolName)}
 	}
 
-	// 3. Pequeno o suficiente? Passa directo.
+	// 3. Pequeno o suficiente? Passa directo (but strip internal _voice_summary field).
 	if len(raw) <= AudioSummarizeAbove {
+		delete(result, "_voice_summary") // M18 fix: don't leak internal field to Gemini
 		return result
 	}
 
@@ -52,7 +53,13 @@ func enforceLimit(s string) string {
 	if len(s) <= AudioPayloadMaxBytes {
 		return s
 	}
-	truncated := s[:AudioPayloadMaxBytes]
+	// H9 fix: truncate on rune boundary to avoid invalid UTF-8
+	runes := []rune(s)
+	truncated := string(runes)
+	for len(truncated) > AudioPayloadMaxBytes {
+		runes = runes[:len(runes)-1]
+		truncated = string(runes)
+	}
 	if idx := strings.LastIndexAny(truncated, ".!?"); idx > 0 {
 		return truncated[:idx+1]
 	}
@@ -189,8 +196,8 @@ func deterministicSummary(toolName string, result map[string]interface{}) string
 	case "recall_memory":
 		mem := strField(result, "memories", "")
 		count := intField(result, "count", 0)
-		if count == 0 {
-			return "Nao encontrei memorias relevantes."
+		if mem == "" || mem == "Nenhuma memoria encontrada." {
+			return "Nao encontrei memorias relevantes sobre esse assunto."
 		}
 		if mem != "" {
 			return enforceLimit(mem)
