@@ -1005,7 +1005,10 @@ func (s *SignalingServer) handleBrowserVoice(w http.ResponseWriter, r *http.Requ
 
 	// --- Finalizar sessao no NietzscheDB ---
 	if s.evaMemory != nil {
-		s.evaMemory.EndSession(ctx, sessionID)
+		// Fix #13: use context.Background because r.Context() is already cancelled when WS closes
+		endCtx, endCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		s.evaMemory.EndSession(endCtx, sessionID)
+		endCancel()
 		go s.evaMemory.DetectPatterns(context.Background())
 	}
 

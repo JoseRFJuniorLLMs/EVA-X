@@ -8,7 +8,9 @@ import (
 	nietzscheInfra "eva/internal/brainstem/infrastructure/nietzsche"
 	"eva/internal/cortex/mcp"
 	"eva/internal/cortex/personality"
+	evaSelf "eva/internal/cortex/self"
 	"eva/internal/hippocampus/knowledge"
+	spaced "eva/internal/hippocampus/spaced"
 	"eva/pkg/crypto"
 	"eva/pkg/types"
 	"fmt"
@@ -55,11 +57,25 @@ type UnifiedRetrieval struct {
 	// ✅ NEW: Conexão MCP (External Tools)
 	mcp *mcp.MCPClient
 
+	// Memória persistente
+	spacedRepetition *spaced.SpacedRepetitionService
+	coreMemory       *evaSelf.CoreMemoryEngine
+
 	// Infraestrutura
 	db     *database.DB
 	graph  *nietzscheInfra.GraphAdapter
 	vector *nietzscheInfra.VectorAdapter
 	cfg    *config.Config
+}
+
+// SetSpacedRepetition injects the spaced repetition service for memory recall.
+func (u *UnifiedRetrieval) SetSpacedRepetition(svc *spaced.SpacedRepetitionService) {
+	u.spacedRepetition = svc
+}
+
+// SetCoreMemoryEngine injects the CoreMemory engine for identity/preference recall.
+func (u *UnifiedRetrieval) SetCoreMemoryEngine(engine *evaSelf.CoreMemoryEngine) {
+	u.coreMemory = engine
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -202,7 +218,10 @@ type UnifiedContext struct {
 	SystemPrompt  string // Prompt final integrado
 
 	// IDENTIDADE E CAPACIDADES (CoreMemory via NietzscheDB)
-	Capabilities string // Lista de capacidades auto-semeadas
+	Capabilities    string // Lista de capacidades auto-semeadas
+	SpacedMemories  string // Memórias aprendidas (SpacedRepetition pending reviews)
+	IdentityContext string // Identidade da EVA + CoreMemory de alta importância
+	EvaMindProfile  string // Perfil do utilizador (eva_mind: preferências, skills, hábitos)
 
 	// PERSONALIZACAO COGNITIVA (tabela idosos)
 	NivelCognitivo string // super_genio, alto, normal, baixo, comprometido
@@ -404,6 +423,43 @@ func (u *UnifiedRetrieval) BuildUnifiedContext(
 		}()
 	}
 
+	// 8. MEMÓRIAS APRENDIDAS (SpacedRepetition) - paralelo
+	var spacedMem string
+	if u.spacedRepetition != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sm := u.getSpacedMemories(ctxWithTimeout, idosoID)
+			mu.Lock()
+			spacedMem = sm
+			mu.Unlock()
+		}()
+	}
+
+	// 9. IDENTIDADE EVA (CoreMemory completa) - paralelo
+	var identityMem string
+	if u.coreMemory != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			im := u.getIdentityMemories(ctxWithTimeout)
+			mu.Lock()
+			identityMem = im
+			mu.Unlock()
+		}()
+	}
+
+	// 10. PERFIL EVA-MIND (memórias de longo prazo) - paralelo
+	var evaMindProfile string
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		emp := u.getEvaMindProfile(ctxWithTimeout)
+		mu.Lock()
+		evaMindProfile = emp
+		mu.Unlock()
+	}()
+
 	// Aguardar todas as queries paralelas
 	wg.Wait()
 
@@ -441,6 +497,9 @@ func (u *UnifiedRetrieval) BuildUnifiedContext(
 	unified.WisdomContext = wisdomContext
 	unified.Persona = persona // Fallback do idoso, pode ser sobrescrito pelo agendamento
 	unified.Capabilities = capabilities
+	unified.SpacedMemories = spacedMem
+	unified.IdentityContext = identityMem
+	unified.EvaMindProfile = evaMindProfile
 	unified.NivelCognitivo = nivelCognitivo
 	unified.TomVoz = tomVoz
 
@@ -679,6 +738,74 @@ func (u *UnifiedRetrieval) getCapabilities(ctx context.Context) string {
 	}
 	b.WriteString("\nQuando alguem perguntar o que eu sei fazer, liste essas capacidades naturalmente.\n")
 	b.WriteString("NUNCA diga que e apenas um assistente de voz ou escolar. Voce TEM todas essas capacidades.\n")
+	return b.String()
+}
+
+// getSpacedMemories busca memórias pendentes de revisão do SpacedRepetitionService.
+// Estas são factos aprendidos (preferências, identidade, skills) que a EVA deve lembrar.
+func (u *UnifiedRetrieval) getSpacedMemories(ctx context.Context, idosoID int64) string {
+	if u.spacedRepetition == nil {
+		return ""
+	}
+	items, err := u.spacedRepetition.GetPendingReviews(ctx, idosoID, 10)
+	if err != nil || len(items) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("### MEMORIAS APRENDIDAS (devo lembrar)\n")
+	for _, item := range items {
+		content := item.Content
+		if len(content) > 200 {
+			content = content[:197] + "..."
+		}
+		b.WriteString(fmt.Sprintf("- %s\n", content))
+	}
+	log.Printf("[SPACED] %d memorias pendentes carregadas para idoso %d", len(items), idosoID)
+	return b.String()
+}
+
+// getIdentityMemories busca a identidade da EVA e CoreMemory de alta importância.
+func (u *UnifiedRetrieval) getIdentityMemories(ctx context.Context) string {
+	if u.coreMemory == nil {
+		return ""
+	}
+	identity, err := u.coreMemory.GetIdentityContext(ctx)
+	if err != nil || identity == "" {
+		return ""
+	}
+	log.Printf("[IDENTITY] Contexto de identidade carregado (%d bytes)", len(identity))
+	return identity
+}
+
+// getEvaMindProfile busca memórias de longa duração do eva_mind (perfil do utilizador).
+func (u *UnifiedRetrieval) getEvaMindProfile(ctx context.Context) string {
+	if u.graph == nil {
+		return ""
+	}
+	// Buscar spaced_memory_items (factos aprendidos via InternalizeMemory)
+	nql := `MATCH (m:Episodic) WHERE m.node_label = "ConversationMemory" RETURN m ORDER BY m.created_at DESC LIMIT 10`
+	result, err := u.graph.ExecuteNQL(ctx, nql, nil, "eva_mind")
+	if err != nil || result == nil || len(result.Nodes) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("### PERFIL DO UTILIZADOR (memorias de longo prazo)\n")
+	count := 0
+	for _, node := range result.Nodes {
+		content, _ := node.Content["content"].(string)
+		if content == "" {
+			continue
+		}
+		if len(content) > 200 {
+			content = content[:197] + "..."
+		}
+		b.WriteString(fmt.Sprintf("- %s\n", content))
+		count++
+	}
+	if count == 0 {
+		return ""
+	}
+	log.Printf("[EVA-MIND] %d memorias de perfil carregadas", count)
 	return b.String()
 }
 
@@ -1310,6 +1437,24 @@ func (u *UnifiedRetrieval) buildIntegratedPrompt(unified *UnifiedContext) string
 		builder.WriteString("- Evite termos tecnicos. Seja paciente e acolhedora.\n\n")
 	}
 
+	// MEMÓRIAS APRENDIDAS (SpacedRepetition — factos que devo lembrar)
+	if unified.SpacedMemories != "" {
+		builder.WriteString("═══════════════════════════════════════════════════════════\n")
+		builder.WriteString(unified.SpacedMemories)
+	}
+
+	// IDENTIDADE DA EVA (CoreMemory — quem sou, o que aprendi)
+	if unified.IdentityContext != "" {
+		builder.WriteString("═══════════════════════════════════════════════════════════\n")
+		builder.WriteString(unified.IdentityContext)
+	}
+
+	// PERFIL DO UTILIZADOR (eva_mind — memórias de longo prazo)
+	if unified.EvaMindProfile != "" {
+		builder.WriteString("═══════════════════════════════════════════════════════════\n")
+		builder.WriteString(unified.EvaMindProfile)
+	}
+
 	// CAPACIDADES (injetadas para TODOS os modos - voz, texto, debug)
 	if unified.Capabilities != "" {
 		builder.WriteString("═══════════════════════════════════════════════════════════\n")
@@ -1337,7 +1482,7 @@ func (u *UnifiedRetrieval) buildIntegratedPrompt(unified *UnifiedContext) string
 	builder.WriteString("NUNCA pare de falar para buscar memorias. O sistema busca em paralelo por voce.\n")
 	builder.WriteString("Se o utilizador perguntar se voce lembra de algo: responda com o que sabe do contexto acima.\n")
 	builder.WriteString("Se nao souber, diga naturalmente que nao lembra no momento — a memoria pode chegar em segundos.\n")
-	builder.WriteString("NAO chame recall_memory como ferramenta. O recall acontece automaticamente.\n")
+	builder.WriteString("Se precisar buscar memorias especificas, pode usar a ferramenta recall_memory.\n")
 
 	return builder.String()
 }
@@ -1347,10 +1492,9 @@ func (u *UnifiedRetrieval) buildIntegratedPrompt(unified *UnifiedContext) string
 func (u *UnifiedRetrieval) GetPromptForGemini(ctx context.Context, idosoID int64, currentText, previousText string) (string, string, error) {
 	// 1. Verificar cache primeiro
 	if u.promptCache != nil {
-		if _, ok := u.promptCache.Get(idosoID); ok {
+		if cached, ok := u.promptCache.Get(idosoID); ok {
 			log.Printf("⚡ [CACHE HIT] Prompt para idoso %d recuperado do cache", idosoID)
-			// TODO: Cache should also store language code if needed, for now we rebuild context or skip cache for lang
-			// Actually, let's just bypass cache for now to ensure language updates are immediate as requested
+			return cached.Prompt, cached.Language, nil
 		}
 	}
 
@@ -1369,7 +1513,15 @@ func (u *UnifiedRetrieval) GetPromptForGemini(ctx context.Context, idosoID int64
 		}
 	}
 
-	return u.buildIntegratedPrompt(unified), unified.IdosoIdioma, nil
+	prompt := u.buildIntegratedPrompt(unified)
+	lang := unified.IdosoIdioma
+
+	// Cache o resultado para futuros hits (TTL 5min)
+	if u.promptCache != nil {
+		u.promptCache.Set(idosoID, prompt, lang)
+	}
+
+	return prompt, lang, nil
 }
 
 // InvalidatePromptCache invalida o cache de prompt para um idoso específico

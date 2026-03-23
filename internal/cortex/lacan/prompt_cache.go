@@ -15,9 +15,10 @@ import (
 // Impacto esperado: -70% latência no setupGemini
 // ============================================================================
 
-// CachedPrompt armazena um prompt com timestamp
+// CachedPrompt armazena um prompt com timestamp e idioma
 type CachedPrompt struct {
 	Prompt    string
+	Language  string
 	CreatedAt time.Time
 }
 
@@ -48,33 +49,34 @@ func NewPromptCache(ttl time.Duration) *PromptCache {
 }
 
 // Get recupera um prompt do cache se válido
-func (c *PromptCache) Get(idosoID int64) (string, bool) {
+func (c *PromptCache) Get(idosoID int64) (*CachedPrompt, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
 	cached, ok := c.data[idosoID]
 	if !ok {
 		c.misses++
-		return "", false
+		return nil, false
 	}
 
 	// Verificar TTL
 	if time.Since(cached.CreatedAt) > c.ttl {
 		c.misses++
-		return "", false
+		return nil, false
 	}
 
 	c.hits++
-	return cached.Prompt, true
+	return cached, true
 }
 
 // Set salva um prompt no cache
-func (c *PromptCache) Set(idosoID int64, prompt string) {
+func (c *PromptCache) Set(idosoID int64, prompt, language string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	c.data[idosoID] = &CachedPrompt{
 		Prompt:    prompt,
+		Language:  language,
 		CreatedAt: time.Now(),
 	}
 }

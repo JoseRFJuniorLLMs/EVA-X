@@ -385,6 +385,14 @@ func main() {
 	spacedSvc := spaced.NewSpacedRepetitionService(db)
 	log.Info().Msg("📊 Habit Tracker + Spaced Repetition inicializados")
 
+	// Injetar memória no UnifiedRetrieval para que BuildUnifiedContext inclua:
+	// - SpacedRepetition: memórias aprendidas (pending reviews)
+	// - CoreMemoryEngine: identidade + preferências + facts
+	unifiedRetrieval.SetSpacedRepetition(spacedSvc)
+	if coreMemoryEngine != nil {
+		unifiedRetrieval.SetCoreMemoryEngine(coreMemoryEngine)
+	}
+
 	// 7.3 Superhuman Memory Service (12 subsistemas de memoria)
 	superhumanSvc := superhuman.NewSuperhumanMemoryService(db)
 	log.Info().Msg("🌟 Superhuman Memory Service inicializado")
