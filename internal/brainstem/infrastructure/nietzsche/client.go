@@ -53,17 +53,20 @@ func NewClient(grpcAddr string) (*Client, error) {
 			},
 			MinConnectTimeout: 3 * time.Second,
 		}),
-		// Retry policy: auto-retry on UNAVAILABLE (server restart) and RESOURCE_EXHAUSTED
+		// Retry policy: auto-retry on UNAVAILABLE, RESOURCE_EXHAUSTED, and DEADLINE_EXCEEDED.
+		// DEADLINE_EXCEEDED is critical: when NietzscheDB is in OOM/swap thrashing, the TCP
+		// connection stays alive (kernel ACKs keepalive pings) but gRPC calls time out.
+		// Without retrying DEADLINE_EXCEEDED, all scheduled tasks (Zaratustra, REM, pruning) fail.
 		grpc.WithDefaultServiceConfig(`{
 			"methodConfig": [{
 				"name": [{"service": "nietzschedb.NietzscheDB"}],
 				"waitForReady": true,
 				"retryPolicy": {
-					"maxAttempts": 3,
-					"initialBackoff": "0.2s",
-					"maxBackoff": "2s",
+					"maxAttempts": 5,
+					"initialBackoff": "0.5s",
+					"maxBackoff": "5s",
 					"backoffMultiplier": 2,
-					"retryableStatusCodes": ["UNAVAILABLE","RESOURCE_EXHAUSTED"]
+					"retryableStatusCodes": ["UNAVAILABLE","RESOURCE_EXHAUSTED","DEADLINE_EXCEEDED"]
 				}
 			}]
 		}`),
@@ -73,8 +76,68 @@ func NewClient(grpcAddr string) (*Client, error) {
 		return nil, fmt.Errorf("nietzsche gRPC connect %s: %w", grpcAddr, err)
 	}
 
-	log.Info().Str("grpc_addr", grpcAddr).Msg("NietzscheDB gRPC client connected (auto-reconnect enabled)")
-	return &Client{sdk: sdk, addr: grpcAddr}, nil
+	c := &Client{sdk: sdk, addr: grpcAddr}
+
+	// Start background health monitor — detects stale connections and forces reconnect
+	go c.healthMonitor()
+
+	log.Info().Str("grpc_addr", grpcAddr).Msg("NietzscheDB gRPC connected (auto-reconnect + health monitor)")
+	return c, nil
+}
+
+// healthMonitor periodically pings NietzscheDB and forces gRPC reconnect on failure.
+//
+// Solves: when NietzscheDB hits OOM and goes into swap thrashing, the TCP connection
+// stays ESTABLISHED (kernel responds to keepalive pings) but the gRPC server is dead.
+// gRPC keepalive detects transport-level liveness but NOT application-level liveness.
+// This monitor does an application-level HealthCheck with a tight timeout, and after
+// consecutive failures, forces the gRPC subchannel to reset.
+func (c *Client) healthMonitor() {
+	log := logger.Nietzsche()
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	consecutiveFailures := 0
+	const maxFailures = 3 // Force reconnect after 3 consecutive failures (~90s)
+
+	for range ticker.C {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := c.sdk.HealthCheck(ctx)
+		cancel()
+
+		if err == nil {
+			if consecutiveFailures > 0 {
+				log.Info().
+					Int("prev_failures", consecutiveFailures).
+					Msg("🔄 NietzscheDB health recovered")
+			}
+			consecutiveFailures = 0
+			continue
+		}
+
+		consecutiveFailures++
+		log.Warn().
+			Err(err).
+			Int("consecutive", consecutiveFailures).
+			Msg("⚠️ NietzscheDB health check failed")
+
+		if consecutiveFailures >= maxFailures {
+			log.Error().
+				Int("failures", consecutiveFailures).
+				Msg("🔄 NietzscheDB unreachable — forcing gRPC reconnect")
+
+			// Force the gRPC ClientConn to drop all subchannels and re-resolve.
+			conn := c.sdk.Conn()
+			if conn != nil {
+				conn.ResetConnectBackoff()
+			}
+
+			consecutiveFailures = 0
+
+			// Wait extra time for NietzscheDB to come back after restart
+			time.Sleep(15 * time.Second)
+		}
+	}
 }
 
 // Close releases the gRPC connection.

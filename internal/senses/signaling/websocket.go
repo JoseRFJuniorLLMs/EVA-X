@@ -29,6 +29,7 @@ import (
 	"eva/internal/cortex/personality"
 	"eva/internal/cortex/prediction"
 	"eva/internal/cortex/scales"
+	"eva/internal/cortex/situation"
 	"eva/internal/cortex/voice"
 	"eva/internal/hippocampus/knowledge"
 	"eva/internal/hippocampus/memory"
@@ -408,7 +409,8 @@ func NewSignalingServer(
 		server.embeddingService,
 		ingestion.NewIngestionPipeline(cfg),
 	)
-	log.Println("🧠 Signaling: BrainService initialized for Memory Storage (PG + NietzscheDB)")
+	server.brainService.SetSituationalModulator(situation.NewModulator(nil, nil))
+	log.Println("🧠 Signaling: BrainService initialized — memória mamífera activa")
 
 	// ============================================================================
 	// 🧠 MÓDULOS DE PSICOLOGIA E PERSONALIDADE

@@ -63,18 +63,65 @@ func (s *Service) SaveEpisodicMemoryWithContext(
 		return fmt.Errorf("memoryStore não inicializado — verifique conexão com banco de dados")
 	}
 
+	// ═══════════════════════════════════════════════════════════
+	// MEMÓRIA MAMÍFERA — Inferir contexto completo (tempo+espaço+circunstância)
+	// O hipocampo grava a CENA, não apenas o facto.
+	// ═══════════════════════════════════════════════════════════
+	now := time.Now()
+
+	// Espaço: inferir local mencionado no texto
+	location := hippocampusMemory.InferLocationFromText(content)
+
+	// Circunstância: inferir pessoas mencionadas
+	mentionedPersons := hippocampusMemory.InferMentionedPersons(content)
+
+	// Situacional: tentar obter do SituationalModulator se disponível
+	var socialContext string
+	var stressors []string
+	var emotionScore float64
+	var sitIntensity float64
+	if s.situationalModulator != nil {
+		sit, sitErr := s.situationalModulator.Infer(ctx, fmt.Sprintf("%d", idosoID), content, nil)
+		if sitErr == nil {
+			socialContext = sit.SocialContext
+			stressors = sit.Stressors
+			emotionScore = sit.EmotionScore
+			sitIntensity = sit.Intensity
+		}
+	}
+
 	mem := &hippocampusMemory.Memory{
+		// --- Core ---
 		IdosoID:    idosoID,
 		Speaker:    role,
 		Content:    content,
 		Emotion:    memCtx.Emotion,
 		Importance: memCtx.Importance,
 		Topics:     memCtx.Keywords,
-		SessionID:  fmt.Sprintf("session-%d", time.Now().Unix()),
+		SessionID:  fmt.Sprintf("session-%d", now.Unix()),
 		EventDate:  eventDate,
 		IsAtomic:   isAtomic,
 		Embedding:  embedding,
+
+		// --- TEMPO (auto-preenchido no Store, mas setamos aqui para EventDate) ---
+		TimeOfDay: hippocampusMemory.GetTimeOfDayPT(now),
+		DayOfWeek: hippocampusMemory.GetDayOfWeekPT(now),
+
+		// --- ESPAÇO ---
+		Location: location,
+
+		// --- CIRCUNSTÂNCIA ---
+		SocialContext:    socialContext,
+		Stressors:        stressors,
+		Urgency:          memCtx.Urgency,
+		AudioIntensity:   memCtx.AudioIntensity,
+		EmotionScore:     emotionScore,
+		SitIntensity:     sitIntensity,
+		MentionedPersons: mentionedPersons,
 	}
+
+	log.Printf("🌍 [CENA] Tempo=%s/%s | Local=%s | Social=%s | Stressors=%v | Pessoas=%v",
+		mem.TimeOfDay, mem.DayOfWeek, mem.Location, mem.SocialContext, mem.Stressors, mem.MentionedPersons)
 
 	// Use retry with exponential backoff for transient failures
 	err := retryPkg.Do(ctx, retryPkg.FastConfig(), func(ctx context.Context) error {

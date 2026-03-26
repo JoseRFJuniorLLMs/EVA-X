@@ -757,7 +757,8 @@ func main() {
 	// 7.12 Situational Modulator (detecta contexto e modula pesos de personalidade)
 	situationMod := situation.NewModulator(nil, nil)
 	energyFeeder := situation.NewEnergyFeeder(nzClient)
-	log.Info().Msg("🎭 Situational Modulator + Energy Feeder inicializados")
+	brainService.SetSituationalModulator(situationMod) // Memória mamífera: cena completa
+	log.Info().Msg("🎭 Situational Modulator + Energy Feeder inicializados (memória mamífera activa)")
 
 	// 7.13 RAM Engine (Realistic Accuracy Model — interpretacoes + validacao historica)
 	var ramEng *ram.RAMEngine

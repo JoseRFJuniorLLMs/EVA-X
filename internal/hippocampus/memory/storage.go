@@ -34,7 +34,12 @@ func getCreatorCPFMemory() string {
 // ErrUnauthorized é retornado quando alguém não autorizado tenta usar funções admin
 var ErrUnauthorized = errors.New("acesso negado: apenas o criador pode executar esta função")
 
-// Memory representa uma memória episódica armazenada
+// Memory representa uma memória episódica armazenada.
+//
+// Modelada como memória mamífera: cada episódio grava a CENA COMPLETA
+// (tempo + espaço + circunstância), não apenas o conteúdo.
+// O hipocampo dos mamíferos codifica contexto situacional junto com o evento,
+// permitindo reconstrução da cena inteira a partir de qualquer fragmento.
 type Memory struct {
 	ID            int64     `json:"id"`
 	IdosoID       int64     `json:"idoso_id"`
@@ -49,7 +54,31 @@ type Memory struct {
 	CallHistoryID *int64    `json:"call_history_id,omitempty"`
 	EventDate     time.Time `json:"event_date,omitempty"` // Data real do evento
 	IsAtomic      bool      `json:"is_atomic"`            // Flag de atomicidade
-	IsArchived    bool      `json:"is_archived"`          // ✅ NEW: Indica se está no Cold Path (S3)
+	IsArchived    bool      `json:"is_archived"`          // Indica se está no Cold Path (S3)
+
+	// ═══════════════════════════════════════════════════════════════════
+	// CONTEXTO MAMÍFERO — Tempo, Espaço, Circunstância
+	// Cada memória episódica grava a cena completa, como o hipocampo faz.
+	// ═══════════════════════════════════════════════════════════════════
+
+	// --- TEMPO (além de Timestamp/EventDate) ---
+	TimeOfDay string `json:"time_of_day,omitempty"` // "madrugada", "manha", "tarde", "noite"
+	DayOfWeek string `json:"day_of_week,omitempty"` // "segunda", "terça", ... "domingo"
+
+	// --- ESPAÇO ---
+	Location    string `json:"location,omitempty"`     // Lugar mencionado ou inferido: "casa", "hospital", "jardim"
+	Environment string `json:"environment,omitempty"`   // Contexto ambiental: "silêncio", "barulho", "música"
+
+	// --- CIRCUNSTÂNCIA ---
+	SocialContext  string   `json:"social_context,omitempty"`  // "sozinho", "familia", "publico", "cuidador"
+	Stressors      []string `json:"stressors,omitempty"`       // ["luto", "hospital", "crise", "aniversário"]
+	Urgency        string   `json:"urgency,omitempty"`         // "CRÍTICA", "ALTA", "MÉDIA", "BAIXA"
+	AudioIntensity int      `json:"audio_intensity,omitempty"` // Intensidade da voz 1-10
+	EmotionScore   float64  `json:"emotion_score,omitempty"`   // -1.0 (negativo) a 1.0 (positivo)
+	SitIntensity   float64  `json:"sit_intensity,omitempty"`   // Força do contexto situacional 0-1
+
+	// --- PESSOAS PRESENTES (inferidas da conversa) ---
+	MentionedPersons []string `json:"mentioned_persons,omitempty"` // ["filho", "médico", "vizinha"]
 }
 
 // MemoryStore gerencia o armazenamento de memórias
@@ -84,7 +113,18 @@ func (m *MemoryStore) Store(ctx context.Context, memory *Memory) error {
 			callHistoryID = float64(*memory.CallHistoryID)
 		}
 
+		// ═══════════════════════════════════════════════════════════
+		// Auto-preencher campos temporais se vazios (sempre gravar)
+		// ═══════════════════════════════════════════════════════════
+		if memory.TimeOfDay == "" {
+			memory.TimeOfDay = GetTimeOfDayPT(memory.Timestamp)
+		}
+		if memory.DayOfWeek == "" {
+			memory.DayOfWeek = GetDayOfWeekPT(memory.Timestamp)
+		}
+
 		content := map[string]interface{}{
+			// --- Core ---
 			"idoso_id":        float64(memory.IdosoID),
 			"speaker":         memory.Speaker,
 			"content":         memory.Content,
@@ -97,6 +137,23 @@ func (m *MemoryStore) Store(ctx context.Context, memory *Memory) error {
 			"is_atomic":       memory.IsAtomic,
 			"is_archived":     false,
 			"timestamp":       memory.Timestamp.Format(time.RFC3339),
+
+			// --- TEMPO ---
+			"time_of_day": memory.TimeOfDay,
+			"day_of_week": memory.DayOfWeek,
+
+			// --- ESPAÇO ---
+			"location":    memory.Location,
+			"environment": memory.Environment,
+
+			// --- CIRCUNSTÂNCIA ---
+			"social_context":   memory.SocialContext,
+			"stressors":        memory.Stressors,
+			"urgency":          memory.Urgency,
+			"audio_intensity":  memory.AudioIntensity,
+			"emotion_score":    memory.EmotionScore,
+			"sit_intensity":    memory.SitIntensity,
+			"mentioned_persons": memory.MentionedPersons,
 		}
 
 		id, err := m.db.Insert(ctx, "episodic_memories", content)
@@ -127,6 +184,7 @@ func (m *MemoryStore) Store(ctx context.Context, memory *Memory) error {
 	// 3. Salvar vetor no NietzscheDB
 	if m.vectorAdapter != nil && len(memory.Embedding) > 0 {
 		payload := map[string]interface{}{
+			// --- Core ---
 			"id":              memory.ID,
 			"idoso_id":        memory.IdosoID,
 			"content":         memory.Content,
@@ -139,6 +197,23 @@ func (m *MemoryStore) Store(ctx context.Context, memory *Memory) error {
 			"is_atomic":       memory.IsAtomic,
 			"session_id":      memory.SessionID,
 			"call_history_id": memory.CallHistoryID,
+
+			// --- TEMPO ---
+			"time_of_day": memory.TimeOfDay,
+			"day_of_week": memory.DayOfWeek,
+
+			// --- ESPAÇO ---
+			"location":    memory.Location,
+			"environment": memory.Environment,
+
+			// --- CIRCUNSTÂNCIA ---
+			"social_context":    memory.SocialContext,
+			"stressors":         memory.Stressors,
+			"urgency":           memory.Urgency,
+			"audio_intensity":   memory.AudioIntensity,
+			"emotion_score":     memory.EmotionScore,
+			"sit_intensity":     memory.SitIntensity,
+			"mentioned_persons": memory.MentionedPersons,
 		}
 
 		// FASE 7 FIX: Retry vector upsert for transient NietzscheDB failures
@@ -575,7 +650,159 @@ func memoryFromPayload(payload map[string]interface{}) *Memory {
 		}
 	}
 
+	// ═══════════════════════════════════════════════════════════
+	// CONTEXTO MAMÍFERO — Tempo, Espaço, Circunstância
+	// ═══════════════════════════════════════════════════════════
+
+	// --- TEMPO ---
+	if v, ok := payload["time_of_day"].(string); ok {
+		mem.TimeOfDay = v
+	}
+	if v, ok := payload["day_of_week"].(string); ok {
+		mem.DayOfWeek = v
+	}
+
+	// --- ESPAÇO ---
+	if v, ok := payload["location"].(string); ok {
+		mem.Location = v
+	}
+	if v, ok := payload["environment"].(string); ok {
+		mem.Environment = v
+	}
+
+	// --- CIRCUNSTÂNCIA ---
+	if v, ok := payload["social_context"].(string); ok {
+		mem.SocialContext = v
+	}
+	if v, ok := payload["stressors"]; ok {
+		switch s := v.(type) {
+		case []interface{}:
+			for _, item := range s {
+				if str, ok := item.(string); ok {
+					mem.Stressors = append(mem.Stressors, str)
+				}
+			}
+		case []string:
+			mem.Stressors = s
+		}
+	}
+	if v, ok := payload["urgency"].(string); ok {
+		mem.Urgency = v
+	}
+	if v, ok := payload["audio_intensity"]; ok {
+		switch ai := v.(type) {
+		case float64:
+			mem.AudioIntensity = int(ai)
+		case int:
+			mem.AudioIntensity = ai
+		}
+	}
+	if v, ok := payload["emotion_score"].(float64); ok {
+		mem.EmotionScore = v
+	}
+	if v, ok := payload["sit_intensity"].(float64); ok {
+		mem.SitIntensity = v
+	}
+	if v, ok := payload["mentioned_persons"]; ok {
+		switch p := v.(type) {
+		case []interface{}:
+			for _, item := range p {
+				if str, ok := item.(string); ok {
+					mem.MentionedPersons = append(mem.MentionedPersons, str)
+				}
+			}
+		case []string:
+			mem.MentionedPersons = p
+		}
+	}
+
 	return mem
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// HELPERS TEMPORAIS — Auto-preenchimento de tempo/espaço
+// ═══════════════════════════════════════════════════════════════════════
+
+// GetTimeOfDayPT retorna o período do dia em português
+func GetTimeOfDayPT(t time.Time) string {
+	hour := t.Hour()
+	switch {
+	case hour >= 0 && hour < 6:
+		return "madrugada"
+	case hour >= 6 && hour < 12:
+		return "manha"
+	case hour >= 12 && hour < 18:
+		return "tarde"
+	default:
+		return "noite"
+	}
+}
+
+// GetDayOfWeekPT retorna o dia da semana em português
+func GetDayOfWeekPT(t time.Time) string {
+	days := map[time.Weekday]string{
+		time.Sunday:    "domingo",
+		time.Monday:    "segunda",
+		time.Tuesday:   "terça",
+		time.Wednesday: "quarta",
+		time.Thursday:  "quinta",
+		time.Friday:    "sexta",
+		time.Saturday:  "sábado",
+	}
+	return days[t.Weekday()]
+}
+
+// InferLocationFromText tenta extrair local mencionado no texto
+func InferLocationFromText(text string) string {
+	lower := strings.ToLower(text)
+	locationPatterns := map[string][]string{
+		"hospital":  {"hospital", "internado", "internação", "uti", "emergência", "enfermaria"},
+		"casa":      {"em casa", "minha casa", "na sala", "no quarto", "na cozinha", "na varanda"},
+		"rua":       {"na rua", "caminhando", "passeando", "mercado", "supermercado", "padaria"},
+		"igreja":    {"igreja", "missa", "culto", "templo"},
+		"médico":    {"consultório", "clínica", "posto de saúde", "médico"},
+		"farmácia":  {"farmácia", "drogaria"},
+		"jardim":    {"jardim", "quintal", "horta", "parque"},
+	}
+	for location, keywords := range locationPatterns {
+		for _, kw := range keywords {
+			if strings.Contains(lower, kw) {
+				return location
+			}
+		}
+	}
+	return ""
+}
+
+// InferMentionedPersons extrai pessoas mencionadas no texto
+func InferMentionedPersons(text string) []string {
+	lower := strings.ToLower(text)
+	personKeywords := map[string][]string{
+		"filho":    {"filho", "meu filho", "o menino"},
+		"filha":    {"filha", "minha filha", "a menina"},
+		"esposa":   {"esposa", "mulher", "minha mulher"},
+		"marido":   {"marido", "meu marido", "meu esposo"},
+		"mãe":      {"minha mãe", "mamãe", "a mãe"},
+		"pai":      {"meu pai", "papai", "o pai"},
+		"neto":     {"neto", "meu neto", "netinho"},
+		"neta":     {"neta", "minha neta", "netinha"},
+		"médico":   {"médico", "doutor", "doutora", "dr.", "dra."},
+		"vizinha":  {"vizinha", "vizinho"},
+		"cuidador": {"cuidador", "cuidadora", "enfermeira", "enfermeiro"},
+		"amigo":    {"amigo", "amiga", "colega", "compadre", "comadre"},
+	}
+	var persons []string
+	seen := map[string]bool{}
+	for person, keywords := range personKeywords {
+		for _, kw := range keywords {
+			if strings.Contains(lower, kw) && !seen[person] {
+				persons = append(persons, person)
+				seen[person] = true
+				break
+			}
+		}
+	}
+	return persons
 }
 
 // GetArchivalCandidates localiza memórias que podem ser movidas para o Cold Path

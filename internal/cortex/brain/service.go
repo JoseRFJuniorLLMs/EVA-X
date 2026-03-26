@@ -10,6 +10,7 @@ import (
 	"eva/internal/brainstem/push"
 	"eva/internal/cortex/lacan"
 	ps "eva/internal/cortex/personality"
+	"eva/internal/cortex/situation"
 	"eva/internal/hippocampus/knowledge"
 	"eva/internal/hippocampus/memory"
 	"eva/internal/memory/ingestion"
@@ -30,9 +31,10 @@ type Service struct {
 	pushService        *push.FirebaseService
 	embeddingService   *memory.EmbeddingService
 
-	knowledgeEmbedder *knowledge.EmbeddingService
-	unifiedRetrieval  *lacan.UnifiedRetrieval
-	ingestionPipeline *ingestion.IngestionPipeline
+	knowledgeEmbedder    *knowledge.EmbeddingService
+	unifiedRetrieval     *lacan.UnifiedRetrieval
+	ingestionPipeline    *ingestion.IngestionPipeline
+	situationalModulator *situation.SituationalModulator // Memória mamífera: contexto situacional
 }
 
 // NewService creates a new Brain service
@@ -71,6 +73,12 @@ func NewService(
 		unifiedRetrieval:   unified,
 		ingestionPipeline:  ingestionPipeline,
 	}
+}
+
+// SetSituationalModulator injects the SituationalModulator for mammalian memory context.
+// Optional — memories are still saved without it, but without full scene context.
+func (s *Service) SetSituationalModulator(mod *situation.SituationalModulator) {
+	s.situationalModulator = mod
 }
 
 // GetSystemPrompt gera o prompt inicial unificado (RSI)
