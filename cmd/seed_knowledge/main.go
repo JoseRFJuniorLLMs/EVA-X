@@ -62,8 +62,6 @@ func main() {
 	// 1. Store entries in NietzscheDB graph
 	nzCount := 0
 	now := time.Now().Format(time.RFC3339)
-	_ = os.Getenv("DATABASE_URL") // unused, kept for env compat
-
 	for i, e := range entries {
 		// Check if entry already exists by key
 		rows, _ := db.QueryByLabel(ctx, "eva_self_knowledge",
@@ -257,8 +255,8 @@ func databaseEntries() []KnowledgeEntry {
 		// --- NietzscheDB Overview ---
 		{
 			Type: "database", Key: "db:NietzscheDB", Title: "NietzscheDB — Banco Principal (130+ tabelas)",
-			Summary: "NietzscheDB 15 em 34.35.142.107:5432. 130+ tabelas cobrindo pacientes, clinica, memoria, personalidade, tools, pesquisa, etica, Lacan, speaker",
-			Content: `NietzscheDB e o banco principal. Host: 34.35.142.107:5432, DB: eva-mind, User: postgres.
+			Summary: "NietzscheDB e o banco de dados unificado (grafo hiperbolico + vetorial). 130+ tabelas cobrindo pacientes, clinica, memoria, personalidade, tools, pesquisa, etica, Lacan, speaker",
+			Content: `NietzscheDB e o banco principal. gRPC: 136.111.0.47:443 (HTTPS) / localhost:50051. Colecao principal: eva_mind.
 
 DOMINIOS DE TABELAS (130+ tabelas em 41 migrations):
 1. PACIENTES & AGENDAMENTO (4 tabelas): idosos, agendamentos, historico_ligacoes, device_tokens

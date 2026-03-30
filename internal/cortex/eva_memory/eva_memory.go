@@ -73,7 +73,16 @@ const minInternalizeLen = 10
 // to 0.5 for new memories. If embedFunc is present, it generates a real 3072D vector.
 // Otherwise, coords are left zero (or handled by hash fallback in the infra layer).
 // Trivial messages (< 10 chars) are silently skipped.
+// InternalizeMemoryWithContext stores a conversation memory with patient context.
+func (em *EvaMemory) InternalizeMemoryWithContext(content string, valence float64, source string, idosoID int64, idosoNome string) error {
+	return em.internalizeMemoryInternal(content, valence, source, idosoID, idosoNome)
+}
+
 func (em *EvaMemory) InternalizeMemory(content string, valence float64, source string) error {
+	return em.internalizeMemoryInternal(content, valence, source, 0, "")
+}
+
+func (em *EvaMemory) internalizeMemoryInternal(content string, valence float64, source string, idosoID int64, idosoNome string) error {
 	// Skip trivial messages
 	trimmed := strings.TrimSpace(content)
 	if len(trimmed) < minInternalizeLen {
@@ -129,18 +138,27 @@ func (em *EvaMemory) InternalizeMemory(content string, valence float64, source s
 		log.Warn().Msg("[EVA-MEMORY] embedFunc is nil — InternalizeMemory storing zero-vector node (KNN disabled)")
 	}
 
+	contentMap := map[string]interface{}{
+		"content":    trimmed,
+		"valence":    valence,
+		"source":     source,
+		"created_at": now.Format(time.RFC3339),
+		"node_label": "ConversationMemory",
+	}
+	// FIX: Add patient context so memories can be filtered by user
+	if idosoID > 0 {
+		contentMap["idoso_id"] = idosoID
+	}
+	if idosoNome != "" {
+		contentMap["idoso_nome"] = idosoNome
+	}
+
 	_, err := adapter.InsertNode(ctx, nietzsche.InsertNodeOpts{
 		ID:       nodeID,
 		NodeType: "Episodic",
 		Energy:   0.5,
 		Coords:   coords,
-		Content: map[string]interface{}{
-			"content":    trimmed,
-			"valence":    valence,
-			"source":     source,
-			"created_at": now.Format(time.RFC3339),
-			"node_label": "ConversationMemory",
-		},
+		Content:  contentMap,
 	})
 	if err != nil {
 		log.Error().Err(err).

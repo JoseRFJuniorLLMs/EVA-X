@@ -5,7 +5,6 @@ package database
 
 import (
 	"context"
-	"database/sql"
 	"encoding/binary"
 	"fmt"
 	"hash/fnv"
@@ -18,6 +17,18 @@ import (
 
 	nietzsche "nietzsche-sdk"
 )
+
+// NullBool represents a bool that may be null (replaces database/sql.NullBool).
+type NullBool struct {
+	Bool  bool
+	Valid bool
+}
+
+// NullString represents a string that may be null (replaces database/sql.NullString).
+type NullString struct {
+	String string
+	Valid  bool
+}
 
 const evaMindCollection = "eva_mind"
 
@@ -441,11 +452,11 @@ func GetInt64(m map[string]interface{}, key string) int64 { return getInt64(m, k
 // GetBool extracts a bool from a NietzscheDB content map.
 func GetBool(m map[string]interface{}, key string) bool { return getBool(m, key) }
 
-// GetNullBool extracts a sql.NullBool from a NietzscheDB content map.
-func GetNullBool(m map[string]interface{}, key string) sql.NullBool { return getNullBool(m, key) }
+// GetNullBool extracts a NullBool from a NietzscheDB content map.
+func GetNullBool(m map[string]interface{}, key string) NullBool { return getNullBool(m, key) }
 
-// GetNullString extracts a sql.NullString from a NietzscheDB content map.
-func GetNullString(m map[string]interface{}, key string) sql.NullString { return getNullString(m, key) }
+// GetNullString extracts a NullString from a NietzscheDB content map.
+func GetNullString(m map[string]interface{}, key string) NullString { return getNullString(m, key) }
 
 // GetTime extracts a time.Time from a NietzscheDB content map.
 func GetTime(m map[string]interface{}, key string) time.Time { return getTime(m, key) }
@@ -524,26 +535,26 @@ func getBool(m map[string]interface{}, key string) bool {
 	return false
 }
 
-func getNullBool(m map[string]interface{}, key string) sql.NullBool {
+func getNullBool(m map[string]interface{}, key string) NullBool {
 	v, ok := m[key]
 	if !ok || v == nil {
-		return sql.NullBool{}
+		return NullBool{}
 	}
 	if b, ok := v.(bool); ok {
-		return sql.NullBool{Bool: b, Valid: true}
+		return NullBool{Bool: b, Valid: true}
 	}
 	if f, ok := v.(float64); ok {
-		return sql.NullBool{Bool: f != 0, Valid: true}
+		return NullBool{Bool: f != 0, Valid: true}
 	}
-	return sql.NullBool{}
+	return NullBool{}
 }
 
-func getNullString(m map[string]interface{}, key string) sql.NullString {
+func getNullString(m map[string]interface{}, key string) NullString {
 	v, ok := m[key]
 	if !ok || v == nil {
-		return sql.NullString{}
+		return NullString{}
 	}
-	return sql.NullString{String: getString(m, key), Valid: true}
+	return NullString{String: getString(m, key), Valid: true}
 }
 
 var timeLayouts = []string{

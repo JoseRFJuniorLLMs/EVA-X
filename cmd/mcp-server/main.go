@@ -465,8 +465,8 @@ func (s *EVAMCPServer) handleToolsList() interface{} {
 		// 🗄️ DATABASES
 		// ═══════════════════════════════════════════════════════════
 		{
-			Name:        "eva_query_postgres",
-			Description: "Executa query SQL no NietzscheDB da EVA (130+ tabelas, dados dos pacientes, agendamentos, medicamentos).",
+			Name:        "eva_query_nietzschedb",
+			Description: "Executa query NQL/SQL no NietzscheDB da EVA (130+ tabelas, dados dos pacientes, agendamentos, medicamentos).",
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
@@ -773,7 +773,7 @@ var mcpToEVA = map[string]string{
 	"eva_web_browse":     "browser_navigate",
 	"eva_web_search":     "web_search",
 	// Databases
-	"eva_query_postgres":   "query_NietzscheDB",
+	"eva_query_nietzschedb":   "query_NietzscheDB",
 	"eva_query_nietzsche_graph":  "query_nietzsche_graph",
 	"eva_query_nietzsche_core":   "mcp_query_nietzsche_core",
 	"eva_query_nietzsche_vector": "query_nietzsche_vector",

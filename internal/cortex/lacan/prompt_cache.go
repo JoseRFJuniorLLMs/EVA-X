@@ -69,8 +69,14 @@ func (c *PromptCache) Get(idosoID int64) (*CachedPrompt, bool) {
 	return cached, true
 }
 
-// Set salva um prompt no cache
+// Set salva um prompt no cache.
+// FIX: Rejeita prompts vazios ou muito curtos para evitar cache stale.
 func (c *PromptCache) Set(idosoID int64, prompt, language string) {
+	// FIX: Nunca cachear prompts vazios ou suspeitamente curtos
+	if len(prompt) < 200 {
+		return // Prompt demasiado curto — provavelmente incompleto
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

@@ -22,9 +22,6 @@ type Config struct {
 	Environment string
 	MetricsPort string
 
-	// Database
-	DatabaseURL string
-
 	// Twilio (para fallback SMS e chamadas)
 	ServiceDomain     string
 	TwilioAccountSID  string
@@ -166,9 +163,6 @@ func Load() (*Config, error) {
 		Port:        getEnvWithDefault("PORT", "8091"),
 		Environment: getEnvWithDefault("ENVIRONMENT", "development"),
 		MetricsPort: getEnvWithDefault("METRICS_PORT", "9090"),
-
-		// Database
-		DatabaseURL: os.Getenv("DATABASE_URL"),
 
 		// Twilio
 		TwilioAccountSID:  os.Getenv("TWILIO_ACCOUNT_SID"),
@@ -355,10 +349,6 @@ func getEnvFloat64(key string, defaultValue float64) float64 {
 
 // Validate valida se todas as configurações obrigatórias estão presentes
 func (c *Config) Validate() error {
-	if c.DatabaseURL == "" {
-		log.Println("⚠️  DATABASE_URL não configurado — módulos legados PostgreSQL desabilitados")
-	}
-
 	if c.NietzscheGRPCAddr == "" {
 		return fmt.Errorf("NIETZSCHE_GRPC_ADDR is required (primary database)")
 	}

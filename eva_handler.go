@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"eva/internal/cortex/brain"
 	gemini "eva/internal/cortex/gemini"
 	evaSelf "eva/internal/cortex/self"
@@ -113,6 +114,39 @@ func (s *SignalingServer) handleEvaChat(w http.ResponseWriter, r *http.Request) 
 	}
 
 	log.Info().Str("session", sessionID).Str("cpf", clientCPF).Bool("hasContext", configMsg.Text != "").Msg("[EVA] Config recebida do cliente")
+
+	// === FIX: Buscar paciente por CPF (espelha browser_voice_handler.go) ===
+	var idosoID int64
+	var idosoNome string
+	if clientCPF != "" && s.db != nil {
+		idoso, dbErr := s.db.GetIdosoByCPF(clientCPF)
+		if dbErr == nil && idoso != nil && idoso.ID > 0 {
+			idosoID = idoso.ID
+			idosoNome = idoso.Nome
+			log.Info().Str("session", sessionID).Str("nome", idoso.Nome).Int64("id", idoso.ID).Msg("[EVA] Paciente encontrado por CPF")
+		} else {
+			log.Warn().Err(dbErr).Str("session", sessionID).Str("cpf", clientCPF).Msg("[EVA] Paciente nao encontrado por CPF")
+		}
+	}
+
+	// Se temos idosoID, carregar contexto completo via Brain Service (RSI)
+	if idosoID > 0 && s.brainService != nil {
+		prompt, _, err := s.brainService.GetSystemPrompt(ctx, idosoID)
+		if err == nil && prompt != "" {
+			clientContext = prompt
+			// Injetar nome se ausente do prompt (safety net)
+			if idosoNome != "" && !strings.Contains(clientContext, idosoNome) {
+				nameBlock := fmt.Sprintf("\n\nIDENTIDADE DO PACIENTE: O nome do paciente e **%s**.\nUse o nome \"%s\" durante TODA a conversa.\n\n", idosoNome, idosoNome)
+				clientContext = nameBlock + clientContext
+			}
+			log.Info().Str("session", sessionID).Str("nome", idosoNome).Int("promptLen", len(clientContext)).Msg("[EVA] Contexto Unificado (RSI) carregado")
+		} else {
+			log.Warn().Err(err).Str("session", sessionID).Msg("[EVA] Falha ao gerar contexto unificado — fallback generico")
+			if idosoNome != "" {
+				clientContext = fmt.Sprintf("Voce e a EVA, assistente virtual. O paciente se chama %s. Cumprimente-o pelo nome.\n\n%s", idosoNome, clientContext)
+			}
+		}
+	}
 
 	// Carregar memoria meta-cognitiva do NietzscheDB (sistema legado :50051)
 	var memories []string
@@ -362,6 +396,7 @@ func (s *SignalingServer) handleEvaChat(w http.ResponseWriter, r *http.Request) 
 			go func() {
 				data := evaSelf.SessionData{
 					SessionID:       sessionID,
+					PatientID:       idosoID, // FIX: antes era 0 (nunca populado)
 					Transcript:      transcript,
 					DurationMinutes: duration,
 					EVAResponses:    evaResponsesCopy,

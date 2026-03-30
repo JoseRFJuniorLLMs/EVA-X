@@ -226,21 +226,14 @@ func (c *Client) SendAudio(audioData []byte) error {
 	return c.conn.WriteJSON(msg)
 }
 
-// SendText envia mensagem de texto
+// SendText envia mensagem de texto durante sessão ativa.
+// FIX gemini-3.1: client_content só é permitido para histórico inicial.
+// Mid-session text deve usar realtime_input (mesmo canal que áudio/vídeo).
+// browser_voice_handler.go já bloqueava SendText com close 1008 — agora corrigido.
 func (c *Client) SendText(text string) error {
 	msg := map[string]interface{}{
-		"client_content": map[string]interface{}{
-			"turn_complete": true,
-			"turns": []map[string]interface{}{
-				{
-					"role": "user",
-					"parts": []map[string]interface{}{
-						{
-							"text": text,
-						},
-					},
-				},
-			},
+		"realtime_input": map[string]interface{}{
+			"text": text,
 		},
 	}
 	c.mu.Lock()
@@ -377,6 +370,14 @@ func (c *Client) HandleResponses(ctx context.Context) error {
 									}
 								}
 							}
+
+							// FIX gemini-3.1: Multi-part events podem ter texto + audio juntos.
+							// Antes, texto em modelTurn.parts era ignorado silenciosamente.
+							if text, ok := part["text"].(string); ok && text != "" {
+								if c.onTranscript != nil {
+									c.onTranscript("assistant", text)
+								}
+							}
 						}
 					}
 				}
@@ -409,18 +410,20 @@ func (c *Client) handleToolCalls(toolCall map[string]interface{}) {
 			// Extract function call ID for matching in tool_response
 			fcID, _ := fc["id"].(string)
 
+			// FIX gemini-3.1: Function calling is SYNCHRONOUS ONLY.
+			// Model will NOT respond until tool_response is sent.
+			// Previously used goroutine which could cause model to hang.
 			if c.onToolCall != nil {
-				go func(n string, a map[string]interface{}, id string) {
+				func() {
 					defer func() {
 						if r := recover(); r != nil {
-							log.Printf("🚨 PANIC Tool %s: %v", n, r)
-							c.SendToolResponse(n, map[string]interface{}{"error": "Internal error"}, id)
+							log.Printf("🚨 PANIC Tool %s: %v", name, r)
+							c.SendToolResponse(name, map[string]interface{}{"error": "Internal error"}, fcID)
 						}
 					}()
-
-					result := c.onToolCall(n, a)
-					c.SendToolResponse(n, result, id)
-				}(name, args, fcID)
+					result := c.onToolCall(name, args)
+					c.SendToolResponse(name, result, fcID)
+				}()
 			}
 		}
 	}

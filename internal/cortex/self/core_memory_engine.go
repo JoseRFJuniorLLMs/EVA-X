@@ -429,6 +429,7 @@ func (e *CoreMemoryEngine) recordMemory(ctx context.Context, memory CoreMemory) 
 		Coords:     coords,
 		Content: map[string]interface{}{
 			"id":                  string(memory.ID),
+			"node_label":          "CoreMemory", // FIX: Antes faltava — MATCH (m:CoreMemory) retornava vazio
 			"memory_type":         string(memory.MemoryType),
 			"content":             memory.Content,
 			"abstraction_level":   string(memory.AbstractionLevel),

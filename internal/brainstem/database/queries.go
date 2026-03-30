@@ -5,7 +5,6 @@ package database
 
 import (
 	"context"
-	"database/sql"
 	"eva/pkg/crypto"
 	"fmt"
 	"log"
@@ -35,8 +34,8 @@ type Idoso struct {
 	DeviceToken         string
 	Ativo               bool
 	NivelCognitivo      string
-	LimitacoesAuditivas sql.NullBool
-	UsaAparelhoAuditivo sql.NullBool
+	LimitacoesAuditivas NullBool
+	UsaAparelhoAuditivo NullBool
 	TomVoz              string
 	PreferenciaHorario  string
 }

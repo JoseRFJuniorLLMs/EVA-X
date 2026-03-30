@@ -454,7 +454,7 @@ func (u *UnifiedRetrieval) BuildUnifiedContext(
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		emp := u.getEvaMindProfile(ctxWithTimeout)
+		emp := u.getEvaMindProfile(ctxWithTimeout, idosoID)
 		mu.Lock()
 		evaMindProfile = emp
 		mu.Unlock()
@@ -778,13 +778,21 @@ func (u *UnifiedRetrieval) getIdentityMemories(ctx context.Context) string {
 }
 
 // getEvaMindProfile busca memórias de longa duração do eva_mind (perfil do utilizador).
-func (u *UnifiedRetrieval) getEvaMindProfile(ctx context.Context) string {
+// FIX: Agora recebe idosoID para filtrar memórias do paciente correcto.
+func (u *UnifiedRetrieval) getEvaMindProfile(ctx context.Context, idosoID ...int64) string {
 	if u.graph == nil {
 		return ""
 	}
-	// Buscar spaced_memory_items (factos aprendidos via InternalizeMemory)
-	nql := `MATCH (m:Episodic) WHERE m.node_label = "ConversationMemory" RETURN m ORDER BY m.created_at DESC LIMIT 10`
-	result, err := u.graph.ExecuteNQL(ctx, nql, nil, "eva_mind")
+	// FIX: Filtrar por idoso_id quando disponível para não misturar memórias de pacientes
+	var nql string
+	var params map[string]interface{}
+	if len(idosoID) > 0 && idosoID[0] > 0 {
+		nql = `MATCH (m:Episodic) WHERE m.node_label = "ConversationMemory" AND m.idoso_id = $idoso_id RETURN m ORDER BY m.created_at DESC LIMIT 10`
+		params = map[string]interface{}{"idoso_id": float64(idosoID[0])}
+	} else {
+		nql = `MATCH (m:Episodic) WHERE m.node_label = "ConversationMemory" RETURN m ORDER BY m.created_at DESC LIMIT 10`
+	}
+	result, err := u.graph.ExecuteNQL(ctx, nql, params, "eva_mind")
 	if err != nil || result == nil || len(result.Nodes) == 0 {
 		return ""
 	}
@@ -849,6 +857,9 @@ func (u *UnifiedRetrieval) getRecentMemories(ctx context.Context, idosoID int64,
 	rows, err := u.db.QueryByLabel(ctxWithTimeout, "episodic_memories",
 		" AND n.idoso_id = $idoso_id",
 		map[string]interface{}{"idoso_id": float64(idosoID)}, 0)
+	if err != nil {
+		log.Printf("[RECENT-MEMORIES] Erro ao buscar episodic_memories para idoso %d: %v", idosoID, err)
+	}
 	if err == nil {
 		sevenDaysAgo := time.Now().AddDate(0, 0, -7)
 

@@ -5,7 +5,6 @@ package database
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"sort"
 	"time"
@@ -17,7 +16,7 @@ type VideoSession struct {
 	IdosoID   int64
 	Status    string
 	SdpOffer  string
-	SdpAnswer sql.NullString
+	SdpAnswer NullString
 	CreatedAt time.Time
 }
 
@@ -202,7 +201,7 @@ type VideoSessionDetail struct {
 	Telefone       string         `json:"telefone"`
 	NivelCognitivo string         `json:"nivel_cognitivo"`
 	FotoUrl        string         `json:"foto_url"`
-	Limitacoes     sql.NullString `json:"limitacoes"`
+	Limitacoes     NullString `json:"limitacoes"`
 }
 
 // GetPendingVideoSessions retorna todas as sessoes aguardando atendimento COM DADOS DO IDOSO
@@ -242,7 +241,7 @@ func (db *DB) GetPendingVideoSessions() ([]VideoSessionDetail, error) {
 			s.Telefone = idoso.Telefone
 			s.NivelCognitivo = idoso.NivelCognitivo
 			if idoso.LimitacoesAuditivas.Valid && idoso.LimitacoesAuditivas.Bool {
-				s.Limitacoes = sql.NullString{String: "Deficiencia Auditiva", Valid: true}
+				s.Limitacoes = NullString{String: "Deficiencia Auditiva", Valid: true}
 			}
 		}
 
